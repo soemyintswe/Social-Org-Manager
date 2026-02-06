@@ -1,5 +1,5 @@
 entrypoint = "README.md"
-modules = ["nodejs-22"]
+modules = ["nodejs-22", "python-3.11"]
 
 [nix]
 channel = "stable-24_05"
@@ -20,6 +20,14 @@ externalPort = 80
 [[ports]]
 localPort = 8082
 externalPort = 3001
+
+[[ports]]
+localPort = 8501
+externalPort = 3000
+
+[[ports]]
+localPort = 8502
+externalPort = 3002
 
 [env]
 PORT = "5000"
