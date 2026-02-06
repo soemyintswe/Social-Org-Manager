@@ -18,13 +18,17 @@ function NativeTabLayout() {
         <Icon sf={{ default: "person.2", selected: "person.2.fill" }} />
         <Label>Members</Label>
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="finance">
+        <Icon sf={{ default: "dollarsign.circle", selected: "dollarsign.circle.fill" }} />
+        <Label>Finance</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="reports">
+        <Icon sf={{ default: "chart.bar", selected: "chart.bar.fill" }} />
+        <Label>Reports</Label>
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="events">
         <Icon sf={{ default: "calendar", selected: "calendar.circle.fill" }} />
         <Label>Events</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="groups">
-        <Icon sf={{ default: "person.3", selected: "person.3.fill" }} />
-        <Label>Groups</Label>
       </NativeTabs.Trigger>
     </NativeTabs>
   );
@@ -85,6 +89,24 @@ function ClassicTabLayout() {
         }}
       />
       <Tabs.Screen
+        name="finance"
+        options={{
+          title: "Finance",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="wallet-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="reports"
+        options={{
+          title: "Reports",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="bar-chart-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="events"
         options={{
           title: "Events",
@@ -96,10 +118,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="groups"
         options={{
-          title: "Groups",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="people-circle-outline" size={size} color={color} />
-          ),
+          href: null,
         }}
       />
     </Tabs>

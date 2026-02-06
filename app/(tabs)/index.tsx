@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { CATEGORY_LABELS } from "@/lib/types";
 
 function StatCard({
   icon,
@@ -22,7 +23,7 @@ function StatCard({
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  value: number;
+  value: string;
   color: string;
 }) {
   return (
@@ -58,54 +59,29 @@ function QuickAction({
   );
 }
 
-function UpcomingEventCard({ title, date, location, attendeeCount }: {
-  title: string;
-  date: string;
-  location: string;
-  attendeeCount: number;
-}) {
-  const formattedDate = new Date(date).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-
-  return (
-    <View style={styles.eventCard}>
-      <View style={styles.eventDateBadge}>
-        <Text style={styles.eventDateDay}>
-          {new Date(date).getDate()}
-        </Text>
-        <Text style={styles.eventDateMonth}>
-          {new Date(date).toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
-        </Text>
-      </View>
-      <View style={styles.eventInfo}>
-        <Text style={styles.eventTitle} numberOfLines={1}>{title}</Text>
-        <View style={styles.eventMeta}>
-          <Ionicons name="location-outline" size={13} color={Colors.light.textSecondary} />
-          <Text style={styles.eventMetaText} numberOfLines={1}>{location || "No location"}</Text>
-        </View>
-        <View style={styles.eventMeta}>
-          <Ionicons name="people-outline" size={13} color={Colors.light.textSecondary} />
-          <Text style={styles.eventMetaText}>{attendeeCount} attendees</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, groups, loading } = useData();
+  const { members, events, groups, transactions, loans, loading, getCashBalance, getBankBalance, getTotalBalance } = useData();
 
   const activeMembers = members.filter((m) => m.status === "active");
+  const activeLoans = loans.filter((l) => l.status === "active");
+
+  const recentTxns = [...transactions]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5);
+
   const upcomingEvents = events
     .filter((e) => new Date(e.date) >= new Date())
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .slice(0, 3);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  const getMemberName = (id?: string) => {
+    if (!id) return "";
+    const m = members.find((m) => m.id === id);
+    return m ? `${m.firstName} ${m.lastName}` : "";
+  };
 
   if (loading) {
     return (
@@ -128,39 +104,95 @@ export default function DashboardScreen() {
       <Text style={styles.greeting}>OrgHub</Text>
       <Text style={styles.subtitle}>Organization Overview</Text>
 
+      <View style={styles.balanceBanner}>
+        <Text style={styles.balanceBannerLabel}>Total Balance</Text>
+        <Text style={styles.balanceBannerAmount}>
+          ${getTotalBalance().toLocaleString("en-US", { minimumFractionDigits: 2 })}
+        </Text>
+        <View style={styles.balanceSplit}>
+          <View style={styles.balanceSplitItem}>
+            <Ionicons name="cash-outline" size={14} color="#fff" />
+            <Text style={styles.balanceSplitText}>
+              Cash: ${getCashBalance().toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </Text>
+          </View>
+          <View style={styles.balanceSplitItem}>
+            <Ionicons name="business-outline" size={14} color="#fff" />
+            <Text style={styles.balanceSplitText}>
+              Bank: ${getBankBalance().toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </Text>
+          </View>
+        </View>
+      </View>
+
       <View style={styles.statsRow}>
-        <StatCard icon="people" label="Members" value={members.length} color={Colors.light.tint} />
-        <StatCard icon="checkmark-circle" label="Active" value={activeMembers.length} color={Colors.light.success} />
+        <StatCard icon="people" label="Members" value={members.length.toString()} color={Colors.light.tint} />
+        <StatCard icon="checkmark-circle" label="Active" value={activeMembers.length.toString()} color={Colors.light.success} />
       </View>
       <View style={styles.statsRow}>
-        <StatCard icon="calendar" label="Events" value={events.length} color="#3B82F6" />
-        <StatCard icon="people-circle" label="Groups" value={groups.length} color="#8B5CF6" />
+        <StatCard icon="receipt" label="Transactions" value={transactions.length.toString()} color="#3B82F6" />
+        <StatCard icon="wallet" label="Active Loans" value={activeLoans.length.toString()} color="#8B5CF6" />
       </View>
 
       <Text style={styles.sectionTitle}>Quick Actions</Text>
       <View style={styles.quickActionsRow}>
-        <QuickAction icon="person-add-outline" label="Add Member" onPress={() => router.push("/add-member")} />
-        <QuickAction icon="calendar-outline" label="New Event" onPress={() => router.push("/add-event")} />
-        <QuickAction icon="people-outline" label="New Group" onPress={() => router.push("/add-group")} />
+        <QuickAction icon="receipt-outline" label="Transaction" onPress={() => router.push("/add-transaction")} />
+        <QuickAction icon="person-add-outline" label="Member" onPress={() => router.push("/add-member")} />
+        <QuickAction icon="wallet-outline" label="Loan" onPress={() => router.push("/add-loan")} />
       </View>
 
-      <Text style={styles.sectionTitle}>Upcoming Events</Text>
-      {upcomingEvents.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="calendar-outline" size={32} color={Colors.light.textSecondary} />
-          <Text style={styles.emptyText}>No upcoming events</Text>
-        </View>
-      ) : (
-        upcomingEvents.map((event) => (
-          <Pressable key={event.id} onPress={() => router.push({ pathname: "/event-detail", params: { id: event.id } })}>
-            <UpcomingEventCard
-              title={event.title}
-              date={event.date}
-              location={event.location}
-              attendeeCount={event.attendeeIds.length}
-            />
-          </Pressable>
-        ))
+      {recentTxns.length > 0 && (
+        <>
+          <Text style={styles.sectionTitle}>Recent Transactions</Text>
+          {recentTxns.map((txn) => {
+            const isIncome = txn.type === "income";
+            return (
+              <View key={txn.id} style={styles.recentTxnRow}>
+                <View style={[styles.recentTxnIcon, { backgroundColor: isIncome ? Colors.light.success + "15" : Colors.light.accent + "15" }]}>
+                  <Ionicons
+                    name={isIncome ? "arrow-down" : "arrow-up"}
+                    size={16}
+                    color={isIncome ? Colors.light.success : Colors.light.accent}
+                  />
+                </View>
+                <View style={styles.recentTxnInfo}>
+                  <Text style={styles.recentTxnCat} numberOfLines={1}>{CATEGORY_LABELS[txn.category]}</Text>
+                  <Text style={styles.recentTxnMeta} numberOfLines={1}>
+                    {getMemberName(txn.memberId) || txn.receiptNumber}
+                  </Text>
+                </View>
+                <Text style={[styles.recentTxnAmt, isIncome ? styles.incomeText : styles.expenseText]}>
+                  {isIncome ? "+" : "-"}${txn.amount.toFixed(2)}
+                </Text>
+              </View>
+            );
+          })}
+        </>
+      )}
+
+      {upcomingEvents.length > 0 && (
+        <>
+          <Text style={styles.sectionTitle}>Upcoming Events</Text>
+          {upcomingEvents.map((event) => (
+            <Pressable key={event.id} onPress={() => router.push({ pathname: "/event-detail", params: { id: event.id } })}>
+              <View style={styles.eventCard}>
+                <View style={styles.eventDateBadge}>
+                  <Text style={styles.eventDateDay}>{new Date(event.date).getDate()}</Text>
+                  <Text style={styles.eventDateMonth}>
+                    {new Date(event.date).toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
+                  </Text>
+                </View>
+                <View style={styles.eventInfo}>
+                  <Text style={styles.eventTitle} numberOfLines={1}>{event.title}</Text>
+                  <View style={styles.eventMeta}>
+                    <Ionicons name="people-outline" size={13} color={Colors.light.textSecondary} />
+                    <Text style={styles.eventMetaText}>{event.attendeeIds.length} attendees</Text>
+                  </View>
+                </View>
+              </View>
+            </Pressable>
+          ))}
+        </>
       )}
     </ScrollView>
   );
@@ -188,7 +220,39 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Inter_400Regular",
     color: Colors.light.textSecondary,
-    marginBottom: 24,
+    marginBottom: 20,
+  },
+  balanceBanner: {
+    backgroundColor: Colors.light.tint,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+  },
+  balanceBannerLabel: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: "rgba(255,255,255,0.7)",
+    marginBottom: 4,
+  },
+  balanceBannerAmount: {
+    fontSize: 28,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
+    marginBottom: 12,
+  },
+  balanceSplit: {
+    flexDirection: "row",
+    gap: 20,
+  },
+  balanceSplitItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  balanceSplitText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: "rgba(255,255,255,0.85)",
   },
   statsRow: {
     flexDirection: "row",
@@ -199,7 +263,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.light.surface,
     borderRadius: 14,
-    padding: 16,
+    padding: 14,
     borderLeftWidth: 3,
     shadowColor: Colors.light.cardShadow,
     shadowOffset: { width: 0, height: 2 },
@@ -208,20 +272,20 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   statIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 8,
   },
   statValue: {
-    fontSize: 24,
+    fontSize: 20,
     fontFamily: "Inter_700Bold",
     color: Colors.light.text,
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "Inter_500Medium",
     color: Colors.light.textSecondary,
     marginTop: 2,
@@ -230,8 +294,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Inter_600SemiBold",
     color: Colors.light.text,
-    marginTop: 24,
-    marginBottom: 14,
+    marginTop: 20,
+    marginBottom: 12,
   },
   quickActionsRow: {
     flexDirection: "row",
@@ -241,7 +305,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.light.surface,
     borderRadius: 14,
-    padding: 16,
+    padding: 14,
     alignItems: "center",
     shadowColor: Colors.light.cardShadow,
     shadowOffset: { width: 0, height: 2 },
@@ -250,13 +314,13 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   quickActionIcon: {
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 40,
     borderRadius: 12,
     backgroundColor: Colors.light.tintLight,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 6,
   },
   quickActionLabel: {
     fontSize: 12,
@@ -264,6 +328,40 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     textAlign: "center",
   },
+  recentTxnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.light.surface,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    gap: 10,
+  },
+  recentTxnIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  recentTxnInfo: { flex: 1 },
+  recentTxnCat: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  recentTxnMeta: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: Colors.light.textSecondary,
+    marginTop: 1,
+  },
+  recentTxnAmt: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+  },
+  incomeText: { color: Colors.light.success },
+  expenseText: { color: Colors.light.accent },
   eventCard: {
     flexDirection: "row",
     backgroundColor: Colors.light.surface,
@@ -309,24 +407,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    marginTop: 2,
   },
   eventMetaText: {
     fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-    flex: 1,
-  },
-  emptyState: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 32,
-    backgroundColor: Colors.light.surface,
-    borderRadius: 14,
-    gap: 8,
-  },
-  emptyText: {
-    fontSize: 14,
     fontFamily: "Inter_400Regular",
     color: Colors.light.textSecondary,
   },
