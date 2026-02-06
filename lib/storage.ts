@@ -1,11 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Member, OrgEvent, Group, AttendanceRecord } from "./types";
+import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings } from "./types";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
   EVENTS: "@orghub_events",
   GROUPS: "@orghub_groups",
   ATTENDANCE: "@orghub_attendance",
+  TRANSACTIONS: "@orghub_transactions",
+  LOANS: "@orghub_loans",
+  ACCOUNT_SETTINGS: "@orghub_account_settings",
 };
 
 function generateId(): string {
@@ -19,6 +22,13 @@ const AVATAR_COLORS = [
 
 function randomColor(): string {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+}
+
+export function generateReceiptNumber(): string {
+  const prefix = "RCP";
+  const ts = Date.now().toString().slice(-6);
+  const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
+  return `${prefix}-${ts}-${rand}`;
 }
 
 export async function getMembers(): Promise<Member[]> {
@@ -139,4 +149,67 @@ export async function saveAttendance(records: AttendanceRecord[]): Promise<void>
 export async function getAttendanceForEvent(eventId: string): Promise<AttendanceRecord[]> {
   const attendance = await getAttendance();
   return attendance.filter((a) => a.eventId === eventId);
+}
+
+export async function getTransactions(): Promise<Transaction[]> {
+  const data = await AsyncStorage.getItem(KEYS.TRANSACTIONS);
+  return data ? JSON.parse(data) : [];
+}
+
+export async function saveTransaction(txn: Omit<Transaction, "id" | "createdAt">): Promise<Transaction> {
+  const txns = await getTransactions();
+  const newTxn: Transaction = {
+    ...txn,
+    id: generateId(),
+    createdAt: new Date().toISOString(),
+  };
+  txns.push(newTxn);
+  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns));
+  return newTxn;
+}
+
+export async function deleteTransaction(id: string): Promise<void> {
+  const txns = await getTransactions();
+  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns.filter((t) => t.id !== id)));
+}
+
+export async function getLoans(): Promise<Loan[]> {
+  const data = await AsyncStorage.getItem(KEYS.LOANS);
+  return data ? JSON.parse(data) : [];
+}
+
+export async function saveLoan(loan: Omit<Loan, "id" | "createdAt">): Promise<Loan> {
+  const loans = await getLoans();
+  const newLoan: Loan = {
+    ...loan,
+    id: generateId(),
+    createdAt: new Date().toISOString(),
+  };
+  loans.push(newLoan);
+  await AsyncStorage.setItem(KEYS.LOANS, JSON.stringify(loans));
+  return newLoan;
+}
+
+export async function updateLoan(id: string, updates: Partial<Loan>): Promise<Loan | null> {
+  const loans = await getLoans();
+  const idx = loans.findIndex((l) => l.id === id);
+  if (idx === -1) return null;
+  loans[idx] = { ...loans[idx], ...updates };
+  await AsyncStorage.setItem(KEYS.LOANS, JSON.stringify(loans));
+  return loans[idx];
+}
+
+export async function deleteLoan(id: string): Promise<void> {
+  const loans = await getLoans();
+  await AsyncStorage.setItem(KEYS.LOANS, JSON.stringify(loans.filter((l) => l.id !== id)));
+}
+
+export async function getAccountSettings(): Promise<AccountSettings> {
+  const data = await AsyncStorage.getItem(KEYS.ACCOUNT_SETTINGS);
+  if (data) return JSON.parse(data);
+  return { openingBalanceCash: 0, openingBalanceBank: 0, asOfDate: new Date().toISOString().split("T")[0] };
+}
+
+export async function saveAccountSettings(settings: AccountSettings): Promise<void> {
+  await AsyncStorage.setItem(KEYS.ACCOUNT_SETTINGS, JSON.stringify(settings));
 }
