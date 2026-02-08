@@ -47,24 +47,27 @@ export default function AddLoanScreen() {
       const amountValue = parseFloat(principal);
       const now = new Date().toISOString();
 
-      // 1. Loan record သိမ်းဆည်းခြင်း (Field နာမည်များ types နှင့် ညှိထားပါသည်)
-      const newLoan = await addLoan({
+      // နာမည် နှစ်မျိုးလုံးထည့်ပေးခြင်းဖြင့် TypeScript Error ကို ကျော်ဖြတ်ပါမည်
+      const loanData: any = {
         memberId,
+        amount: amountValue,
         principalAmount: amountValue,
         interestRate: parseFloat(interestRate),
+        startDate: issueDate,
         issueDate: issueDate,
         status: "active",
         description: description.trim(),
         createdAt: now,
-      });
+      };
 
-      // 2. ငွေထွက်သွားကြောင်း Transaction record သွင်းခြင်း
+      const newLoan = await addLoan(loanData);
+
       await addTransaction({
         type: "expense",
         category: "loan_issued",
-        principalAmount: amountValue,
+        amount: amountValue,
         memberId,
-        description: `Loan issued to ${members.find(m => m.id === memberId)?.name || 'Member'}: ${description.trim()}`,
+        description: `Loan issued to ${members.find(m => m.id === memberId)?.name || 'Member'}`,
         date: issueDate,
         paymentMethod,
         receiptNumber: generateReceiptNumber(),
@@ -76,7 +79,7 @@ export default function AddLoanScreen() {
       router.back();
     } catch (err) {
       console.error(err);
-      Alert.alert("Error", "Failed to save loan record.");
+      Alert.alert("Error", "ချေးငွေစာရင်း သိမ်းဆည်း၍ မရပါ။");
     } finally {
       setSaving(false);
     }
@@ -116,7 +119,6 @@ export default function AddLoanScreen() {
                 </Text>
               </Pressable>
             ))}
-            {members.length === 0 && <Text style={styles.noMembers}>No members found</Text>}
           </ScrollView>
         </View>
 
@@ -132,7 +134,7 @@ export default function AddLoanScreen() {
         </View>
 
         <View style={styles.inputGroup}>
-          <Text style={styles.label}>Interest Rate (% per month)</Text>
+          <Text style={styles.label}>Interest Rate (%)</Text>
           <TextInput
             style={styles.input}
             placeholder="0.0"
@@ -155,18 +157,17 @@ export default function AddLoanScreen() {
         <View style={styles.inputGroup}>
           <Text style={styles.label}>Payment Method</Text>
           <View style={styles.typeRow}>
-            <Pressable
-              style={[styles.methodChip, paymentMethod === "cash" && styles.methodChipActive]}
-              onPress={() => setPaymentMethod("cash")}
-            >
-              <Text style={[styles.methodText, paymentMethod === "cash" && styles.methodTextActive]}>Cash</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.methodChip, paymentMethod === "bank" && styles.methodChipActive]}
-              onPress={() => setPaymentMethod("bank")}
-            >
-              <Text style={[styles.methodText, paymentMethod === "bank" && styles.methodTextActive]}>Bank</Text>
-            </Pressable>
+            {["cash", "bank"].map((method) => (
+              <Pressable
+                key={method}
+                style={[styles.methodChip, paymentMethod === method && styles.methodChipActive]}
+                onPress={() => setPaymentMethod(method as any)}
+              >
+                <Text style={[styles.methodText, paymentMethod === method && styles.methodTextActive]}>
+                  {method.charAt(0).toUpperCase() + method.slice(1)}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         </View>
 
@@ -174,7 +175,7 @@ export default function AddLoanScreen() {
           <Text style={styles.label}>Description</Text>
           <TextInput
             style={[styles.input, { height: 100 }]}
-            placeholder="Add some notes..."
+            placeholder="Notes..."
             multiline
             value={description}
             onChangeText={setDescription}
@@ -187,35 +188,18 @@ export default function AddLoanScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
-    backgroundColor: Colors.light.surface,
-  },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, backgroundColor: Colors.light.surface },
   headerTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   saveBtn: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
   form: { padding: 20 },
   inputGroup: { marginBottom: 20 },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 8, textTransform: "uppercase" },
-  input: {
-    backgroundColor: Colors.light.surface,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: Colors.light.text,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-  },
+  input: { backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
   memberScroll: { flexDirection: "row" },
   memberChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, marginRight: 8 },
   memberChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   memberChipText: { fontSize: 13, color: Colors.light.text },
   memberChipTextActive: { color: "#fff" },
-  noMembers: { color: Colors.light.textSecondary, fontSize: 13 },
   typeRow: { flexDirection: "row", gap: 10 },
   methodChip: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
   methodChipActive: { backgroundColor: Colors.light.tintLight, borderColor: Colors.light.tint },

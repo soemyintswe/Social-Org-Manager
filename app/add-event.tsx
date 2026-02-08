@@ -49,6 +49,7 @@ export default function AddEventScreen() {
         time: time.trim(),
         location: location.trim(),
         attendeeIds: [],
+        createdAt: new Date().toISOString(),
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();

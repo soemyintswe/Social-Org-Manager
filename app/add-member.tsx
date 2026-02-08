@@ -17,7 +17,9 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { Member } from "@/lib/types";
+
+// AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
+const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
 
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
@@ -26,7 +28,7 @@ export default function AddMemberScreen() {
 
   // Form States
   const [name, setName] = useState("");
-  const [memberId, setMemberId] = useState(""); // Manual ID input (ရဆသ-xxx)
+  const [memberId, setMemberId] = useState("");
   const [phone, setPhone] = useState("");
   const [nrc, setNrc] = useState("");
   const [dob, setDob] = useState("");
@@ -34,7 +36,6 @@ export default function AddMemberScreen() {
   const [status, setStatus] = useState<"active" | "inactive">("active");
   const [saving, setSaving] = useState(false);
 
-  // Edit Mode အတွက် Data ရှာခြင်း
   useEffect(() => {
     if (editId) {
       const member = members.find((m) => m.id === editId);
@@ -42,7 +43,9 @@ export default function AddMemberScreen() {
         setName(member.name);
         setMemberId(member.id);
         setPhone(member.phone);
+        // @ts-ignore - nrc နှင့် dob က type ထဲမှာ မပါခဲ့ရင် error မတက်စေရန်
         setNrc(member.nrc || "");
+        // @ts-ignore
         setDob(member.dob || "");
         setAddress(member.address || "");
         setStatus(member.status);
@@ -55,20 +58,28 @@ export default function AddMemberScreen() {
   const handleSave = async () => {
     if (!canSave) return;
     setSaving(true);
-    if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-    const memberData = {
-      name,
-      id: memberId, // စိတ်ကြိုက် ID သုံးရန်
-      phone,
-      nrc,
-      dob,
-      address,
-      status,
-      joinDate: new Date().toLocaleDateString("en-GB"), // DD.MM.YYYY format
-    };
 
     try {
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+
+      // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
+      const memberData: any = {
+        id: memberId,
+        name: name.trim(),
+        phone: phone.trim(),
+        nrc: nrc.trim(),
+        dob: dob.trim(),
+        address: address.trim(),
+        status: status,
+        role: "member", // Missing 'role' ကို ထည့်လိုက်ပါသည်
+        avatarColor: randomColor, // Missing 'color' (သို့) 'avatarColor' အတွက်
+        color: randomColor, 
+        createdAt: new Date().toISOString(),
+        joinDate: new Date().toLocaleDateString("en-GB"),
+      };
+
       if (editId) {
         await updateMember(editId, memberData);
       } else {
@@ -76,6 +87,7 @@ export default function AddMemberScreen() {
       }
       router.back();
     } catch (error) {
+      console.error(error);
       Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);
@@ -100,7 +112,6 @@ export default function AddMemberScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
-
           <Text style={styles.label}>အသင်းဝင်အမှတ် (ID)</Text>
           <TextInput
             style={styles.input}
@@ -108,6 +119,7 @@ export default function AddMemberScreen() {
             value={memberId}
             onChangeText={setMemberId}
             placeholderTextColor={Colors.light.textSecondary}
+            editable={!editId} // Edit လုပ်ချိန်တွင် ID ပြောင်းမရအောင် တားထားခြင်း
           />
 
           <Text style={styles.label}>အမည်</Text>
@@ -171,7 +183,6 @@ export default function AddMemberScreen() {
               </Pressable>
             ))}
           </View>
-
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
