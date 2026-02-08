@@ -186,7 +186,7 @@ export default function AddTransactionScreen() {
               style={[styles.memberChip, memberId === m.id && styles.memberChipActive]}
             >
               <Text style={[styles.memberChipText, memberId === m.id && styles.memberChipTextActive]}>
-                {m.firstName} {m.lastName}
+                {m.name}
               </Text>
             </Pressable>
           ))}

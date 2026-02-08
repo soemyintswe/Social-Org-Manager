@@ -21,6 +21,7 @@ import { generateReceiptNumber } from "@/lib/storage";
 export default function AddLoanScreen() {
   const insets = useSafeAreaInsets();
   const { addLoan, addTransaction, members } = useData();
+
   const [memberId, setMemberId] = useState("");
   const [principal, setPrincipal] = useState("");
   const [interestRate, setInterestRate] = useState("");
@@ -39,39 +40,43 @@ export default function AddLoanScreen() {
     issueDate.trim().length > 0;
 
   const handleSave = async () => {
-    if (!canSave || saving) return;
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(issueDate.trim())) {
-      Alert.alert("Invalid Date", "Please enter date in YYYY-MM-DD format");
-      return;
-    }
+    if (!canSave) return;
+
     setSaving(true);
     try {
-      const loan = await addLoan({
+      const amountValue = parseFloat(principal);
+      const now = new Date().toISOString();
+
+      // 1. Loan record သိမ်းဆည်းခြင်း (Field နာမည်များ types နှင့် ညှိထားပါသည်)
+      const newLoan = await addLoan({
         memberId,
-        principalAmount: parseFloat(principal),
+        principalAmount: amountValue,
         interestRate: parseFloat(interestRate),
-        issueDate: issueDate.trim(),
+        issueDate: issueDate,
         status: "active",
         description: description.trim(),
+        createdAt: now,
       });
 
+      // 2. ငွေထွက်သွားကြောင်း Transaction record သွင်းခြင်း
       await addTransaction({
         type: "expense",
         category: "loan_issued",
-        amount: parseFloat(principal),
+        principalAmount: amountValue,
         memberId,
-        description: `Loan issued - ${description.trim() || "Loan"}`,
-        date: issueDate.trim(),
+        description: `Loan issued to ${members.find(m => m.id === memberId)?.name || 'Member'}: ${description.trim()}`,
+        date: issueDate,
         paymentMethod,
         receiptNumber: generateReceiptNumber(),
-        loanId: loan.id,
+        loanId: newLoan.id,
+        createdAt: now,
       });
 
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
-    } catch {
-      Alert.alert("Error", "Failed to save loan");
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Failed to save loan record.");
     } finally {
       setSaving(false);
     }
@@ -79,101 +84,102 @@ export default function AddLoanScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={styles.container}
     >
-      <View style={[styles.header, { paddingTop: insets.top + 12 + webTopInset }]}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [pressed && { opacity: 0.6 }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 || webTopInset }]}>
+        <Pressable onPress={() => router.back()}>
           <Ionicons name="close" size={26} color={Colors.light.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>Issue Loan</Text>
-        <Pressable
-          onPress={handleSave}
+        <Text style={styles.headerTitle}>New Loan</Text>
+        <Pressable 
+          onPress={handleSave} 
           disabled={!canSave || saving}
-          style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+          style={({ pressed }) => [{ opacity: !canSave || saving ? 0.5 : pressed ? 0.7 : 1 }]}
         >
-          <Text style={[styles.saveBtn, (!canSave || saving) && { opacity: 0.4 }]}>Save</Text>
+          <Text style={styles.saveBtn}>{saving ? "Saving..." : "Save"}</Text>
         </Pressable>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.form}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.label}>Member *</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.memberScroll}>
-          {members.map((m) => (
-            <Pressable
-              key={m.id}
-              onPress={() => setMemberId(m.id)}
-              style={[styles.memberChip, memberId === m.id && styles.memberChipActive]}
-            >
-              <Text style={[styles.memberChipText, memberId === m.id && styles.memberChipTextActive]}>
-                {m.firstName} {m.lastName}
-              </Text>
-            </Pressable>
-          ))}
-          {members.length === 0 && (
-            <Text style={styles.noMembers}>Add members first</Text>
-          )}
-        </ScrollView>
-
-        <Text style={styles.label}>Principal Amount *</Text>
-        <TextInput
-          style={styles.input}
-          value={principal}
-          onChangeText={setPrincipal}
-          placeholder="0.00"
-          placeholderTextColor={Colors.light.textSecondary}
-          keyboardType="decimal-pad"
-        />
-
-        <Text style={styles.label}>Monthly Interest Rate (%) *</Text>
-        <TextInput
-          style={styles.input}
-          value={interestRate}
-          onChangeText={setInterestRate}
-          placeholder="2.0"
-          placeholderTextColor={Colors.light.textSecondary}
-          keyboardType="decimal-pad"
-        />
-
-        <Text style={styles.label}>Issue Date * (YYYY-MM-DD)</Text>
-        <TextInput
-          style={styles.input}
-          value={issueDate}
-          onChangeText={setIssueDate}
-          placeholder="2026-02-06"
-          placeholderTextColor={Colors.light.textSecondary}
-        />
-
-        <Text style={styles.label}>Payment Method</Text>
-        <View style={styles.typeRow}>
-          <Pressable
-            onPress={() => setPaymentMethod("cash")}
-            style={[styles.methodChip, paymentMethod === "cash" && styles.methodChipActive]}
-          >
-            <Ionicons name="cash-outline" size={16} color={paymentMethod === "cash" ? "#fff" : Colors.light.text} />
-            <Text style={[styles.methodChipText, paymentMethod === "cash" && { color: "#fff" }]}>Cash</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setPaymentMethod("bank")}
-            style={[styles.methodChip, paymentMethod === "bank" && styles.methodChipActive]}
-          >
-            <Ionicons name="business-outline" size={16} color={paymentMethod === "bank" ? "#fff" : Colors.light.text} />
-            <Text style={[styles.methodChipText, paymentMethod === "bank" && { color: "#fff" }]}>Bank</Text>
-          </Pressable>
+      <ScrollView contentContainerStyle={styles.form}>
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Select Member</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.memberScroll}>
+            {members.map((m) => (
+              <Pressable
+                key={m.id}
+                onPress={() => setMemberId(m.id)}
+                style={[styles.memberChip, memberId === m.id && styles.memberChipActive]}
+              >
+                <Text style={[styles.memberChipText, memberId === m.id && styles.memberChipTextActive]}>
+                  {m.name}
+                </Text>
+              </Pressable>
+            ))}
+            {members.length === 0 && <Text style={styles.noMembers}>No members found</Text>}
+          </ScrollView>
         </View>
 
-        <Text style={styles.label}>Description</Text>
-        <TextInput
-          style={styles.input}
-          value={description}
-          onChangeText={setDescription}
-          placeholder="Purpose of loan..."
-          placeholderTextColor={Colors.light.textSecondary}
-        />
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Principal Amount</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="0.00"
+            keyboardType="numeric"
+            value={principal}
+            onChangeText={setPrincipal}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Interest Rate (% per month)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="0.0"
+            keyboardType="numeric"
+            value={interestRate}
+            onChangeText={setInterestRate}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Issue Date</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="YYYY-MM-DD"
+            value={issueDate}
+            onChangeText={setIssueDate}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Payment Method</Text>
+          <View style={styles.typeRow}>
+            <Pressable
+              style={[styles.methodChip, paymentMethod === "cash" && styles.methodChipActive]}
+              onPress={() => setPaymentMethod("cash")}
+            >
+              <Text style={[styles.methodText, paymentMethod === "cash" && styles.methodTextActive]}>Cash</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.methodChip, paymentMethod === "bank" && styles.methodChipActive]}
+              onPress={() => setPaymentMethod("bank")}
+            >
+              <Text style={[styles.methodText, paymentMethod === "bank" && styles.methodTextActive]}>Bank</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Description</Text>
+          <TextInput
+            style={[styles.input, { height: 100 }]}
+            placeholder="Add some notes..."
+            multiline
+            value={description}
+            onChangeText={setDescription}
+          />
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -188,91 +194,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 14,
     backgroundColor: Colors.light.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
   },
-  headerTitle: {
-    fontSize: 17,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.text,
-  },
-  saveBtn: {
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.tint,
-  },
-  form: {
-    padding: 20,
-    paddingBottom: 60,
-  },
-  label: {
-    fontSize: 13,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.textSecondary,
-    marginBottom: 6,
-    marginTop: 16,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
+  headerTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  saveBtn: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
+  form: { padding: 20 },
+  inputGroup: { marginBottom: 20 },
+  label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 8, textTransform: "uppercase" },
   input: {
     backgroundColor: Colors.light.surface,
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
-    fontFamily: "Inter_400Regular",
     color: Colors.light.text,
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
-  memberScroll: { flexGrow: 0 },
-  memberChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: Colors.light.surface,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    marginRight: 8,
-  },
-  memberChipActive: {
-    backgroundColor: Colors.light.tint,
-    borderColor: Colors.light.tint,
-  },
-  memberChipText: {
-    fontSize: 13,
-    fontFamily: "Inter_500Medium",
-    color: Colors.light.text,
-  },
+  memberScroll: { flexDirection: "row" },
+  memberChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, marginRight: 8 },
+  memberChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  memberChipText: { fontSize: 13, color: Colors.light.text },
   memberChipTextActive: { color: "#fff" },
-  noMembers: {
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-  },
-  typeRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  methodChip: {
-    flex: 1,
-    flexDirection: "row",
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: Colors.light.surface,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  methodChipActive: {
-    backgroundColor: Colors.light.tint,
-    borderColor: Colors.light.tint,
-  },
-  methodChipText: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: Colors.light.text,
-  },
+  noMembers: { color: Colors.light.textSecondary, fontSize: 13 },
+  typeRow: { flexDirection: "row", gap: 10 },
+  methodChip: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
+  methodChipActive: { backgroundColor: Colors.light.tintLight, borderColor: Colors.light.tint },
+  methodText: { fontSize: 14, color: Colors.light.text },
+  methodTextActive: { color: Colors.light.tint, fontWeight: "600" },
 });

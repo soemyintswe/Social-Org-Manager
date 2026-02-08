@@ -1,6 +1,23 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, ReactNode } from "react";
-import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings } from "./types";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  ReactNode,
+} from "react";
+import {
+  Member,
+  OrgEvent,
+  Group,
+  AttendanceRecord,
+  Transaction,
+  Loan,
+  AccountSettings,
+} from "./types";
 import * as store from "./storage";
+import { Alert } from "react-native";
 
 interface DataContextValue {
   members: Member[];
@@ -11,21 +28,19 @@ interface DataContextValue {
   loans: Loan[];
   accountSettings: AccountSettings;
   loading: boolean;
-  refresh: () => Promise<void>;
-  addMember: (m: Omit<Member, "id" | "avatarColor" | "joinDate">) => Promise<Member>;
-  editMember: (id: string, u: Partial<Member>) => Promise<void>;
-  removeMember: (id: string) => Promise<void>;
-  addEvent: (e: Omit<OrgEvent, "id" | "createdAt">) => Promise<OrgEvent>;
+  refreshData: () => Promise<void>;
+  addMember: (m: Omit<Member, "id">) => Promise<Member>;
+  updateMember: (id: string, u: Partial<Member>) => Promise<void>;
+  deleteMember: (id: string) => Promise<void>;
+  addEvent: (e: Omit<OrgEvent, "id">) => Promise<OrgEvent>;
   editEvent: (id: string, u: Partial<OrgEvent>) => Promise<void>;
   removeEvent: (id: string) => Promise<void>;
-  addGroup: (g: Omit<Group, "id" | "createdAt">) => Promise<Group>;
+  addGroup: (g: Omit<Group, "id">) => Promise<Group>;
   editGroup: (id: string, u: Partial<Group>) => Promise<void>;
   removeGroup: (id: string) => Promise<void>;
-  markAttendance: (records: AttendanceRecord[]) => Promise<void>;
-  getEventAttendance: (eventId: string) => AttendanceRecord[];
-  addTransaction: (t: Omit<Transaction, "id" | "createdAt">) => Promise<Transaction>;
+  addTransaction: (t: Omit<Transaction, "id">) => Promise<Transaction>;
   removeTransaction: (id: string) => Promise<void>;
-  addLoan: (l: Omit<Loan, "id" | "createdAt">) => Promise<Loan>;
+  addLoan: (l: Omit<Loan, "id">) => Promise<Loan>;
   editLoan: (id: string, u: Partial<Loan>) => Promise<void>;
   removeLoan: (id: string) => Promise<void>;
   updateAccountSettings: (s: AccountSettings) => Promise<void>;
@@ -34,9 +49,11 @@ interface DataContextValue {
   getCashBalance: () => number;
   getBankBalance: () => number;
   getTotalBalance: () => number;
+  getEventAttendance: (eventId: string) => AttendanceRecord[];
+  markAttendance: (eventId: string, memberId: string, status: "present" | "absent") => Promise<void>;
 }
 
-const DataContext = createContext<DataContextValue | null>(null);
+const DataContext = createContext<DataContextValue | undefined>(undefined);
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const [members, setMembers] = useState<Member[]>([]);
@@ -46,217 +63,182 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
+    orgName: "",
+    currency: "MMK",
     openingBalanceCash: 0,
     openingBalanceBank: 0,
-    asOfDate: new Date().toISOString().split("T")[0],
   });
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
-    const [m, e, g, a, t, l, s] = await Promise.all([
-      store.getMembers(),
-      store.getEvents(),
-      store.getGroups(),
-      store.getAttendance(),
-      store.getTransactions(),
-      store.getLoans(),
-      store.getAccountSettings(),
-    ]);
-    setMembers(m);
-    setEvents(e);
-    setGroups(g);
-    setAttendance(a);
-    setTransactions(t);
-    setLoans(l);
-    setAccountSettings(s);
-    setLoading(false);
+  const refreshData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [m, e, g, a, t, l, s] = await Promise.all([
+        store.getMembers(),
+        store.getEvents(),
+        store.getGroups(),
+        store.getAttendance(),
+        store.getTransactions(),
+        store.getLoans(),
+        store.getAccountSettings(),
+      ]);
+      setMembers(m);
+      setEvents(e);
+      setGroups(g);
+      setAttendance(a);
+      setTransactions(t);
+      setLoans(l);
+      setAccountSettings(s);
+    } catch (err) {
+      console.error("Failed to refresh data:", err);
+      // ဒီနေရာမှာ Alert ကို သုံးလိုက်ရင် Error ပျောက်သွားပါလိမ့်မယ်
+      Alert.alert("Data Error", "ဒေတာများ ဖတ်မရဖြစ်နေပါသည်။");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    refreshData();
+  }, [refreshData]);
 
-  const addMember = useCallback(async (m: Omit<Member, "id" | "avatarColor" | "joinDate">) => {
-    const newMember = await store.saveMember(m);
-    setMembers((prev) => [...prev, newMember]);
-    return newMember;
-  }, []);
+  // --- Actions ---
+  const addMember = async (m: Omit<Member, "id">) => {
+    const res = await store.addMember(m);
+    await refreshData();
+    return res;
+  };
 
-  const editMember = useCallback(async (id: string, u: Partial<Member>) => {
+  const updateMember = async (id: string, u: Partial<Member>) => {
     await store.updateMember(id, u);
-    setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, ...u } : m)));
-  }, []);
+    await refreshData();
+  };
 
-  const removeMember = useCallback(async (id: string) => {
+  const deleteMember = async (id: string) => {
     await store.deleteMember(id);
-    setMembers((prev) => prev.filter((m) => m.id !== id));
-  }, []);
+    await refreshData();
+  };
 
-  const addEvent = useCallback(async (e: Omit<OrgEvent, "id" | "createdAt">) => {
-    const newEvent = await store.saveEvent(e);
-    setEvents((prev) => [...prev, newEvent]);
-    return newEvent;
-  }, []);
+  const addEvent = async (e: Omit<OrgEvent, "id">) => {
+    const res = await store.addEvent(e);
+    await refreshData();
+    return res;
+  };
 
-  const editEvent = useCallback(async (id: string, u: Partial<OrgEvent>) => {
+  const editEvent = async (id: string, u: Partial<OrgEvent>) => {
     await store.updateEvent(id, u);
-    setEvents((prev) => prev.map((e) => (e.id === id ? { ...e, ...u } : e)));
-  }, []);
+    await refreshData();
+  };
 
-  const removeEvent = useCallback(async (id: string) => {
+  const removeEvent = async (id: string) => {
     await store.deleteEvent(id);
-    setEvents((prev) => prev.filter((e) => e.id !== id));
-    setAttendance((prev) => prev.filter((a) => a.eventId !== id));
-  }, []);
+    await refreshData();
+  };
 
-  const addGroup = useCallback(async (g: Omit<Group, "id" | "createdAt">) => {
-    const newGroup = await store.saveGroup(g);
-    setGroups((prev) => [...prev, newGroup]);
-    return newGroup;
-  }, []);
+  const addGroup = async (g: Omit<Group, "id">) => {
+    const res = await store.addGroup(g);
+    await refreshData();
+    return res;
+  };
 
-  const editGroup = useCallback(async (id: string, u: Partial<Group>) => {
+  const editGroup = async (id: string, u: Partial<Group>) => {
     await store.updateGroup(id, u);
-    setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, ...u } : g)));
-  }, []);
+    await refreshData();
+  };
 
-  const removeGroup = useCallback(async (id: string) => {
+  const removeGroup = async (id: string) => {
     await store.deleteGroup(id);
-    setGroups((prev) => prev.filter((g) => g.id !== id));
-  }, []);
+    await refreshData();
+  };
 
-  const markAttendance = useCallback(async (records: AttendanceRecord[]) => {
-    await store.saveAttendance(records);
-    setAttendance((prev) => {
-      const updated = [...prev];
-      for (const record of records) {
-        const idx = updated.findIndex((a) => a.eventId === record.eventId && a.memberId === record.memberId);
-        if (idx >= 0) updated[idx] = record;
-        else updated.push(record);
-      }
-      return updated;
-    });
-  }, []);
+  const addTransaction = async (t: Omit<Transaction, "id">) => {
+    const res = await store.addTransaction(t);
+    await refreshData();
+    return res;
+  };
 
-  const getEventAttendance = useCallback(
-    (eventId: string) => attendance.filter((a) => a.eventId === eventId),
-    [attendance]
-  );
-
-  const addTransaction = useCallback(async (t: Omit<Transaction, "id" | "createdAt">) => {
-    const newTxn = await store.saveTransaction(t);
-    setTransactions((prev) => [...prev, newTxn]);
-    return newTxn;
-  }, []);
-
-  const removeTransaction = useCallback(async (id: string) => {
+  const removeTransaction = async (id: string) => {
     await store.deleteTransaction(id);
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+    await refreshData();
+  };
 
-  const addLoan = useCallback(async (l: Omit<Loan, "id" | "createdAt">) => {
-    const newLoan = await store.saveLoan(l);
-    setLoans((prev) => [...prev, newLoan]);
-    return newLoan;
-  }, []);
+  const addLoan = async (l: Omit<Loan, "id">) => {
+    const res = await store.addLoan(l);
+    await refreshData();
+    return res;
+  };
 
-  const editLoan = useCallback(async (id: string, u: Partial<Loan>) => {
+  const editLoan = async (id: string, u: Partial<Loan>) => {
     await store.updateLoan(id, u);
-    setLoans((prev) => prev.map((l) => (l.id === id ? { ...l, ...u } : l)));
-  }, []);
+    await refreshData();
+  };
 
-  const removeLoan = useCallback(async (id: string) => {
+  const removeLoan = async (id: string) => {
     await store.deleteLoan(id);
-    setLoans((prev) => prev.filter((l) => l.id !== id));
-  }, []);
+    await refreshData();
+  };
 
-  const updateAccountSettings = useCallback(async (s: AccountSettings) => {
-    await store.saveAccountSettings(s);
-    setAccountSettings(s);
-  }, []);
+  const updateAccountSettings = async (s: AccountSettings) => {
+    await store.updateAccountSettings(s);
+    await refreshData();
+  };
 
-  const getLoanOutstanding = useCallback(
-    (loanId: string) => {
-      const loan = loans.find((l) => l.id === loanId);
-      if (!loan) return 0;
-      const repayments = transactions.filter(
-        (t) => t.loanId === loanId && t.category === "loan_repayment"
-      );
-      const totalRepaid = repayments.reduce((sum, t) => sum + t.amount, 0);
-      const monthsSinceIssue = Math.max(
-        0,
-        monthsDiff(new Date(loan.issueDate), new Date())
-      );
-      const totalInterest = loan.principalAmount * (loan.interestRate / 100) * monthsSinceIssue;
-      return Math.max(0, loan.principalAmount + totalInterest - totalRepaid);
-    },
-    [loans, transactions]
-  );
-
-  const getLoanInterestDue = useCallback(
-    (loanId: string) => {
-      const loan = loans.find((l) => l.id === loanId);
-      if (!loan) return 0;
-      const outstanding = getLoanOutstanding(loanId);
-      return outstanding * (loan.interestRate / 100);
-    },
-    [loans, getLoanOutstanding]
-  );
-
-  const getCashBalance = useCallback(() => {
-    const cashIncome = transactions
-      .filter((t) => t.type === "income" && t.paymentMethod === "cash")
+  // --- Helpers ---
+  const getLoanOutstanding = (loanId: string) => {
+    const loan = loans.find((l) => l.id === loanId);
+    if (!loan) return 0;
+    const paid = transactions
+      .filter((t) => t.loanId === loanId && t.category === "loan_repayment")
       .reduce((sum, t) => sum + t.amount, 0);
-    const cashExpense = transactions
-      .filter((t) => t.type === "expense" && t.paymentMethod === "cash")
-      .reduce((sum, t) => sum + t.amount, 0);
-    return accountSettings.openingBalanceCash + cashIncome - cashExpense;
-  }, [transactions, accountSettings]);
+    return loan.amount - paid;
+  };
 
-  const getBankBalance = useCallback(() => {
-    const bankIncome = transactions
-      .filter((t) => t.type === "income" && t.paymentMethod === "bank")
-      .reduce((sum, t) => sum + t.amount, 0);
-    const bankExpense = transactions
-      .filter((t) => t.type === "expense" && t.paymentMethod === "bank")
-      .reduce((sum, t) => sum + t.amount, 0);
-    return accountSettings.openingBalanceBank + bankIncome - bankExpense;
-  }, [transactions, accountSettings]);
+  const getLoanInterestDue = (loanId: string) => {
+    const loan = loans.find((l) => l.id === loanId);
+    if (!loan) return 0;
+    return (loan.amount * (loan.interestRate / 100));
+  };
 
-  const getTotalBalance = useCallback(() => {
-    return getCashBalance() + getBankBalance();
-  }, [getCashBalance, getBankBalance]);
+  const getCashBalance = () => {
+    const income = transactions.filter((t) => t.type === "income" && t.paymentMethod === "cash").reduce((sum, t) => sum + t.amount, 0);
+    const expense = transactions.filter((t) => t.type === "expense" && t.paymentMethod === "cash").reduce((sum, t) => sum + t.amount, 0);
+    return (accountSettings.openingBalanceCash || 0) + income - expense;
+  };
+
+  const getBankBalance = () => {
+    const income = transactions.filter((t) => t.type === "income" && t.paymentMethod === "bank").reduce((sum, t) => sum + t.amount, 0);
+    const expense = transactions.filter((t) => t.type === "expense" && t.paymentMethod === "bank").reduce((sum, t) => sum + t.amount, 0);
+    return (accountSettings.openingBalanceBank || 0) + income - expense;
+  };
+
+  const getTotalBalance = () => getCashBalance() + getBankBalance();
+
+  const getEventAttendance = (eventId: string) => {
+    return attendance.filter((a) => a.eventId === eventId);
+  };
+
+  const markAttendance = async (eventId: string, memberId: string, status: "present" | "absent") => {
+    await store.saveAttendance(eventId, memberId, status);
+    await refreshData();
+  };
 
   const value = useMemo(
     () => ({
-      members, events, groups, attendance, transactions, loans, accountSettings, loading, refresh,
-      addMember, editMember, removeMember,
+      members, events, groups, attendance, transactions, loans, accountSettings, loading,
+      refreshData, addMember, updateMember, deleteMember,
       addEvent, editEvent, removeEvent,
       addGroup, editGroup, removeGroup,
-      markAttendance, getEventAttendance,
       addTransaction, removeTransaction,
       addLoan, editLoan, removeLoan,
       updateAccountSettings,
       getLoanOutstanding, getLoanInterestDue,
       getCashBalance, getBankBalance, getTotalBalance,
+      getEventAttendance, markAttendance,
     }),
-    [members, events, groups, attendance, transactions, loans, accountSettings, loading, refresh,
-      addMember, editMember, removeMember,
-      addEvent, editEvent, removeEvent,
-      addGroup, editGroup, removeGroup,
-      markAttendance, getEventAttendance,
-      addTransaction, removeTransaction,
-      addLoan, editLoan, removeLoan,
-      updateAccountSettings,
-      getLoanOutstanding, getLoanInterestDue,
-      getCashBalance, getBankBalance, getTotalBalance]
+    [members, events, groups, attendance, transactions, loans, accountSettings, loading, refreshData]
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
-}
-
-function monthsDiff(from: Date, to: Date): number {
-  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
 }
 
 export function useData() {

@@ -22,5 +22,12 @@ export default {
     tabIconDefault: slate,
     tabIconSelected: teal,
     cardShadow: "rgba(15, 23, 42, 0.08)",
+    error: "#EF4444",         // အနီရောင် (ဖျက်ရန် icon များအတွက်)
+      tintSecondary: "#94A3B8",  // မီးခိုးရောင် (Avatar backgound အတွက်)
+    },
+    dark: {
+      // ... dark mode အတွက်လည်း ထည့်ပေးပါ ...
+      error: "#F87171",
+      tintSecondary: "#475569",
   },
 };

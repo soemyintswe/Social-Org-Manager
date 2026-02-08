@@ -39,17 +39,26 @@ export default function GroupDetailScreen() {
 
   const handleAddMember = async (memberId: string) => {
     const newIds = [...group.memberIds, memberId];
-    await editGroup(group.id, { memberIds: newIds });
-    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      await editGroup(group.id, { memberIds: newIds });
+      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (err) {
+      Alert.alert("Error", "Failed to add member");
+    }
   };
 
   const handleRemoveMember = async (memberId: string) => {
     const newIds = group.memberIds.filter((id) => id !== memberId);
-    await editGroup(group.id, { memberIds: newIds });
+    try {
+      await editGroup(group.id, { memberIds: newIds });
+      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (err) {
+      Alert.alert("Error", "Failed to remove member");
+    }
   };
 
   const handleDelete = () => {
-    Alert.alert("Delete Group", `Remove "${group.name}"?`, [
+    Alert.alert("Delete Group", "Are you sure you want to delete this group?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -63,149 +72,87 @@ export default function GroupDetailScreen() {
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + 12 + webTopInset }]}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [pressed && { opacity: 0.6 }]}>
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+    <View style={styles.container}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 + webTopInset }]}>
+        <Pressable onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={26} color={Colors.light.text} />
         </Pressable>
-        <Pressable onPress={handleDelete} style={({ pressed }) => [pressed && { opacity: 0.6 }]}>
-          <Ionicons name="trash-outline" size={22} color={Colors.light.accent} />
+        <Text style={styles.headerTitle}>{group.name}</Text>
+        <Pressable onPress={handleDelete}>
+          <Ionicons name="trash-outline" size={22} color={Colors.light.error} />
         </Pressable>
       </View>
 
-      <View style={styles.groupHeader}>
-        <View style={[styles.groupIcon, { backgroundColor: group.color + "20" }]}>
-          <Ionicons name="people" size={32} color={group.color} />
-        </View>
-        <Text style={styles.groupName}>{group.name}</Text>
-        {group.description ? (
-          <Text style={styles.groupDesc}>{group.description}</Text>
-        ) : null}
-        <Text style={styles.groupMeta}>
-          {groupMembers.length} member{groupMembers.length !== 1 ? "s" : ""}
-        </Text>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Members</Text>
-        {groupMembers.length === 0 ? (
-          <View style={styles.emptyMembers}>
-            <Text style={styles.emptyMembersText}>No members in this group</Text>
-          </View>
-        ) : (
-          groupMembers.map((m) => (
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Members ({groupMembers.length})</Text>
+          {groupMembers.map((m) => (
             <View key={m.id} style={styles.memberRow}>
-              <View style={[styles.memberAvatar, { backgroundColor: m.avatarColor }]}>
-                <Text style={styles.memberInitials}>
-                  {(m.firstName[0] + m.lastName[0]).toUpperCase()}
-                </Text>
+              <View style={[styles.memberAvatar, { backgroundColor: (m as any).color || Colors.light.tint }]}>
+                <Text style={styles.memberInitials}>{m.name.charAt(0)}</Text>
               </View>
               <View style={styles.memberInfo}>
-                <Text style={styles.memberName} numberOfLines={1}>
-                  {m.firstName} {m.lastName}
-                </Text>
-                <Text style={styles.memberRole}>
-                  {m.role.charAt(0).toUpperCase() + m.role.slice(1)}
-                </Text>
+                <Text style={styles.memberName}>{m.name}</Text>
+                <Text style={styles.memberRole}>{(m as any).status || "Member"}</Text>
               </View>
               <Pressable onPress={() => handleRemoveMember(m.id)}>
-                <Ionicons name="close-circle-outline" size={22} color={Colors.light.textSecondary} />
+                <Ionicons name="remove-circle-outline" size={22} color={Colors.light.error} />
               </Pressable>
             </View>
-          ))
-        )}
-      </View>
+          ))}
+          {groupMembers.length === 0 && (
+            <View style={styles.emptyMembers}>
+              <Text style={styles.emptyMembersText}>No members in this group</Text>
+            </View>
+          )}
+        </View>
 
-      {nonMembers.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Add Members</Text>
           {nonMembers.map((m) => (
             <Pressable
               key={m.id}
-              style={({ pressed }) => [styles.addMemberRow, pressed && { opacity: 0.7 }]}
               onPress={() => handleAddMember(m.id)}
+              style={styles.memberRow}
             >
-              <View style={[styles.memberAvatar, { backgroundColor: m.avatarColor }]}>
-                <Text style={styles.memberInitials}>
-                  {(m.firstName[0] + m.lastName[0]).toUpperCase()}
-                </Text>
+              <View style={[styles.memberAvatar, { backgroundColor: (m as any).color || Colors.light.tintSecondary }]}>
+                <Text style={styles.memberInitials}>{m.name.charAt(0)}</Text>
               </View>
-              <Text style={styles.memberAddName} numberOfLines={1}>
-                {m.firstName} {m.lastName}
-              </Text>
+              <View style={styles.memberInfo}>
+                <Text style={styles.memberName}>{m.name}</Text>
+                <Text style={styles.memberRole}>{(m as any).status || "Member"}</Text>
+              </View>
               <Ionicons name="add-circle-outline" size={22} color={Colors.light.tint} />
             </Pressable>
           ))}
         </View>
-      )}
-
-      <View style={{ height: 60 }} />
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   center: { justifyContent: "center", alignItems: "center" },
-  content: { paddingHorizontal: 20 },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 20,
-  },
-  groupHeader: {
-    alignItems: "center",
-    marginBottom: 28,
-  },
-  groupIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 14,
-  },
-  groupName: {
-    fontSize: 22,
-    fontFamily: "Inter_700Bold",
-    color: Colors.light.text,
-    marginBottom: 6,
-  },
-  groupDesc: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-    textAlign: "center",
-    marginBottom: 8,
     paddingHorizontal: 20,
-  },
-  groupMeta: {
-    fontSize: 13,
-    fontFamily: "Inter_500Medium",
-    color: Colors.light.tint,
-  },
-  section: { marginBottom: 24 },
-  sectionTitle: {
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.text,
-    marginBottom: 12,
-  },
-  emptyMembers: {
+    paddingBottom: 14,
     backgroundColor: Colors.light.surface,
-    borderRadius: 14,
-    padding: 20,
-    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
   },
-  emptyMembersText: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
+  headerTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  content: { padding: 20 },
+  section: { marginBottom: 30 },
+  sectionTitle: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
     color: Colors.light.textSecondary,
+    marginBottom: 12,
+    textTransform: "uppercase",
   },
   memberRow: {
     flexDirection: "row",
@@ -216,56 +163,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     gap: 10,
   },
-  memberAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  memberInitials: {
-    fontSize: 13,
-    fontFamily: "Inter_700Bold",
-    color: "#fff",
-  },
+  memberAvatar: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center" },
+  memberInitials: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#fff" },
   memberInfo: { flex: 1 },
-  memberName: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: Colors.light.text,
-  },
-  memberRole: {
-    fontSize: 11,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-  },
-  addMemberRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.light.surface,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderStyle: "dashed",
-  },
-  memberAddName: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: Colors.light.text,
-  },
-  emptyText: {
-    fontSize: 16,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-    marginBottom: 12,
-  },
-  backLink: {
-    fontSize: 15,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.tint,
-  },
+  memberName: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  memberRole: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary },
+  emptyMembers: { backgroundColor: Colors.light.surface, borderRadius: 14, padding: 20, alignItems: "center" },
+  emptyMembersText: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary },
+  emptyText: { fontSize: 16, color: Colors.light.textSecondary, marginBottom: 10 },
+  backLink: { color: Colors.light.tint, fontSize: 16 },
 });
