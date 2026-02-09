@@ -200,7 +200,14 @@ export default function MembersScreen() {
                    </View>
                  )}
                  <View style={styles.memberInfo}>
-                    <Text style={styles.memberName}>{item.name}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.memberName}>{item.name}</Text>
+                      {item.resignDate && String(item.resignDate).trim() !== "" && (
+                        <View style={{ backgroundColor: '#FEE2E2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                          <Text style={{ fontSize: 10, color: '#EF4444', fontWeight: '600' }}>နှုတ်ထွက်</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={styles.memberIdText}>{item.id}</Text>
                     <Text style={styles.memberSubText}>{item.phone}</Text>
                  </View>

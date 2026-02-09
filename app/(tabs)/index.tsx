@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React from "react";
 import {
   StyleSheet,
   Text,
@@ -6,12 +6,10 @@ import {
   ScrollView,
   Pressable,
   ActivityIndicator,
-  Alert,
-  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
@@ -184,7 +182,6 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
   statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, marginTop: 2 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, paddingHorizontal: 20, marginBottom: 15 },
-  sectionTitleNoPadding: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   quickActions: { flexDirection: "row", paddingHorizontal: 20, gap: 12, marginBottom: 25 },
   quickAction: { flex: 1, backgroundColor: "white", padding: 15, borderRadius: 16, alignItems: "center", elevation: 1 },
   actionIcon: { width: 45, height: 45, borderRadius: 12, backgroundColor: Colors.light.tint + "15", justifyContent: "center", alignItems: "center", marginBottom: 8 },
@@ -192,7 +189,7 @@ const styles = StyleSheet.create({
   recentTxnRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", padding: 12, borderRadius: 12, marginBottom: 10, marginHorizontal: 20 },
   recentTxnIcon: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12 },
   recentTxnInfo: { flex: 1 },
-  recentTxnCat: { fontSize: 14, fontWeight: "600", color: Colors.light.text },
+  recentTxnCat: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   recentTxnMeta: { fontSize: 12, color: Colors.light.textSecondary },
   recentTxnAmt: { fontSize: 14, fontWeight: "bold" },
   incomeText: { color: Colors.light.success },

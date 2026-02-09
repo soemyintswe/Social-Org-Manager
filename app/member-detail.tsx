@@ -49,6 +49,7 @@ export default function MemberDetailScreen() {
   const [editEmail, setEditEmail] = useState(member?.email || "");
   const [editPhone, setEditPhone] = useState(member?.phone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
+  const [editResignDate, setEditResignDate] = useState(member?.resignDate || "");
   const [saving, setSaving] = useState(false);
 
   if (!member) {
@@ -77,6 +78,7 @@ export default function MemberDetailScreen() {
         email: editEmail.trim(),
         phone: editPhone.trim(),
         address: editAddress.trim(),
+        resignDate: editResignDate.trim(),
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
@@ -103,6 +105,10 @@ export default function MemberDetailScreen() {
 
   // createdAt error ကို ရှောင်ရန် helper variable
   const createdAtValue = (member as any).createdAt;
+
+  // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
+  const isResigned = member?.resignDate && String(member.resignDate).trim() !== "";
+  const statusLabel = isResigned ? "နှုတ်ထွက်" : "ပုံမှန်";
 
   return (
     <KeyboardAvoidingView 
@@ -154,6 +160,14 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Address</Text>
             <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
 
+            <Text style={styles.editLabel}>Resign Date (နှုတ်ထွက်သည့်နေ့)</Text>
+            <TextInput 
+              style={styles.editInput} 
+              value={editResignDate} 
+              onChangeText={setEditResignDate} 
+              placeholder="YYYY-MM-DD" 
+            />
+
             <Pressable style={styles.deleteBtn} onPress={handleDelete}>
               <Ionicons name="trash-outline" size={20} color="#EF4444" />
               <Text style={styles.deleteBtnText}>Delete Member</Text>
@@ -162,6 +176,12 @@ export default function MemberDetailScreen() {
         ) : (
           <View>
             <View style={styles.infoCard}>
+              <InfoRow 
+                icon={isResigned ? "alert-circle-outline" : "checkmark-circle-outline"} 
+                label="အခြေအနေ" 
+                value={statusLabel} 
+              />
+              {isResigned && <InfoRow icon="calendar-outline" label="နှုတ်ထွက်သည့်နေ့" value={member.resignDate} />}
               <InfoRow icon="mail-outline" label="Email" value={member.email} />
               <InfoRow icon="call-outline" label="Phone" value={member.phone} />
               <InfoRow icon="location-outline" label="Address" value={member.address} />
