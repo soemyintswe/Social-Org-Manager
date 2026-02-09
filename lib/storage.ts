@@ -20,7 +20,7 @@ const AVATAR_COLORS = [
   "#3B82F6", "#10B981", "#EC4899", "#6366F1",
 ];
 
-function randomColor(): string {
+export function randomColor(): string {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 }
 
@@ -34,6 +34,18 @@ export function generateReceiptNumber(): string {
 export async function getMembers(): Promise<Member[]> {
   const data = await AsyncStorage.getItem(KEYS.MEMBERS);
   return data ? JSON.parse(data) : [];
+}
+
+export async function importMembers(newMembers: Member[]): Promise<void> {
+  const members = await getMembers();
+  const memberMap = new Map(members.map((m) => [m.id, m]));
+
+  for (const m of newMembers) {
+    // ID တူရင် အသစ်နဲ့ အစားထိုးမယ်
+    memberMap.set(m.id, m);
+  }
+
+  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(Array.from(memberMap.values())));
 }
 
 export async function saveMember(member: Omit<Member, "id" | "avatarColor" | "joinDate">): Promise<Member> {
@@ -61,6 +73,14 @@ export async function updateMember(id: string, updates: Partial<Member>): Promis
 export async function deleteMember(id: string): Promise<void> {
   const members = await getMembers();
   await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(members.filter((m) => m.id !== id)));
+}
+
+export async function clearAllMembers(): Promise<void> {
+  await AsyncStorage.removeItem(KEYS.MEMBERS);
+}
+
+export async function clearAllData(): Promise<void> {
+  await AsyncStorage.multiRemove(Object.values(KEYS));
 }
 
 export async function getEvents(): Promise<OrgEvent[]> {
@@ -212,4 +232,42 @@ export async function getAccountSettings(): Promise<AccountSettings> {
 
 export async function saveAccountSettings(settings: AccountSettings): Promise<void> {
   await AsyncStorage.setItem(KEYS.ACCOUNT_SETTINGS, JSON.stringify(settings));
+}
+
+// Backup Data (Export All)
+export async function exportData(): Promise<string> {
+  const keys = Object.values(KEYS);
+  const result = await AsyncStorage.multiGet(keys);
+  const exportObj: Record<string, string> = {};
+  
+  result.forEach(([key, value]) => {
+    if (value) {
+      exportObj[key] = value;
+    }
+  });
+  
+  return JSON.stringify(exportObj);
+}
+
+// Restore Data (Import All)
+export async function restoreData(jsonString: string): Promise<boolean> {
+  try {
+    const exportObj = JSON.parse(jsonString);
+    const pairs: [string, string][] = [];
+    
+    Object.values(KEYS).forEach((key) => {
+      if (exportObj[key]) {
+        pairs.push([key, exportObj[key]]);
+      }
+    });
+
+    if (pairs.length > 0) {
+      await AsyncStorage.multiSet(pairs);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Restore failed:", error);
+    return false;
+  }
 }

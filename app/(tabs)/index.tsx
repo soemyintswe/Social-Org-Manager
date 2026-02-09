@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback } from "react";
 import {
   StyleSheet,
   Text,
@@ -7,13 +7,14 @@ import {
   Pressable,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { CATEGORY_LABELS } from "@/lib/types";
+import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
 
 function StatCard({
   icon,
@@ -61,25 +62,31 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, groups, transactions, loans, loading, getCashBalance, getBankBalance, getTotalBalance } = useData();
+  const { members, events, groups, transactions, loans, loading, getCashBalance, getBankBalance, getTotalBalance, refreshData } = useData() as any;
 
-  const activeMembers = members.filter((m) => m.status === "active");
-  const activeLoans = loans.filter((l) => l.status === "active");
+  useFocusEffect(
+    useCallback(() => {
+      if (refreshData) refreshData();
+    }, [refreshData])
+  );
+
+  const activeMembers = members.filter((m: typeof members[number]) => m.status === "active");
+  const activeLoans = loans.filter((l: typeof loans[number]) => l.status === "active");
 
   const recentTxns = [...transactions]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 5);
 
   const upcomingEvents = events
-    .filter((e) => new Date(e.date) >= new Date())
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .filter((e: typeof events[number]) => new Date(e.date) >= new Date())
+    .sort((a: typeof events[number], b: typeof events[number]) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .slice(0, 3);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
-    const m = members.find((m) => m.id === id);
+    const m = members.find((m: typeof members[number]) => m.id === id);
     return m ? `${m.firstName} ${m.lastName}` : "";
   };
 
@@ -144,7 +151,7 @@ export default function DashboardScreen() {
       {recentTxns.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Recent Transactions</Text>
-          {recentTxns.map((txn) => {
+          {recentTxns.map((txn: { id: string; type: string; category: TransactionCategory; memberId?: string; receiptNumber?: string; amount: number }) => {
             const isIncome = txn.type === "income";
             return (
               <View key={txn.id} style={styles.recentTxnRow}>
@@ -173,7 +180,7 @@ export default function DashboardScreen() {
       {upcomingEvents.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Upcoming Events</Text>
-          {upcomingEvents.map((event) => (
+          {upcomingEvents.map((event: typeof events[number]) => (
             <Pressable key={event.id} onPress={() => router.push({ pathname: "/event-detail", params: { id: event.id } })}>
               <View style={styles.eventCard}>
                 <View style={styles.eventDateBadge}>
