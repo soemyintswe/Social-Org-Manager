@@ -34,7 +34,8 @@ export default function AccountSettingsScreen() {
       await updateAccountSettings({
         openingBalanceCash: parseFloat(cashBalance) || 0,
         openingBalanceBank: parseFloat(bankBalance) || 0,
-        asOfDate: asOfDate.trim(),
+        asOfDate: (asOfDate || "").trim(),
+        currency: accountSettings.currency || "MMK",
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();

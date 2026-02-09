@@ -42,6 +42,7 @@ export default function AddGroupScreen() {
         description: description.trim(),
         color,
         memberIds: [],
+        createdAt: new Date().toISOString(),
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();

@@ -15,7 +15,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
+<<<<<<< HEAD
 import * as ImagePicker from "expo-image-picker";
+=======
+import * as Haptics from "expo-haptics";
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 
@@ -24,7 +28,11 @@ const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#
 
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
+<<<<<<< HEAD
   const { members, addMember, editMember } = useData() as any;
+=======
+  const { members, addMember, updateMember } = useData();
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
   const { editId } = useLocalSearchParams<{ editId: string }>();
 
   // Form States
@@ -34,15 +42,23 @@ export default function AddMemberScreen() {
   const [nrc, setNrc] = useState("");
   const [dob, setDob] = useState("");
   const [address, setAddress] = useState("");
+<<<<<<< HEAD
   const [joinDate, setJoinDate] = useState(new Date().toLocaleDateString("en-GB"));
   const [resignDate, setResignDate] = useState("");
   const [status, setStatus] = useState<"active" | "inactive">("active");
   const [profileImage, setProfileImage] = useState<string | null>(null);
+=======
+  const [status, setStatus] = useState<"active" | "inactive">("active");
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (editId) {
+<<<<<<< HEAD
       const member = members.find((m: any) => m.id === editId);
+=======
+      const member = members.find((m) => m.id === editId);
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
       if (member) {
         setName(member.name);
         setMemberId(member.id);
@@ -52,14 +68,19 @@ export default function AddMemberScreen() {
         // @ts-ignore
         setDob(member.dob || "");
         setAddress(member.address || "");
+<<<<<<< HEAD
         setJoinDate(member.joinDate || "");
         setResignDate(member.resignDate || "");
         setStatus(member.status);
         setProfileImage(member.profileImage || null);
+=======
+        setStatus(member.status);
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
       }
     }
   }, [editId, members]);
 
+<<<<<<< HEAD
   const pickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -81,6 +102,8 @@ export default function AddMemberScreen() {
     }
   };
 
+=======
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
   const canSave = name.trim().length > 0 && memberId.trim().length > 0;
 
   const handleSave = async () => {
@@ -88,6 +111,11 @@ export default function AddMemberScreen() {
     setSaving(true);
 
     try {
+<<<<<<< HEAD
+=======
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
       const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
       // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
@@ -98,18 +126,30 @@ export default function AddMemberScreen() {
         nrc: nrc.trim(),
         dob: dob.trim(),
         address: address.trim(),
+<<<<<<< HEAD
         joinDate: joinDate.trim(),
         resignDate: resignDate.trim(),
+=======
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
         status: status,
         role: "member", // Missing 'role' ကို ထည့်လိုက်ပါသည်
         avatarColor: randomColor, // Missing 'color' (သို့) 'avatarColor' အတွက်
         color: randomColor, 
+<<<<<<< HEAD
         profileImage: profileImage || undefined,
         createdAt: new Date().toISOString(),
       };
 
       if (editId) {
         await editMember(editId, memberData);
+=======
+        createdAt: new Date().toISOString(),
+        joinDate: new Date().toLocaleDateString("en-GB"),
+      };
+
+      if (editId) {
+        await updateMember(editId, memberData);
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
       } else {
         await addMember(memberData);
       }
@@ -133,11 +173,16 @@ export default function AddMemberScreen() {
           {saving ? (
             <ActivityIndicator size="small" color={Colors.light.tint} />
           ) : (
+<<<<<<< HEAD
             <Text style={[styles.saveBtn, !canSave ? { opacity: 0.5 } : undefined]}>သိမ်းမည်</Text>
+=======
+            <Text style={[styles.saveBtn, !canSave && { opacity: 0.5 }]}>သိမ်းမည်</Text>
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
           )}
         </Pressable>
       </View>
 
+<<<<<<< HEAD
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.keyboardAvoidingView}>
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
           <View style={styles.imageContainer}>
@@ -158,6 +203,10 @@ export default function AddMemberScreen() {
             )}
           </View>
 
+=======
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
           <Text style={styles.label}>အသင်းဝင်အမှတ် (ID)</Text>
           <TextInput
             style={styles.input}
@@ -215,6 +264,7 @@ export default function AddMemberScreen() {
             placeholderTextColor={Colors.light.textSecondary}
           />
 
+<<<<<<< HEAD
           <Text style={styles.label}>အသင်းဝင်သည့်နေ့</Text>
           <TextInput
             style={styles.input}
@@ -224,20 +274,30 @@ export default function AddMemberScreen() {
             placeholderTextColor={Colors.light.textSecondary}
           />
 
+=======
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
           <Text style={styles.label}>အခြေအနေ (Status)</Text>
           <View style={styles.statusRow}>
             {(["active", "inactive"] as const).map((s) => (
               <Pressable
                 key={s}
+<<<<<<< HEAD
                 style={[styles.statusChip, status === s ? styles.statusChipActive : undefined]}
                 onPress={() => setStatus(s)}
               >
                 <Text style={[styles.statusChipText, status === s ? styles.statusChipTextActive : undefined]}>
+=======
+                style={[styles.statusChip, status === s && styles.statusChipActive]}
+                onPress={() => setStatus(s)}
+              >
+                <Text style={[styles.statusChipText, status === s && styles.statusChipTextActive]}>
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
                   {s === "active" ? "ပုံမှန်" : "နုတ်ထွက်"}
                 </Text>
               </Pressable>
             ))}
           </View>
+<<<<<<< HEAD
 
           <Text style={styles.label}>နှုတ်ထွက်သည့်နေ့</Text>
           <TextInput
@@ -247,6 +307,8 @@ export default function AddMemberScreen() {
             onChangeText={setResignDate}
             placeholderTextColor={Colors.light.textSecondary}
           />
+=======
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -285,6 +347,7 @@ const styles = StyleSheet.create({
   statusChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   statusChipText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   statusChipTextActive: { color: "#fff" },
+<<<<<<< HEAD
   keyboardAvoidingView: { flex: 1 },
   imageContainer: { alignItems: "center", marginBottom: 24 },
   imagePicker: { width: 100, height: 100, borderRadius: 50, overflow: "hidden", backgroundColor: Colors.light.surface, justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: Colors.light.border },
@@ -293,4 +356,6 @@ const styles = StyleSheet.create({
   addPhotoText: { fontSize: 10, color: Colors.light.textSecondary, marginTop: 4, fontFamily: "Inter_500Medium" },
   removeImageBtn: { marginTop: 8 },
   removeImageText: { color: "#EF4444", fontSize: 13, fontFamily: "Inter_500Medium" },
+=======
+>>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
 });

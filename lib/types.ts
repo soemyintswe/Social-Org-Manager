@@ -1,14 +1,19 @@
+// lib/types.ts
+
 export interface Member {
   id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
+  name: string;
+  dob?: string;
+  nrc?: string;
   phone: string;
-  role: "admin" | "member" | "volunteer";
-  status: "active" | "inactive";
-  groupIds: string[];
+  email?: string;
+  address?: string;
   joinDate: string;
-  avatarColor: string;
+  status: "active" | "inactive";
+  avatarColor?: string;
+  createdAt: string;
+  color: string;
+  role: string;
 }
 
 export interface OrgEvent {
@@ -32,9 +37,19 @@ export interface Group {
 }
 
 export interface AttendanceRecord {
+  id: string;
   eventId: string;
   memberId: string;
-  present: boolean;
+  date: string;
+  status: "present" | "absent"; 
+}
+
+export interface AccountSettings {
+  orgName: string;
+  currency: string;
+  openingBalanceCash: number;
+  openingBalanceBank: number;
+  asOfDate: string;
 }
 
 export type TransactionType = "income" | "expense";
@@ -47,17 +62,19 @@ export type TransactionCategory =
   | "welfare_funeral"
   | "loan_issued"
   | "loan_repayment"
+  | "general_expense"
   | "other";
 
 export const CATEGORY_LABELS: Record<TransactionCategory, string> = {
-  monthly_fee: "Monthly Fee",
-  donation: "Donation",
-  welfare_health: "Welfare - Health",
-  welfare_education: "Welfare - Education",
-  welfare_funeral: "Welfare - Funeral",
-  loan_issued: "Loan Issued",
-  loan_repayment: "Loan Repayment",
-  other: "Other",
+  monthly_fee: "လစဉ်ကြေး",
+  donation: "အလှူငွေ",
+  welfare_health: "ကျန်းမာရေးထောက်ပံ့မှု",
+  welfare_education: "ပညာရေးထောက်ပံ့မှု",
+  welfare_funeral: "နာရေးကူညီမှု",
+  loan_issued: "ချေးငွေထုတ်ပေးခြင်း",
+  loan_repayment: "ချေးငွေပြန်ဆပ်ခြင်း",
+  general_expense: "အထွေထွေအသုံးစရိတ်",
+  other: "အခြား",
 };
 
 export const INCOME_CATEGORIES: TransactionCategory[] = [
@@ -72,6 +89,7 @@ export const EXPENSE_CATEGORIES: TransactionCategory[] = [
   "welfare_education",
   "welfare_funeral",
   "loan_issued",
+  "general_expense",
   "other",
 ];
 
@@ -94,16 +112,12 @@ export interface Transaction {
 export interface Loan {
   id: string;
   memberId: string;
-  principalAmount: number;
+  principal: number;
   interestRate: number;
   issueDate: string;
+  dueDate?: string;
+  repaymentDate?: string;
   status: "active" | "paid";
   description: string;
   createdAt: string;
-}
-
-export interface AccountSettings {
-  openingBalanceCash: number;
-  openingBalanceBank: number;
-  asOfDate: string;
 }
