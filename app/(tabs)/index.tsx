@@ -16,6 +16,27 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
 
+interface Transaction {
+  id: string;
+  type: "income" | "expense";
+  category: TransactionCategory;
+  memberId?: string;
+  receiptNumber?: string;
+  amount: number;
+  date: string;
+}
+
+// A utility function for consistent currency formatting
+const formatCurrency = (amount: number) => `${amount.toLocaleString()} KS`;
+
+interface DataContextType {
+  members: { id: string; firstName: string; lastName: string }[];
+  transactions: Transaction[];
+  loans: { amount: number }[];
+  loading: boolean;
+  getTotalBalance: () => number;
+}
+
 
 function StatCard({
   icon,
@@ -63,19 +84,19 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, groups, transactions, loans, loading, getCashBalance, getBankBalance, getTotalBalance, refreshData } = useData() as any;
+  const { members, transactions, loans, loading, getTotalBalance } = useData() as DataContextType;
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
-    const m = members?.find((m: typeof members[number]) => m.id === id);
+    const m = members?.find((m) => m.id === id);
     return m ? `${m.firstName} ${m.lastName}` : "";
   };
 
-  const recentTxns = [...(transactions || [])]
+  const recentTxns: Transaction[] = [...(transactions || [])]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 5);
 
-  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (loan.amount || 0), 0);
+  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan) => acc + (loan.amount || 0), 0);
 
   if (loading) {
     return (
@@ -106,8 +127,8 @@ export default function DashboardScreen() {
 
       <View style={styles.statsGrid}>
         <StatCard icon="people" label="အသင်းဝင်" value={(members?.length || 0).toString()} color="#8B5CF6" />
-        <StatCard icon="wallet" label="စုစုပေါင်းလက်ကျန်" value={`${getTotalBalance().toLocaleString()} KS`} color="#10B981" />
-        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={`${totalLoanOutstanding.toLocaleString()} KS`} color="#F59E0B" />
+        <StatCard icon="wallet" label="စုစုပေါင်းလက်ကျန်" value={formatCurrency(getTotalBalance())} color="#10B981" />
+        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" />
         <StatCard icon="calendar" label="မှတ်တမ်းများ" value={(transactions?.length || 0).toString()} color="#3B82F6" />
       </View>
 
@@ -121,7 +142,7 @@ export default function DashboardScreen() {
       {recentTxns.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Recent Transactions</Text>
-          {recentTxns.map((txn: { id: string; type: string; category: TransactionCategory; memberId?: string; receiptNumber?: string; amount: number }) => {
+          {recentTxns.map((txn) => {
             const isIncome = txn.type === "income";
             return (
               <View key={txn.id} style={styles.recentTxnRow}>
@@ -135,11 +156,11 @@ export default function DashboardScreen() {
                 <View style={styles.recentTxnInfo}>
                   <Text style={styles.recentTxnCat} numberOfLines={1}>{CATEGORY_LABELS[txn.category]}</Text>
                   <Text style={styles.recentTxnMeta} numberOfLines={1}>
-                    {getMemberName(txn.memberId) || txn.receiptNumber}
+                    {getMemberName(txn.memberId) || txn.receiptNumber} • {new Date(txn.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                   </Text>
                 </View>
                 <Text style={[styles.recentTxnAmt, isIncome ? styles.incomeText : styles.expenseText]}>
-                  {isIncome ? "+" : "-"}${txn.amount.toFixed(2)}
+                  {isIncome ? "+" : "-"} {formatCurrency(txn.amount)}
                 </Text>
               </View>
             );
@@ -168,17 +189,6 @@ const styles = StyleSheet.create({
   quickAction: { flex: 1, backgroundColor: "white", padding: 15, borderRadius: 16, alignItems: "center", elevation: 1 },
   actionIcon: { width: 45, height: 45, borderRadius: 12, backgroundColor: Colors.light.tint + "15", justifyContent: "center", alignItems: "center", marginBottom: 8 },
   actionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  recentSection: { paddingHorizontal: 20 },
-  sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 15 },
-  seeAll: { color: Colors.light.tint, fontFamily: "Inter_600SemiBold", fontSize: 14 },
-  recentTxnCard: { flexDirection: "row", backgroundColor: "white", padding: 12, borderRadius: 12, alignItems: "center", marginBottom: 10, elevation: 1 },
-  txnIconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12 },
-  txnMainInfo: { flex: 1 },
-  txnDesc: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  recentTxnCat: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 2 },
-  txnRight: { alignItems: "flex-end" },
-  txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
-  txnDate: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 2 },
   recentTxnRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", padding: 12, borderRadius: 12, marginBottom: 10, marginHorizontal: 20 },
   recentTxnIcon: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12 },
   recentTxnInfo: { flex: 1 },
