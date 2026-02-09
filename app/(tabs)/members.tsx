@@ -9,249 +9,141 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  StatusBar,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { Member } from "@/lib/types";
-
-function MemberAvatar({ member }: { member: Member }) {
-  const initials = (member.firstName[0] || "") + (member.lastName[0] || "");
-  return (
-    <View style={[styles.avatar, { backgroundColor: member.avatarColor }]}>
-      <Text style={styles.avatarText}>{initials.toUpperCase()}</Text>
-    </View>
-  );
-}
-
-function MemberRow({ member, onPress, onDelete }: { member: Member; onPress: () => void; onDelete: () => void }) {
-  const roleLabel = member.role.charAt(0).toUpperCase() + member.role.slice(1);
-  return (
-    <Pressable
-      style={({ pressed }) => [styles.memberRow, pressed && { opacity: 0.7 }]}
-      onPress={onPress}
-      onLongPress={() => {
-        if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        Alert.alert("Delete Member", `Remove ${member.firstName} ${member.lastName}?`, [
-          { text: "Cancel", style: "cancel" },
-          { text: "Delete", style: "destructive", onPress: onDelete },
-        ]);
-      }}
-    >
-      <MemberAvatar member={member} />
-      <View style={styles.memberInfo}>
-        <Text style={styles.memberName} numberOfLines={1}>
-          {member.firstName} {member.lastName}
-        </Text>
-        <Text style={styles.memberRole}>{roleLabel}</Text>
-      </View>
-      <View style={[styles.statusBadge, member.status === "active" ? styles.statusActive : styles.statusInactive]}>
-        <Text style={[styles.statusText, member.status === "active" ? styles.statusActiveText : styles.statusInactiveText]}>
-          {member.status === "active" ? "Active" : "Inactive"}
-        </Text>
-      </View>
-    </Pressable>
-  );
-}
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function MembersScreen() {
   const insets = useSafeAreaInsets();
-  const { members, removeMember, loading } = useData();
+  const dataContext = useData(); // Context တစ်ခုလုံးကို ယူလိုက်ပါ
   const [search, setSearch] = useState("");
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return members;
-    const q = search.toLowerCase();
-    return members.filter(
-      (m) =>
-        m.firstName.toLowerCase().includes(q) ||
-        m.lastName.toLowerCase().includes(q) ||
-        m.email.toLowerCase().includes(q)
+  // ဒေတာအဟောင်းဖျက်ပြီး ၅၇ ဦးစာရင်း ပြန်ယူရန်
+  const resetToInitialData = async () => {
+    Alert.alert(
+      "ဒေတာများ ပြန်ယူရန်",
+      "လက်ရှိဒေတာများကို ဖျက်ပြီး မူလအသင်းဝင် ၅၇ ဦးစာရင်းကို ပြန်ထည့်သွင်းမှာလား?",
+      [
+        { text: "မလုပ်တော့ပါ", style: "cancel" },
+        { 
+          text: "ပြန်ယူမည်", 
+          onPress: async () => {
+            try {
+              await AsyncStorage.removeItem("@orghub_members");
+              // App ကို Reload လုပ်ခိုင်းခြင်း သို့မဟုတ် refreshData ခေါ်ခြင်း
+              if (dataContext.refreshData) {
+                await dataContext.refreshData();
+              } else {
+                Alert.alert("အောင်မြင်ပါသည်", "အပြောင်းအလဲများ မြင်ရရန် App ကို ပိတ်ပြီး ပြန်ဖွင့်ပေးပါ။");
+              }
+            } catch (e) {
+              Alert.alert("အမှား", "ဒေတာဖျက်၍မရပါ။");
+            }
+          } 
+        }
+      ]
     );
-  }, [members, search]);
+  };
 
-  const webTopInset = Platform.OS === "web" ? 67 : 0;
-
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" color={Colors.light.tint} />
-      </View>
+  const filteredMembers = useMemo(() => {
+    const membersList = dataContext.members || [];
+    return membersList.filter((m) =>
+      m.name.toLowerCase().includes(search.toLowerCase()) ||
+      m.id.toLowerCase().includes(search.toLowerCase())
     );
-  }
+  }, [dataContext.members, search]);
 
   return (
-    <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 + webTopInset }]}>
-        <View style={styles.headerRow}>
-          <Text style={styles.headerTitle}>Members</Text>
-          <Pressable
-            onPress={() => {
-              if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push("/add-member");
-            }}
-            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
-          >
-            <Ionicons name="add" size={24} color={Colors.light.surface} />
-          </Pressable>
+    <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
+      <StatusBar barStyle="dark-content" />
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.title}>အသင်းဝင်များ</Text>
+          <Text style={styles.subtitle}>စုစုပေါင်း {dataContext.members?.length || 0} ဦး</Text>
         </View>
-        <View style={styles.searchWrap}>
-          <Ionicons name="search" size={18} color={Colors.light.textSecondary} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search members..."
-            placeholderTextColor={Colors.light.textSecondary}
-            value={search}
-            onChangeText={setSearch}
-          />
-          {search.length > 0 && (
-            <Pressable onPress={() => setSearch("")}>
-              <Ionicons name="close-circle" size={18} color={Colors.light.textSecondary} />
-            </Pressable>
-          )}
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <Pressable style={styles.resetButton} onPress={resetToInitialData}>
+            <Ionicons name="refresh" size={20} color={Colors.light.textSecondary} />
+          </Pressable>
+          <Pressable style={styles.addButton} onPress={() => router.push("/add-member")}>
+            <Ionicons name="person-add" size={20} color="#fff" />
+          </Pressable>
         </View>
       </View>
 
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <MemberRow
-            member={item}
-            onPress={() => router.push({ pathname: "/member-detail", params: { id: item.id } })}
-            onDelete={() => removeMember(item.id)}
-          />
-        )}
-        contentContainerStyle={[styles.list, filtered.length === 0 && styles.center]}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="people-outline" size={40} color={Colors.light.textSecondary} />
-            <Text style={styles.emptyTitle}>No members yet</Text>
-            <Text style={styles.emptyText}>Tap + to add your first member</Text>
-          </View>
-        }
-        showsVerticalScrollIndicator={false}
-      />
+      <View style={styles.searchContainer}>
+        <Ionicons name="search" size={20} color={Colors.light.textSecondary} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="ရှာဖွေရန်..."
+          value={search}
+          onChangeText={setSearch}
+        />
+      </View>
+
+      {dataContext.loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={Colors.light.tint} />
+        </View>
+      ) : (
+        <FlatList
+          data={filteredMembers}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <Pressable 
+              style={styles.memberRow}
+              onPress={() => router.push({ pathname: "/add-member", params: { editId: item.id } })}
+            >
+               <View style={[styles.avatar, { backgroundColor: item.avatarColor || Colors.light.tint }]}>
+                  <Text style={styles.avatarText}>{item.name?.charAt(0) || "?"}</Text>
+               </View>
+               <View style={styles.memberInfo}>
+                  <Text style={styles.memberName}>{item.name}</Text>
+                  <Text style={styles.memberIdText}>{item.id}</Text>
+                  <Text style={styles.memberSubText}>{item.phone}</Text>
+               </View>
+               <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
+            </Pressable>
+          )}
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>အသင်းဝင် ရှာမတွေ့ပါ။</Text>
+              <Pressable onPress={resetToInitialData} style={{ marginTop: 20 }}>
+                <Text style={{ color: Colors.light.tint }}>ဒေတာများ ပြန်ယူရန် နှိပ်ပါ</Text>
+              </Pressable>
+            </View>
+          }
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  center: { justifyContent: "center", alignItems: "center", flex: 1 },
-  header: {
-    backgroundColor: Colors.light.surface,
-    paddingHorizontal: 20,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  headerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 14,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontFamily: "Inter_700Bold",
-    color: Colors.light.text,
-  },
-  addBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: Colors.light.tint,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  searchWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.light.background,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    height: 40,
-    gap: 8,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.text,
-    height: 40,
-  },
-  list: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 100,
-  },
-  memberRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.light.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    shadowColor: Colors.light.cardShadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  avatarText: {
-    fontSize: 16,
-    fontFamily: "Inter_700Bold",
-    color: "#fff",
-  },
-  memberInfo: {
-    flex: 1,
-  },
-  memberName: {
-    fontSize: 15,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.text,
-  },
-  memberRole: {
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-    marginTop: 2,
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusActive: { backgroundColor: Colors.light.success + "15" },
-  statusInactive: { backgroundColor: Colors.light.accent + "15" },
-  statusText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
-  statusActiveText: { color: Colors.light.success },
-  statusInactiveText: { color: Colors.light.accent },
-  emptyState: {
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 40,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.light.text,
-  },
-  emptyText: {
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
-    color: Colors.light.textSecondary,
-  },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 15 },
+  title: { fontSize: 26, fontWeight: "bold", color: Colors.light.text },
+  subtitle: { fontSize: 14, color: Colors.light.textSecondary },
+  addButton: { backgroundColor: Colors.light.tint, width: 44, height: 44, borderRadius: 12, justifyContent: "center", alignItems: "center" },
+  resetButton: { backgroundColor: Colors.light.surface, width: 44, height: 44, borderRadius: 12, justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: Colors.light.border },
+  searchContainer: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, marginHorizontal: 20, paddingHorizontal: 12, borderRadius: 12, height: 46, marginBottom: 16, borderWidth: 1, borderColor: Colors.light.border },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: Colors.light.text },
+  list: { paddingHorizontal: 20, paddingBottom: 100 },
+  memberRow: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: Colors.light.border },
+  avatar: { width: 48, height: 48, borderRadius: 12, justifyContent: "center", alignItems: "center", marginRight: 12 },
+  avatarText: { fontSize: 18, fontWeight: "bold", color: "#fff" },
+  memberInfo: { flex: 1 },
+  memberName: { fontSize: 16, fontWeight: "600", color: Colors.light.text },
+  memberIdText: { fontSize: 12, color: Colors.light.tint, fontWeight: "600", marginTop: 2 },
+  memberSubText: { fontSize: 13, color: Colors.light.textSecondary },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  empty: { alignItems: "center", marginTop: 40 },
+  emptyText: { color: Colors.light.textSecondary, fontSize: 15 },
 });
