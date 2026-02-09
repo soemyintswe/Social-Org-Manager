@@ -7,12 +7,12 @@ import {
   Pressable,
   Platform,
   Alert,
+  Image,
   TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 
@@ -38,11 +38,11 @@ function InfoRow({ icon, label, value }: {
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { members, groups, editMember, removeMember } = useData();
+  const { members, groups, editMember, removeMember } = useData() as any;
   const [editing, setEditing] = useState(false);
 
-  const member = members.find((m) => m.id === id);
-  const memberGroups = groups.filter((g) => member && g.memberIds.includes(member.id));
+  const member = members.find((m: any) => m.id === id);
+  const memberGroups = groups.filter((g: any) => member && g.memberIds.includes(member.id));
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
@@ -71,14 +71,12 @@ export default function MemberDetailScreen() {
       email: email.trim(),
       phone: phone.trim(),
     });
-    if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setEditing(false);
   };
 
   const handleToggleStatus = async () => {
     const newStatus = member.status === "active" ? "inactive" : "active";
     await editMember(member.id, { status: newStatus });
-    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   const handleDelete = () => {
@@ -119,9 +117,13 @@ export default function MemberDetailScreen() {
       </View>
 
       <View style={styles.profileSection}>
-        <View style={[styles.bigAvatar, { backgroundColor: member.avatarColor }]}>
-          <Text style={styles.bigAvatarText}>{initials.toUpperCase()}</Text>
-        </View>
+        {member.profileImage ? (
+          <Image source={{ uri: member.profileImage }} style={styles.bigAvatar} />
+        ) : (
+          <View style={[styles.bigAvatar, { backgroundColor: member.avatarColor }]}>
+            <Text style={styles.bigAvatarText}>{initials.toUpperCase()}</Text>
+          </View>
+        )}
         {editing ? (
           <View style={styles.editNameRow}>
             <TextInput
@@ -211,7 +213,7 @@ export default function MemberDetailScreen() {
       {memberGroups.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Groups</Text>
-          {memberGroups.map((g) => (
+          {memberGroups.map((g: any) => (
             <Pressable
               key={g.id}
               style={styles.groupChip}

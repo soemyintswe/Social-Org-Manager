@@ -44,6 +44,17 @@ function TransactionRow({ txn, memberName, onDelete }: {
   onDelete: () => void;
 }) {
   const isIncome = txn.type === "income";
+
+  const dateObj = useMemo(() => {
+    const d = txn.date as any;
+    if (!d) return new Date();
+    if (typeof d === 'string' && d.includes('/')) {
+      const [day, month, year] = d.split('/');
+      return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    }
+    return new Date(d);
+  }, [txn.date]);
+
   return (
     <Pressable
       style={styles.txnRow}
@@ -65,12 +76,12 @@ function TransactionRow({ txn, memberName, onDelete }: {
       <View style={styles.txnInfo}>
         <Text style={styles.txnCategory} numberOfLines={1}>{CATEGORY_LABELS[txn.category]}</Text>
         <Text style={styles.txnDesc} numberOfLines={1}>
-          {memberName ? memberName + " - " : ""}{txn.description || txn.receiptNumber}
+          {memberName ? memberName + " - " : ""}{(txn as any).notes || (txn as any).description || txn.receiptNumber}
         </Text>
         <Text style={styles.txnDate}>
-          {new Date(txn.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           {" "}
-          <Text style={styles.txnMethod}>{txn.paymentMethod.toUpperCase()}</Text>
+          <Text style={styles.txnMethod}>{((txn as any).paymentMethod || "CASH").toUpperCase()}</Text>
         </Text>
       </View>
       <Text style={[styles.txnAmount, isIncome ? styles.incomeText : styles.expenseText]}>
@@ -86,6 +97,16 @@ function LoanRow({ loan, memberName, outstanding, onPress }: {
   outstanding: number;
   onPress: () => void;
 }) {
+  const dateStr = useMemo(() => {
+    const d = loan.issueDate as any;
+    if (!d) return "";
+    if (typeof d === 'string' && d.includes('/')) {
+      const [day, month, year] = d.split('/');
+      return new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    }
+    return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }, [loan.issueDate]);
+
   return (
     <Pressable
       style={({ pressed }) => [styles.loanRow, pressed && { opacity: 0.7 }]}
@@ -104,7 +125,7 @@ function LoanRow({ loan, memberName, outstanding, onPress }: {
           Principal: ${loan.principalAmount.toLocaleString()} @ {loan.interestRate}%/mo
         </Text>
         <Text style={styles.loanDate}>
-          {new Date(loan.issueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+          {dateStr}
         </Text>
       </View>
       <View style={styles.loanRight}>
@@ -128,17 +149,31 @@ export default function FinanceScreen() {
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
-    const m = members.find((m) => m.id === id);
-    return m ? `${m.firstName} ${m.lastName}` : "";
+    const m = members.find((member) => member.id === id);
+    if (!m) return "";
+    const anyM = m as any;
+    if (anyM.name) return anyM.name;
+    const fullName = [anyM.firstName, anyM.lastName].filter(Boolean).join(" ").trim();
+    return fullName || anyM.email || anyM.phone || "";
   };
 
   const sortedTxns = useMemo(
-    () => [...transactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    () => [...(transactions || [])].sort((a, b) => {
+      const getDate = (d: any) => {
+        if (!d) return 0;
+        if (typeof d === 'string' && d.includes('/')) {
+          const [day, month, year] = d.split('/');
+          return new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).getTime();
+        }
+        return new Date(d).getTime();
+      };
+      return (getDate(b.date) || 0) - (getDate(a.date) || 0);
+    }),
     [transactions]
   );
 
   const sortedLoans = useMemo(
-    () => [...loans].sort((a, b) => {
+    () => [...(loans || [])].sort((a, b) => {
       if (a.status === "active" && b.status !== "active") return -1;
       if (a.status !== "active" && b.status === "active") return 1;
       return new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime();

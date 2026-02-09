@@ -8,13 +8,14 @@ import {
   ScrollView,
   Platform,
   Alert,
+  Image,
   KeyboardAvoidingView,
   ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 
@@ -23,7 +24,7 @@ const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#
 
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
-  const { members, addMember, updateMember } = useData();
+  const { members, addMember, editMember } = useData() as any;
   const { editId } = useLocalSearchParams<{ editId: string }>();
 
   // Form States
@@ -36,11 +37,12 @@ export default function AddMemberScreen() {
   const [joinDate, setJoinDate] = useState(new Date().toLocaleDateString("en-GB"));
   const [resignDate, setResignDate] = useState("");
   const [status, setStatus] = useState<"active" | "inactive">("active");
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (editId) {
-      const member = members.find((m) => m.id === editId);
+      const member = members.find((m: any) => m.id === editId);
       if (member) {
         setName(member.name);
         setMemberId(member.id);
@@ -53,9 +55,31 @@ export default function AddMemberScreen() {
         setJoinDate(member.joinDate || "");
         setResignDate(member.resignDate || "");
         setStatus(member.status);
+        setProfileImage(member.profileImage || null);
       }
     }
   }, [editId, members]);
+
+  const pickImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+        base64: true,
+      });
+
+      if (!result.canceled) {
+        const source = result.assets[0].base64 
+          ? `data:image/jpeg;base64,${result.assets[0].base64}`
+          : result.assets[0].uri;
+        setProfileImage(source);
+      }
+    } catch (e) {
+      Alert.alert("Error", "ပုံရွေးချယ်၍ မရပါ။");
+    }
+  };
 
   const canSave = name.trim().length > 0 && memberId.trim().length > 0;
 
@@ -64,8 +88,6 @@ export default function AddMemberScreen() {
     setSaving(true);
 
     try {
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
       const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
       // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
@@ -82,11 +104,12 @@ export default function AddMemberScreen() {
         role: "member", // Missing 'role' ကို ထည့်လိုက်ပါသည်
         avatarColor: randomColor, // Missing 'color' (သို့) 'avatarColor' အတွက်
         color: randomColor, 
+        profileImage: profileImage || undefined,
         createdAt: new Date().toISOString(),
       };
 
       if (editId) {
-        await updateMember(editId, memberData);
+        await editMember(editId, memberData);
       } else {
         await addMember(memberData);
       }
@@ -117,6 +140,24 @@ export default function AddMemberScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.keyboardAvoidingView}>
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+          <View style={styles.imageContainer}>
+            <Pressable onPress={pickImage} style={styles.imagePicker}>
+              {profileImage ? (
+                <Image source={{ uri: profileImage }} style={styles.profileImage} />
+              ) : (
+                <View style={styles.placeholderImage}>
+                  <Ionicons name="camera" size={32} color={Colors.light.textSecondary} />
+                  <Text style={styles.addPhotoText}>ဓာတ်ပုံထည့်ရန်</Text>
+                </View>
+              )}
+            </Pressable>
+            {profileImage && (
+              <Pressable onPress={() => setProfileImage(null)} style={styles.removeImageBtn}>
+                <Text style={styles.removeImageText}>ဖယ်ရှားမည်</Text>
+              </Pressable>
+            )}
+          </View>
+
           <Text style={styles.label}>အသင်းဝင်အမှတ် (ID)</Text>
           <TextInput
             style={styles.input}
@@ -245,4 +286,11 @@ const styles = StyleSheet.create({
   statusChipText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   statusChipTextActive: { color: "#fff" },
   keyboardAvoidingView: { flex: 1 },
+  imageContainer: { alignItems: "center", marginBottom: 24 },
+  imagePicker: { width: 100, height: 100, borderRadius: 50, overflow: "hidden", backgroundColor: Colors.light.surface, justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: Colors.light.border },
+  profileImage: { width: "100%", height: "100%" },
+  placeholderImage: { alignItems: "center", justifyContent: "center" },
+  addPhotoText: { fontSize: 10, color: Colors.light.textSecondary, marginTop: 4, fontFamily: "Inter_500Medium" },
+  removeImageBtn: { marginTop: 8 },
+  removeImageText: { color: "#EF4444", fontSize: 13, fontFamily: "Inter_500Medium" },
 });
