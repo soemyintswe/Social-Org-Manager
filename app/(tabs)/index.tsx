@@ -22,6 +22,7 @@ interface Transaction {
   receiptNumber?: string;
   amount: number;
   date: string;
+  categoryLabel?: string;
 }
 
 // A utility function for consistent currency formatting
@@ -152,7 +153,8 @@ export default function DashboardScreen() {
                   />
                 </View>
                 <View style={styles.recentTxnInfo}>
-                  <Text style={styles.recentTxnCat} numberOfLines={1}>{CATEGORY_LABELS[txn.category]}</Text>
+                  <Text style={styles.recentTxnCat} numberOfLines={1}>] || txn.category}
+                  </Text>
                   <Text style={styles.recentTxnMeta} numberOfLines={1}>
                     {getMemberName(txn.memberId) || txn.receiptNumber} • {new Date(txn.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                   </Text>

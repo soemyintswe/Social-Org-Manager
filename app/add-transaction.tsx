@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -37,6 +38,25 @@ const getAvatarLabel = (name: string) => {
   return text.charAt(0);
 };
 
+const INCOME_CATEGORIES = [
+  { id: "member_fees", label: "လစဉ်ကြေးရငွေ" },
+  { id: "donations", label: "အလှူငွေရရှိ" },
+  { id: "bank_interest", label: "ဘဏ်တိုးရငွေ" },
+  { id: "other_income", label: "အခြားရငွေ" },
+  { id: "loan_repayment", label: "ချေးငွေပြန်ဆပ်ရရှိငွေ" },
+  { id: "interest_income", label: "အတိုးရငွေ" },
+];
+
+const EXPENSE_CATEGORIES = [
+  { id: "health_support", label: "ကျန်းမာရေးထောက်ပံ့ငွေ" },
+  { id: "education_support", label: "ပညာရေးထောက်ပံ့ငွေ" },
+  { id: "funeral_support", label: "နာရေးကူညီငွေ" },
+  { id: "loan_disbursement", label: "ချေးငွေထုတ်ပေးငွေ" },
+  { id: "bank_charges", label: "ဘဏ်စရိတ်ပေးငွေ" },
+  { id: "general_expenses", label: "အထွေထွေအသုံးစရိတ်" },
+  { id: "other_expenses", label: "အခြားအသုံးစရိတ်" },
+];
+
 export default function AddTransactionScreen() {
   const insets = useSafeAreaInsets();
   const { members, addTransaction } = useData() as any;
@@ -44,29 +64,80 @@ export default function AddTransactionScreen() {
   const [type, setType] = useState<"expense" | "income">("expense");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState<TransactionCategory | null>(null);
+  const [category, setCategory] = useState<string | null>(null);
   const [date, setDate] = useState(new Date().toLocaleDateString("en-GB"));
   const [notes, setNotes] = useState("");
   const [receiptNumber, setReceiptNumber] = useState("");
 
   const [isMemberModalVisible, setMemberModalVisible] = useState(false);
   const [isCategoryModalVisible, setCategoryModalVisible] = useState(false);
+  const [customCategories, setCustomCategories] = useState<{id: string, label: string, type: 'income' | 'expense'}[]>([]);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [showAddCategoryInput, setShowAddCategoryInput] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const selectedMember = members?.find((m: any) => m.id === selectedMemberId);
 
-  const availableCategories = useMemo(() => {
-    return Object.keys(CATEGORY_LABELS).filter((cat) => {
-      const incomeCategories = ["member_fees", "donations", "other_income"];
-      if (type === "income") {
-        return incomeCategories.includes(cat);
+  useEffect(() => {
+    let prefix = type === "income" ? "I-" : "O-";
+
+    if (category === "bank_interest" && type === "income") {
+      prefix = "BI-";
+    } else if (category === "bank_charges" && type === "expense") {
+      prefix = "BO-";
+    }
+
+    setReceiptNumber((prev) => {
+      const knownPrefixes = ["BI-", "BO-", "I-", "O-"];
+      let numberPart = prev;
+      for (const p of knownPrefixes) {
+        if (prev.startsWith(p)) {
+          numberPart = prev.slice(p.length);
+          break;
+        }
       }
-      return !incomeCategories.includes(cat);
-    }) as TransactionCategory[];
-  }, [type]);
+      return prefix + numberPart;
+    });
+  }, [type, category]);
 
   useEffect(() => {
-    if (category && !availableCategories.includes(category)) {
+    const loadCustomCategories = async () => {
+      try {
+        const stored = await AsyncStorage.getItem("@custom_categories");
+        if (stored) setCustomCategories(JSON.parse(stored));
+      } catch (e) {}
+    };
+    loadCustomCategories();
+  }, []);
+
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim()) return;
+    const newCat = {
+      id: `custom_${Date.now()}`,
+      label: newCategoryName.trim(),
+      type: type,
+    };
+    const updated = [...customCategories, newCat];
+    setCustomCategories(updated);
+    await AsyncStorage.setItem("@custom_categories", JSON.stringify(updated));
+    setNewCategoryName("");
+    setShowAddCategoryInput(false);
+  };
+
+  const availableCategories = useMemo(() => {
+    const defaults = type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+    const customs = customCategories.filter((c) => c.type === type);
+    return [...defaults, ...customs];
+  }, [type, customCategories]);
+
+  const getCategoryLabel = (catId: string) => {
+    const all = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES, ...customCategories];
+    const found = all.find((c) => c.id === catId);
+    return found ? found.label : (CATEGORY_LABELS[catId as TransactionCategory] || catId);
+  };
+
+  useEffect(() => {
+    if (category && !availableCategories.find(c => c.id === category)) {
       setCategory(null);
     }
   }, [type, availableCategories, category]);
@@ -92,6 +163,7 @@ export default function AddTransactionScreen() {
         date: date,
         notes: notes,
         receiptNumber: receiptNumber,
+        categoryLabel: getCategoryLabel(category),
       };
       // await addTransaction(transactionData); // This needs to be implemented in DataContext
       console.log("Saving Transaction:", transactionData);
@@ -134,7 +206,7 @@ export default function AddTransactionScreen() {
         <Text style={styles.label}>အမျိုးအစား</Text>
         <Pressable style={styles.dropdown} onPress={() => setCategoryModalVisible(true)}>
           <Text style={category ? styles.dropdownText : styles.dropdownPlaceholder}>
-            {category ? CATEGORY_LABELS[category] : "အမျိုးအစား ရွေးပါ"}
+            {category ? getCategoryLabel(category) : "အမျိုးအစား ရွေးပါ"}
           </Text>
           <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
         </Pressable>
@@ -181,7 +253,51 @@ export default function AddTransactionScreen() {
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setCategoryModalVisible(false)} />
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>အမျိုးအစားများ</Text>
-            <FlatList data={availableCategories} keyExtractor={(item) => item} renderItem={({ item }) => (<Pressable style={styles.categoryItem} onPress={() => { setCategory(item); setCategoryModalVisible(false); }}><Text style={styles.categoryName}>{CATEGORY_LABELS[item]}</Text></Pressable>)} />
+            
+            <FlatList 
+              data={availableCategories} 
+              keyExtractor={(item) => item.id} 
+              renderItem={({ item }) => (
+                <Pressable style={styles.categoryItem} onPress={() => { setCategory(item.id); setCategoryModalVisible(false); }}>
+                  <Text style={styles.categoryName}>{item.label}</Text>
+                </Pressable>
+              )} 
+              ListFooterComponent={
+                <View style={{ marginTop: 10, paddingBottom: 20 }}>
+                  {showAddCategoryInput ? (
+                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                      <TextInput 
+                        style={[styles.input, { flex: 1, marginBottom: 0, paddingVertical: 8 }]} 
+                        placeholder="ခေါင်းစဉ်အသစ်..." 
+                        value={newCategoryName}
+                        onChangeText={setNewCategoryName}
+                        autoFocus
+                      />
+                      <Pressable 
+                        style={{ backgroundColor: Colors.light.tint, justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8 }}
+                        onPress={handleAddCategory}
+                      >
+                        <Text style={{ color: 'white', fontWeight: 'bold' }}>Add</Text>
+                      </Pressable>
+                      <Pressable 
+                        style={{ justifyContent: 'center', paddingHorizontal: 4 }}
+                        onPress={() => setShowAddCategoryInput(false)}
+                      >
+                        <Ionicons name="close" size={24} color={Colors.light.text} />
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Pressable 
+                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12, justifyContent: 'center', borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, borderStyle: 'dashed', backgroundColor: Colors.light.surface }}
+                      onPress={() => setShowAddCategoryInput(true)}
+                    >
+                      <Ionicons name="add" size={20} color={Colors.light.tint} />
+                      <Text style={{ marginLeft: 8, color: Colors.light.tint, fontWeight: '600' }}>ခေါင်းစဉ်အသစ် ထည့်ရန်</Text>
+                    </Pressable>
+                  )}
+                </View>
+              }
+            />
           </View>
         </View>
       </Modal>

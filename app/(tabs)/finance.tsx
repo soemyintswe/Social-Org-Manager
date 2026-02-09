@@ -74,7 +74,9 @@ function TransactionRow({ txn, memberName, onDelete }: {
         />
       </View>
       <View style={styles.txnInfo}>
-        <Text style={styles.txnCategory} numberOfLines={1}>{CATEGORY_LABELS[txn.category]}</Text>
+        <Text style={styles.txnCategory} numberOfLines={1}>
+          {(txn as any).categoryLabel || CATEGORY_LABELS[txn.category] || txn.category}
+        </Text>
         <Text style={styles.txnDesc} numberOfLines={1}>
           {memberName ? memberName + " - " : ""}{(txn as any).notes || (txn as any).description || txn.receiptNumber}
         </Text>
