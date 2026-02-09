@@ -7,6 +7,7 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -14,6 +15,7 @@ import { router, useFocusEffect } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
+
 
 function StatCard({
   icon,
@@ -61,53 +63,19 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-<<<<<<< HEAD
   const { members, events, groups, transactions, loans, loading, getCashBalance, getBankBalance, getTotalBalance, refreshData } = useData() as any;
-
-  useFocusEffect(
-    useCallback(() => {
-      if (refreshData) refreshData();
-    }, [refreshData])
-  );
-
-  const activeMembers = members.filter((m: typeof members[number]) => m.status === "active");
-  const activeLoans = loans.filter((l: typeof loans[number]) => l.status === "active");
-
-  const recentTxns = [...transactions]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 5);
-
-  const upcomingEvents = events
-    .filter((e: typeof events[number]) => new Date(e.date) >= new Date())
-    .sort((a: typeof events[number], b: typeof events[number]) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .slice(0, 3);
-
-  const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
-    const m = members.find((m: typeof members[number]) => m.id === id);
+    const m = members?.find((m: typeof members[number]) => m.id === id);
     return m ? `${m.firstName} ${m.lastName}` : "";
   };
-=======
-  const { 
-    members, 
-    transactions, 
-    loans, 
-    getTotalBalance, 
-    getLoanOutstanding,
-    loading 
-  } = useData();
 
-  const recentTransactions = transactions
+  const recentTxns = [...(transactions || [])]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 5);
 
-  const totalLoanOutstanding = loans.reduce(
-    (acc, loan) => acc + getLoanOutstanding(loan.id),
-    0
-  );
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
+  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (loan.amount || 0), 0);
 
   if (loading) {
     return (
@@ -137,10 +105,10 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.statsGrid}>
-        <StatCard icon="people" label="အသင်းဝင်" value={members.length.toString()} color="#8B5CF6" />
+        <StatCard icon="people" label="အသင်းဝင်" value={(members?.length || 0).toString()} color="#8B5CF6" />
         <StatCard icon="wallet" label="စုစုပေါင်းလက်ကျန်" value={`${getTotalBalance().toLocaleString()} KS`} color="#10B981" />
         <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={`${totalLoanOutstanding.toLocaleString()} KS`} color="#F59E0B" />
-        <StatCard icon="calendar" label="မှတ်တမ်းများ" value={transactions.length.toString()} color="#3B82F6" />
+        <StatCard icon="calendar" label="မှတ်တမ်းများ" value={(transactions?.length || 0).toString()} color="#3B82F6" />
       </View>
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
@@ -150,7 +118,6 @@ export default function DashboardScreen() {
         <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan")} />
       </View>
 
-<<<<<<< HEAD
       {recentTxns.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Recent Transactions</Text>
@@ -179,64 +146,6 @@ export default function DashboardScreen() {
           })}
         </>
       )}
-
-      {upcomingEvents.length > 0 && (
-        <>
-          <Text style={styles.sectionTitle}>Upcoming Events</Text>
-          {upcomingEvents.map((event: typeof events[number]) => (
-            <Pressable key={event.id} onPress={() => router.push({ pathname: "/event-detail", params: { id: event.id } })}>
-              <View style={styles.eventCard}>
-                <View style={styles.eventDateBadge}>
-                  <Text style={styles.eventDateDay}>{new Date(event.date).getDate()}</Text>
-                  <Text style={styles.eventDateMonth}>
-                    {new Date(event.date).toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
-                  </Text>
-                </View>
-                <View style={styles.eventInfo}>
-                  <Text style={styles.eventTitle} numberOfLines={1}>{event.title}</Text>
-                  <View style={styles.eventMeta}>
-                    <Ionicons name="people-outline" size={13} color={Colors.light.textSecondary} />
-                    <Text style={styles.eventMetaText}>{event.attendeeIds.length} attendees</Text>
-                  </View>
-                </View>
-              </View>
-            </Pressable>
-          ))}
-        </>
-      )}
-=======
-      <View style={styles.recentSection}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitleNoPadding}>နောက်ဆုံးမှတ်တမ်းများ</Text>
-          <Pressable onPress={() => router.push("/finance")}>
-            <Text style={styles.seeAll}>အားလုံးကြည့်ရန်</Text>
-          </Pressable>
-        </View>
-
-        {recentTransactions.map((txn) => {
-          const isIncome = txn.type === "income";
-          return (
-            <View key={txn.id} style={styles.recentTxnCard}>
-              <View style={[styles.txnIconWrap, { backgroundColor: (isIncome ? "#10B981" : "#F43F5E") + "15" }]}>
-                <Ionicons name={isIncome ? "arrow-down" : "arrow-up"} size={18} color={isIncome ? "#10B981" : "#F43F5E"} />
-              </View>
-              <View style={styles.txnMainInfo}>
-                <Text style={styles.txnDesc} numberOfLines={1}>{txn.description}</Text>
-                <Text style={styles.recentTxnCat}>
-                  {CATEGORY_LABELS[txn.category as keyof typeof CATEGORY_LABELS] || txn.category}
-                </Text>
-              </View>
-              <div style={styles.txnRight}>
-                <Text style={[styles.txnAmount, { color: isIncome ? "#10B981" : "#F43F5E" }]}>
-                  {isIncome ? "+" : "-"}{txn.amount.toLocaleString()}
-                </Text>
-                <Text style={styles.txnDate}>{new Date(txn.date).toLocaleDateString("en-GB")}</Text>
-              </div>
-            </View>
-          );
-        })}
-      </View>
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
     </ScrollView>
   );
 }
@@ -270,4 +179,12 @@ const styles = StyleSheet.create({
   txnRight: { alignItems: "flex-end" },
   txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
   txnDate: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 2 },
+  recentTxnRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", padding: 12, borderRadius: 12, marginBottom: 10, marginHorizontal: 20 },
+  recentTxnIcon: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12 },
+  recentTxnInfo: { flex: 1 },
+  recentTxnCat: { fontSize: 14, fontWeight: "600", color: Colors.light.text },
+  recentTxnMeta: { fontSize: 12, color: Colors.light.textSecondary },
+  recentTxnAmt: { fontSize: 14, fontWeight: "bold" },
+  incomeText: { color: Colors.light.success },
+  expenseText: { color: Colors.light.accent },
 });

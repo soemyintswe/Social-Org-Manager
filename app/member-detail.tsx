@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
+import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 
@@ -39,18 +40,10 @@ function InfoRow({ icon, label, value }: {
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-<<<<<<< HEAD
-  const { members, groups, editMember, removeMember } = useData() as any;
-  const [editing, setEditing] = useState(false);
+  const { members, groups, updateMember, deleteMember } = useData() as any;
 
-  const member = members.find((m: any) => m.id === id);
-  const memberGroups = groups.filter((g: any) => member && g.memberIds.includes(member.id));
-=======
-  const { members, groups, updateMember, deleteMember } = useData();
-
-  const member = members.find((m) => m.id === id);
+  const member = members?.find((m: any) => m.id === id);
   const [editing, setEditing] = useState(false);
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
 
   const [editName, setEditName] = useState(member?.name || "");
   const [editEmail, setEditEmail] = useState(member?.email || "");
@@ -69,24 +62,9 @@ export default function MemberDetailScreen() {
     );
   }
 
-  const memberGroups = groups.filter((g) => g.memberIds.includes(member.id));
+  const memberGroups = groups?.filter((g: any) => g.memberIds.includes(member?.id)) || [];
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
-<<<<<<< HEAD
-  const handleSave = async () => {
-    await editMember(member.id, {
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-    });
-    setEditing(false);
-  };
-
-  const handleToggleStatus = async () => {
-    const newStatus = member.status === "active" ? "inactive" : "active";
-    await editMember(member.id, { status: newStatus });
-=======
   const handleUpdate = async () => {
     if (!editName.trim()) {
       Alert.alert("Error", "Name is required");
@@ -107,7 +85,6 @@ export default function MemberDetailScreen() {
     } finally {
       setSaving(false);
     }
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
   };
 
   const handleDelete = () => {
@@ -146,8 +123,12 @@ export default function MemberDetailScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.profileHeader}>
-          <View style={[styles.avatar, { backgroundColor: member.avatarColor }]}>
-            <Text style={styles.avatarText}>{member.name.charAt(0).toUpperCase()}</Text>
+          <View style={[styles.avatar, { backgroundColor: member.avatarColor, overflow: "hidden" }]}>
+            {member.profileImage ? (
+              <Image source={{ uri: member.profileImage }} style={{ width: "100%", height: "100%" }} />
+            ) : (
+              <Text style={styles.avatarText}>{member.name.charAt(0).toUpperCase()}</Text>
+            )}
           </View>
           <Text style={styles.name}>{member.name}</Text>
 
@@ -159,17 +140,6 @@ export default function MemberDetailScreen() {
           )}
         </View>
 
-<<<<<<< HEAD
-      <View style={styles.profileSection}>
-        {member.profileImage ? (
-          <Image source={{ uri: member.profileImage }} style={styles.bigAvatar} />
-        ) : (
-          <View style={[styles.bigAvatar, { backgroundColor: member.avatarColor }]}>
-            <Text style={styles.bigAvatarText}>{initials.toUpperCase()}</Text>
-          </View>
-        )}
-=======
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
         {editing ? (
           <View style={styles.editForm}>
             <Text style={styles.editLabel}>Full Name</Text>
@@ -178,19 +148,6 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Email Address</Text>
             <TextInput style={styles.editInput} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" />
 
-<<<<<<< HEAD
-      {memberGroups.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Groups</Text>
-          {memberGroups.map((g: any) => (
-            <Pressable
-              key={g.id}
-              style={styles.groupChip}
-              onPress={() => router.push({ pathname: "/group-detail", params: { id: g.id } })}
-            >
-              <View style={[styles.groupDot, { backgroundColor: g.color }]} />
-              <Text style={styles.groupChipText}>{g.name}</Text>
-=======
             <Text style={styles.editLabel}>Phone Number</Text>
             <TextInput style={styles.editInput} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" />
 
@@ -200,7 +157,6 @@ export default function MemberDetailScreen() {
             <Pressable style={styles.deleteBtn} onPress={handleDelete}>
               <Ionicons name="trash-outline" size={20} color="#EF4444" />
               <Text style={styles.deleteBtnText}>Delete Member</Text>
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
             </Pressable>
           </View>
         ) : (
@@ -213,7 +169,7 @@ export default function MemberDetailScreen() {
 
             <Text style={styles.sectionTitle}>Groups</Text>
             {memberGroups.length > 0 ? (
-              memberGroups.map((g) => (
+              memberGroups.map((g: any) => (
                 <View key={g.id} style={styles.groupChip}>
                   <View style={[styles.groupDot, { backgroundColor: g.color }]} />
                   <Text style={styles.groupChipText}>{g.name}</Text>

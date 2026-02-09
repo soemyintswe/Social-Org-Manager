@@ -74,7 +74,6 @@ function TransactionRow({ txn, memberName, onDelete }: {
         />
       </View>
       <View style={styles.txnInfo}>
-<<<<<<< HEAD
         <Text style={styles.txnCategory} numberOfLines={1}>{CATEGORY_LABELS[txn.category]}</Text>
         <Text style={styles.txnDesc} numberOfLines={1}>
           {memberName ? memberName + " - " : ""}{(txn as any).notes || (txn as any).description || txn.receiptNumber}
@@ -83,19 +82,11 @@ function TransactionRow({ txn, memberName, onDelete }: {
           {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           {" "}
           <Text style={styles.txnMethod}>{((txn as any).paymentMethod || "CASH").toUpperCase()}</Text>
-=======
-        <Text style={styles.txnTitle}>{txn.description}</Text>
-        <Text style={styles.txnSub}>
-          {memberName ? `${memberName} • ` : ""}{CATEGORY_LABELS[txn.category as keyof typeof CATEGORY_LABELS] || txn.category}
         </Text>
       </View>
       <View style={styles.txnRight}>
         <Text style={[styles.txnAmount, { color: isIncome ? "#10B981" : "#F43F5E" }]}>
           {isIncome ? "+" : "-"}{txn.amount.toLocaleString()}
-        </Text>
-        <Text style={styles.txnDate}>
-          {new Date(txn.date).toLocaleDateString("en-GB")}
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
         </Text>
       </View>
     </Pressable>
@@ -107,7 +98,8 @@ function LoanRow({ loan, memberName, outstanding }: {
   memberName?: string;
   outstanding: number;
 }) {
-<<<<<<< HEAD
+  const isPaid = loan.status === "paid";
+
   const dateStr = useMemo(() => {
     const d = loan.issueDate as any;
     if (!d) return "";
@@ -118,9 +110,6 @@ function LoanRow({ loan, memberName, outstanding }: {
     return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }, [loan.issueDate]);
 
-=======
-  const isPaid = loan.status === "paid";
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
   return (
     <Pressable
       style={styles.loanRow}
@@ -137,14 +126,10 @@ function LoanRow({ loan, memberName, outstanding }: {
       <View style={styles.loanInfo}>
         <Text style={styles.loanName}>{memberName || "အမည်မသိ"}</Text>
         <Text style={styles.loanDesc}>
-          အတိုး {loan.interestRate}% • {loan.principalAmount.toLocaleString()} KS
+          အတိုး {loan.interestRate}% • {loan.principal.toLocaleString()} KS
         </Text>
         <Text style={styles.loanDate}>
-<<<<<<< HEAD
           {dateStr}
-=======
-          ထုတ်ချေးရက်: {new Date(loan.issueDate).toLocaleDateString("en-GB")}
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
         </Text>
       </View>
       <View style={styles.loanRight}>
@@ -177,11 +162,6 @@ export default function FinanceScreen() {
 
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
 
-  const sortedTransactions = useMemo(() => {
-    return [...transactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [transactions]);
-
-<<<<<<< HEAD
   const getMemberName = (id?: string) => {
     if (!id) return "";
     const m = members.find((member) => member.id === id);
@@ -215,11 +195,6 @@ export default function FinanceScreen() {
     }),
     [loans]
   );
-=======
-  const sortedLoans = useMemo(() => {
-    return [...loans].sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
-  }, [loans]);
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
 
   if (loading) {
     return (
@@ -270,7 +245,7 @@ export default function FinanceScreen() {
 
       <FlatList
         // FlatList Error အတွက် explicit typing သုံးပေးထားပါသည်
-        data={activeTab === "transactions" ? (sortedTransactions as any[]) : (sortedLoans as any[])}
+        data={activeTab === "transactions" ? (sortedTxns as any[]) : (sortedLoans as any[])}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => {
@@ -381,6 +356,9 @@ const styles = StyleSheet.create({
   txnIcon: { width: 40, height: 40, borderRadius: 10, justifyContent: "center", alignItems: "center" },
   txnInfo: { flex: 1 },
   txnTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  txnCategory: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  txnDesc: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  txnMethod: { fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
   txnSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
   txnRight: { alignItems: "flex-end", gap: 4 },
   txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },

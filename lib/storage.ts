@@ -17,15 +17,10 @@ function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).substring(2, 11);
 }
 
-<<<<<<< HEAD
-const AVATAR_COLORS = [
-  "#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B",
-  "#3B82F6", "#10B981", "#EC4899", "#6366F1",
-];
-
 export function randomColor(): string {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
-=======
+}
+
 // ဒေတာဖတ်တဲ့ function တိုင်းမှာ try-catch ထည့်ထားလို့ error တက်ရင်တောင် အဝိုင်းလည်မနေတော့ပါဘူး
 async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
   try {
@@ -35,18 +30,11 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
     console.error(`Error reading ${key}:`, e);
     return defaultValue;
   }
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
 }
 
 // --- Members ---
 export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
 export const saveMembers = (data: Member[]) => AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data));
-
-<<<<<<< HEAD
-export async function getMembers(): Promise<Member[]> {
-  const data = await AsyncStorage.getItem(KEYS.MEMBERS);
-  return data ? JSON.parse(data) : [];
-}
 
 export async function importMembers(newMembers: Member[]): Promise<void> {
   const members = await getMembers();
@@ -57,13 +45,10 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
     memberMap.set(m.id, m);
   }
 
-  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(Array.from(memberMap.values())));
+  await saveMembers(Array.from(memberMap.values()));
 }
 
-export async function saveMember(member: Omit<Member, "id" | "avatarColor" | "joinDate">): Promise<Member> {
-=======
 export async function addMember(member: any): Promise<Member> {
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
   const members = await getMembers();
   const newMember = {
     ...member,
@@ -89,7 +74,6 @@ export async function deleteMember(id: string) {
   await saveMembers(members.filter(m => m.id !== id));
 }
 
-<<<<<<< HEAD
 export async function clearAllMembers(): Promise<void> {
   await AsyncStorage.removeItem(KEYS.MEMBERS);
 }
@@ -98,14 +82,8 @@ export async function clearAllData(): Promise<void> {
   await AsyncStorage.multiRemove(Object.values(KEYS));
 }
 
-export async function getEvents(): Promise<OrgEvent[]> {
-  const data = await AsyncStorage.getItem(KEYS.EVENTS);
-  return data ? JSON.parse(data) : [];
-}
-=======
 // --- Events ---
 export const getEvents = () => safeGet<OrgEvent[]>(KEYS.EVENTS, []);
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee
 
 export async function addEvent(event: any) {
   const events = await getEvents();
@@ -221,7 +199,6 @@ export async function saveAccountSettings(settings: AccountSettings) {
   await AsyncStorage.setItem(KEYS.ACCOUNT_SETTINGS, JSON.stringify(settings));
 }
 
-<<<<<<< HEAD
 // Backup Data (Export All)
 export async function exportData(): Promise<string> {
   const keys = Object.values(KEYS);
@@ -259,8 +236,7 @@ export async function restoreData(jsonString: string): Promise<boolean> {
     return false;
   }
 }
-=======
+
 export function generateReceiptNumber(): string {
   return `REC-${Date.now().toString().slice(-6)}`;
 }
->>>>>>> a5960b4fec64dd34e440040cc6c44fa542597eee

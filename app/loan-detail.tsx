@@ -31,11 +31,11 @@ export default function LoanDetailScreen() {
     removeLoan 
   } = useData();
 
-  const loan = loans.find((l) => l.id === id);
-  const member = members.find((m) => m.id === loan?.memberId);
+  const loan = loans?.find((l) => l.id === id);
+  const member = members?.find((m) => m.id === loan?.memberId);
   const loanRepayments = useMemo(() => 
-    transactions.filter((t) => t.loanId === id && t.type === "income"),
-    [transactions, id]
+    transactions?.filter((t) => t.loanId === id && t.type === "income") || [],
+    [transactions, id],
   );
 
   const [showRepayment, setShowRepayment] = useState(false);
@@ -125,7 +125,7 @@ export default function LoanDetailScreen() {
           <View style={styles.statsGrid}>
             <View style={styles.statBox}>
               <Text style={styles.statLabel}>Principal</Text>
-              <Text style={styles.statValue}>{loan.principalAmount || (loan as any).amount} MMK</Text>
+              <Text style={styles.statValue}>{(loan as any).amount || (loan as any).principalAmount} MMK</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statLabel}>Interest Rate</Text>
