@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -36,6 +37,13 @@ const getAvatarLabel = (name: string) => {
   return text.charAt(0);
 };
 
+const formatDateDisplay = (date: Date) => {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
 export default function AddLoanScreen() {
   const insets = useSafeAreaInsets();
   const { members, addLoan } = useData() as any;
@@ -43,13 +51,23 @@ export default function AddLoanScreen() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [interestRate, setInterestRate] = useState("");
-  const [loanDate, setLoanDate] = useState(new Date().toLocaleDateString("en-GB"));
+  const [loanDate, setLoanDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [notes, setNotes] = useState("");
   
   const [isDropdownVisible, setDropdownVisible] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const selectedMember = members?.find((m: any) => m.id === selectedMemberId);
+
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+    }
+    if (selectedDate) {
+      setLoanDate(selectedDate);
+    }
+  };
 
   const handleSave = async () => {
     if (!selectedMemberId) {
@@ -68,12 +86,11 @@ export default function AddLoanScreen() {
         memberId: selectedMemberId,
         amount: parseFloat(amount),
         interestRate: parseFloat(interestRate) || 0,
-        date: loanDate,
+        date: `${loanDate.getFullYear()}-${String(loanDate.getMonth() + 1).padStart(2, '0')}-${String(loanDate.getDate()).padStart(2, '0')}`,
         status: 'active',
         notes: notes,
       };
-      // await addLoan(loanData); // You might need to implement this in your DataContext
-      console.log("Saving Loan:", loanData);
+      await addLoan(loanData);
       Alert.alert("အောင်မြင်ပါသည်", "ချေးငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
 
@@ -112,7 +129,37 @@ export default function AddLoanScreen() {
         <TextInput style={styles.input} placeholder="ဥပမာ- 3" value={interestRate} onChangeText={setInterestRate} keyboardType="numeric" />
 
         <Text style={styles.label}>ထုတ်ချေးသည့်နေ့</Text>
-        <TextInput style={styles.input} value={loanDate} onChangeText={setLoanDate} />
+        {Platform.OS === 'web' ? (
+          <View style={styles.dropdown}>
+            {React.createElement('input', {
+              type: 'date',
+              value: `${loanDate.getFullYear()}-${String(loanDate.getMonth() + 1).padStart(2, '0')}-${String(loanDate.getDate()).padStart(2, '0')}`,
+              onChange: (event: any) => {
+                if (event.target.value) {
+                  const [y, m, d] = event.target.value.split('-');
+                  setLoanDate(new Date(+y, +m - 1, +d));
+                }
+              },
+              style: {
+                width: '100%',
+                border: 'none',
+                outline: 'none',
+                backgroundColor: 'transparent',
+                fontSize: 16,
+                color: Colors.light.text,
+                fontFamily: 'inherit'
+              } as any
+            })}
+          </View>
+        ) : (
+          <>
+            <Pressable style={styles.dropdown} onPress={() => setShowDatePicker(true)}>
+              <Text style={styles.dropdownText}>{formatDateDisplay(loanDate)}</Text>
+              <Ionicons name="calendar-outline" size={20} color={Colors.light.textSecondary} />
+            </Pressable>
+            {showDatePicker && <DateTimePicker value={loanDate} mode="date" display="default" onChange={handleDateChange} />}
+          </>
+        )}
 
         <Text style={styles.label}>မှတ်ချက်</Text>
         <TextInput style={[styles.input, { height: 100, textAlignVertical: 'top' }]} value={notes} onChangeText={setNotes} multiline />
@@ -156,7 +203,7 @@ const styles = StyleSheet.create({
   form: { padding: 20 },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 15, marginBottom: 6, textTransform: "uppercase" },
   input: { backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
-  dropdown: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: Colors.light.border },
+  dropdown: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: Colors.light.border, position: 'relative' },
   dropdownText: { fontSize: 16, color: Colors.light.text },
   dropdownPlaceholder: { fontSize: 16, color: Colors.light.textSecondary },
   modalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },

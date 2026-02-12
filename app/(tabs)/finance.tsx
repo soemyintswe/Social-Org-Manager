@@ -253,11 +253,12 @@ export default function FinanceScreen() {
         renderItem={({ item }) => {
           if (activeTab === "transactions") {
             const txn = item as Transaction;
-            const member = members.find(m => m.id === txn.memberId);
+            const memberName = getMemberName(txn.memberId);
+            const displayName = memberName || (item as any).payerPayee;
             return (
               <TransactionRow
                 txn={txn}
-                memberName={member?.name}
+                memberName={displayName}
                 onDelete={removeTransaction}
               />
             );

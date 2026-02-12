@@ -12,7 +12,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
+import { CATEGORY_LABELS, TransactionCategory, Loan } from "@/lib/types";
 
 interface Transaction {
   id: string;
@@ -23,17 +23,19 @@ interface Transaction {
   amount: number;
   date: string;
   categoryLabel?: string;
+  payerPayee?: string;
 }
 
 // A utility function for consistent currency formatting
 const formatCurrency = (amount: number) => `${amount.toLocaleString()} KS`;
 
 interface DataContextType {
-  members: { id: string; firstName: string; lastName: string }[];
+  members: { id: string; name?: string; firstName?: string; lastName?: string }[];
   transactions: Transaction[];
-  loans: { amount: number }[];
+  loans: Loan[];
   loading: boolean;
   getTotalBalance: () => number;
+  getLoanOutstanding: (id: string) => number;
 }
 
 
@@ -83,19 +85,19 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, transactions, loans, loading, getTotalBalance } = useData() as DataContextType;
+  const { members, transactions, loans, loading, getTotalBalance, getLoanOutstanding } = useData() as DataContextType;
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
     const m = members?.find((m) => m.id === id);
-    return m ? `${m.firstName} ${m.lastName}` : "";
+    return m ? (m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim()) : "";
   };
 
   const recentTxns: Transaction[] = [...(transactions || [])]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 5);
 
-  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan) => acc + (loan.amount || 0), 0);
+  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan) => acc + (getLoanOutstanding(loan.id) || 0), 0);
 
   if (loading) {
     return (
@@ -153,10 +155,11 @@ export default function DashboardScreen() {
                   />
                 </View>
                 <View style={styles.recentTxnInfo}>
-                  <Text style={styles.recentTxnCat} numberOfLines={1}>] || txn.category}
+                  <Text style={styles.recentTxnCat} numberOfLines={1}>
+                    {txn.categoryLabel || CATEGORY_LABELS[txn.category] || txn.category}
                   </Text>
                   <Text style={styles.recentTxnMeta} numberOfLines={1}>
-                    {getMemberName(txn.memberId) || txn.receiptNumber} • {new Date(txn.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                    {getMemberName(txn.memberId) || txn.payerPayee || txn.receiptNumber} • {new Date(txn.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                   </Text>
                 </View>
                 <Text style={[styles.recentTxnAmt, isIncome ? styles.incomeText : styles.expenseText]}>

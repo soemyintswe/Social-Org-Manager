@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -20,6 +21,16 @@ import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
+
+if (Platform.OS === 'web') {
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    if (args[0] && typeof args[0] === 'string' && (args[0].includes('shadow*') || args[0].includes('pointerEvents'))) {
+      return;
+    }
+    originalWarn(...args);
+  };
+}
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -36,6 +47,13 @@ const getAvatarLabel = (name: string) => {
     }
   }
   return text.charAt(0);
+};
+
+const formatDateDisplay = (date: Date) => {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
 };
 
 const INCOME_CATEGORIES = [
@@ -59,13 +77,14 @@ const EXPENSE_CATEGORIES = [
 
 export default function AddTransactionScreen() {
   const insets = useSafeAreaInsets();
-  const { members, addTransaction } = useData() as any;
+  const { members = [], addTransaction } = useData() as any;
 
   const [type, setType] = useState<"expense" | "income">("expense");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [payerPayeeName, setPayerPayeeName] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<string | null>(null);
-  const [date, setDate] = useState(new Date().toLocaleDateString("en-GB"));
+  const [date, setDate] = useState(new Date());
   const [notes, setNotes] = useState("");
   const [receiptNumber, setReceiptNumber] = useState("");
 
@@ -75,8 +94,7 @@ export default function AddTransactionScreen() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [showAddCategoryInput, setShowAddCategoryInput] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  const selectedMember = members?.find((m: any) => m.id === selectedMemberId);
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
     let prefix = type === "income" ? "I-" : "O-";
@@ -142,6 +160,17 @@ export default function AddTransactionScreen() {
     }
   }, [type, availableCategories, category]);
 
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+      if (event.type === 'set' && selectedDate) {
+        setDate(selectedDate);
+      }
+    } else if (selectedDate) {
+      setDate(selectedDate);
+    }
+  };
+
   const handleSave = async () => {
     if (!amount || parseFloat(amount) <= 0) {
       Alert.alert("လိုအပ်ချက်", "ငွေပမာဏကို မှန်ကန်စွာ ထည့်သွင်းပေးပါ။");
@@ -157,16 +186,16 @@ export default function AddTransactionScreen() {
       const transactionData = {
         id: Date.now().toString(),
         memberId: selectedMemberId || undefined,
+        payerPayee: payerPayeeName.trim(),
         amount: parseFloat(amount),
         type: type,
         category: category,
-        date: date,
+        date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
         notes: notes,
         receiptNumber: receiptNumber,
         categoryLabel: getCategoryLabel(category),
       };
-      // await addTransaction(transactionData); // This needs to be implemented in DataContext
-      console.log("Saving Transaction:", transactionData);
+      await addTransaction(transactionData);
       Alert.alert("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
     } catch (error) {
@@ -177,7 +206,10 @@ export default function AddTransactionScreen() {
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={[styles.container, { paddingTop: insets.top }]}>
+    <KeyboardAvoidingView 
+      behavior={Platform.OS === "ios" ? "padding" : "height"} 
+      style={[styles.container, { paddingTop: insets.top }]}
+    >
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="close" size={24} color={Colors.light.text} />
@@ -188,7 +220,7 @@ export default function AddTransactionScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.form}>
+      <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
         <Text style={styles.label}>စာရင်းအမျိုးအစား</Text>
         <View style={styles.typeSelector}>
           <Pressable style={[styles.typeButton, type === "income" && styles.typeButtonActive]} onPress={() => setType("income")}>
@@ -201,7 +233,16 @@ export default function AddTransactionScreen() {
         </View>
 
         <Text style={styles.label}>ငွေပမာဏ</Text>
-        <TextInput style={styles.input} placeholder="0.00" value={amount} onChangeText={setAmount} keyboardType="numeric" />
+        <TextInput 
+          style={styles.input} 
+          placeholder="0.00" 
+          value={amount} 
+          onChangeText={(text) => {
+            const valid = text.replace(/[^0-9.]/g, '');
+            if ((valid.match(/\./g) || []).length <= 1) setAmount(valid);
+          }} 
+          keyboardType="decimal-pad" 
+        />
 
         <Text style={styles.label}>အမျိုးအစား</Text>
         <Pressable style={styles.dropdown} onPress={() => setCategoryModalVisible(true)}>
@@ -211,16 +252,86 @@ export default function AddTransactionScreen() {
           <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
         </Pressable>
 
-        <Text style={styles.label}>အသင်းဝင် (ရှိလျှင်)</Text>
-        <Pressable style={styles.dropdown} onPress={() => setMemberModalVisible(true)}>
-          <Text style={selectedMember ? styles.dropdownText : styles.dropdownPlaceholder}>
-            {selectedMember ? selectedMember.name : "အသင်းဝင်ကို ရွေးပါ (Optional)"}
-          </Text>
-          <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
-        </Pressable>
+        <Text style={styles.label}>{type === 'income' ? 'ငွေပေးသွင်းသူအမည်' : 'ငွေလက်ခံသူအမည်'}</Text>
+        <View style={styles.inputWithButtonContainer}>
+          <TextInput
+            style={styles.inputWithButton}
+            placeholder={type === 'income' ? 'အမည် ရိုက်ထည့်ပါ (သို့) စာရင်းမှရွေးပါ' : 'အမည် ရိုက်ထည့်ပါ (သို့) စာရင်းမှရွေးပါ'}
+            value={payerPayeeName}
+            onChangeText={(text) => {
+              setPayerPayeeName(text);
+              if (selectedMemberId) {
+                setSelectedMemberId(null);
+              }
+            }}
+          />
+          <Pressable style={styles.inputButton} onPress={() => setMemberModalVisible(true)}>
+            <Ionicons name="people-outline" size={22} color={Colors.light.tint} />
+          </Pressable>
+        </View>
 
         <Text style={styles.label}>ရက်စွဲ</Text>
-        <TextInput style={styles.input} value={date} onChangeText={setDate} />
+        {Platform.OS === 'web' ? (
+          <View style={styles.dropdown}>
+            {React.createElement('input', {
+              type: 'date',
+              value: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+              onChange: (event: any) => {
+                if (event.target.value) {
+                  const [y, m, d] = event.target.value.split('-');
+                  setDate(new Date(+y, +m - 1, +d));
+                }
+              },
+              style: {
+                width: '100%',
+                border: 'none',
+                outline: 'none',
+                backgroundColor: 'transparent',
+                fontSize: 16,
+                color: Colors.light.text,
+                fontFamily: 'inherit'
+              } as any
+            })}
+          </View>
+        ) : (
+          <>
+            <Pressable style={styles.dropdown} onPress={() => setShowDatePicker(true)}>
+              <Text style={styles.dropdownText}>{formatDateDisplay(date)}</Text>
+              <Ionicons name="calendar-outline" size={20} color={Colors.light.textSecondary} />
+            </Pressable>
+
+            {showDatePicker && (
+              Platform.OS === 'ios' ? (
+                <Modal transparent={true} visible={showDatePicker} animationType="slide" onRequestClose={() => setShowDatePicker(false)}>
+                  <View style={styles.modalContainer}>
+                    <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDatePicker(false)} />
+                    <View style={styles.modalContent}>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 15 }}>
+                        <Text style={[styles.modalTitle, { marginBottom: 0 }]}>ရက်စွဲရွေးပါ</Text>
+                        <Pressable onPress={() => setShowDatePicker(false)}><Text style={{ color: Colors.light.tint, fontSize: 16, fontWeight: "600" }}>Done</Text></Pressable>
+                      </View>
+                      <DateTimePicker 
+                        value={date} 
+                        mode="date" 
+                        display="inline" 
+                        onChange={handleDateChange} 
+                        style={{ alignSelf: "center", width: 320 }}
+                        themeVariant="light"
+                      />
+                    </View>
+                  </View>
+                </Modal>
+              ) : (
+                <DateTimePicker
+                  value={date}
+                  mode="date"
+                  display="default"
+                  onChange={handleDateChange}
+                />
+              )
+            )}
+          </>
+        )}
 
         <Text style={styles.label}>ဘောင်ချာနံပါတ် (ရှိလျှင်)</Text>
         <TextInput style={styles.input} placeholder="ဥပမာ- 2024-001" value={receiptNumber} onChangeText={setReceiptNumber} />
@@ -238,7 +349,11 @@ export default function AddTransactionScreen() {
               data={members}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
-                <Pressable style={styles.memberItem} onPress={() => { setSelectedMemberId(item.id); setMemberModalVisible(false); }}>
+                <Pressable style={styles.memberItem} onPress={() => {
+                  setSelectedMemberId(item.id);
+                  setPayerPayeeName(item.name);
+                  setMemberModalVisible(false);
+                }}>
                   {item.profileImage ? <Image source={{ uri: item.profileImage }} style={styles.avatar} /> : <View style={[styles.avatar, { backgroundColor: item.avatarColor || Colors.light.tint }]}><Text style={styles.avatarText}>{getAvatarLabel(item.name)}</Text></View>}
                   <View><Text style={styles.memberName}>{item.name}</Text><Text style={styles.memberId}>ID: {item.id}</Text></View>
                 </Pressable>
@@ -249,7 +364,7 @@ export default function AddTransactionScreen() {
       </Modal>
 
       <Modal animationType="slide" transparent={true} visible={isCategoryModalVisible} onRequestClose={() => setCategoryModalVisible(false)}>
-        <View style={styles.modalContainer}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalContainer}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setCategoryModalVisible(false)} />
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>အမျိုးအစားများ</Text>
@@ -299,7 +414,7 @@ export default function AddTransactionScreen() {
               }
             />
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -314,7 +429,7 @@ const styles = StyleSheet.create({
   form: { padding: 20 },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 15, marginBottom: 6, textTransform: "uppercase" },
   input: { backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
-  dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: Colors.light.border },
+  dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: Colors.light.border, position: 'relative' },
   dropdownText: { fontSize: 16, color: Colors.light.text },
   dropdownPlaceholder: { fontSize: 16, color: Colors.light.textSecondary },
   modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
@@ -332,4 +447,7 @@ const styles = StyleSheet.create({
   typeButtonTextActive: { color: "#fff" },
   categoryItem: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   categoryName: { fontSize: 16, fontFamily: "Inter_500Medium", textAlign: "center" },
+  inputWithButtonContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border },
+  inputWithButton: { flex: 1, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: Colors.light.text },
+  inputButton: { paddingHorizontal: 12 },
 });
