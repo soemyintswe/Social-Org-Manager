@@ -17,7 +17,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
@@ -75,11 +75,18 @@ const EXPENSE_CATEGORIES = [
   { id: "other_expenses", label: "အခြားအသုံးစရိတ်" },
 ];
 
+const TRANSFER_CATEGORIES = [
+  { id: "bank_deposit", label: "ဘဏ်သို့ ငွေသွင်းခြင်း (Deposit)" },
+  { id: "bank_withdraw", label: "ဘဏ်မှ ငွေထုတ်ခြင်း (Withdraw)" },
+];
+
 export default function AddTransactionScreen() {
   const insets = useSafeAreaInsets();
-  const { members = [], addTransaction } = useData() as any;
+  const { editId } = useLocalSearchParams<{ editId: string }>();
+  const { members = [], transactions = [], addTransaction, updateTransaction } = useData() as any;
 
-  const [type, setType] = useState<"expense" | "income">("expense");
+  const [type, setType] = useState<"expense" | "income" | "transfer">("expense");
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "bank">("cash");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [payerPayeeName, setPayerPayeeName] = useState("");
   const [amount, setAmount] = useState("");
@@ -96,6 +103,50 @@ export default function AddTransactionScreen() {
   const [saving, setSaving] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+  // For Member Fees Period
+  const [feeStartDate, setFeeStartDate] = useState(new Date());
+  const [feeEndDate, setFeeEndDate] = useState(new Date());
+  const [showFeeStartPicker, setShowFeeStartPicker] = useState(false);
+  const [showFeeEndPicker, setShowFeeEndPicker] = useState(false);
+  const [feeWarning, setFeeWarning] = useState("");
+
+  useEffect(() => {
+    if (editId && transactions.length > 0) {
+      const txn = transactions.find((t: any) => t.id === editId);
+      if (txn) {
+        setType(txn.type);
+        setAmount(txn.amount.toString());
+        setCategory(txn.category);
+        setDate(new Date(txn.date));
+        setNotes(txn.notes || "");
+        setSelectedMemberId(txn.memberId || null);
+        setPayerPayeeName(txn.payerPayee || "");
+        setPaymentMethod(txn.paymentMethod || "cash");
+        setReceiptNumber(txn.receiptNumber || "");
+        if (txn.feePeriodStart) setFeeStartDate(new Date(txn.feePeriodStart));
+        if (txn.feePeriodEnd) setFeeEndDate(new Date(txn.feePeriodEnd));
+      }
+    }
+  }, [editId, transactions]);
+
+  useEffect(() => {
+    if (type === 'income' && category === 'member_fees' && selectedMemberId) {
+      const start = new Date(feeStartDate); start.setHours(0,0,0,0);
+      const end = new Date(feeEndDate); end.setHours(23,59,59,999);
+
+      const hasOverlap = transactions.some((t: any) => {
+        if (t.memberId !== selectedMemberId || t.category !== 'member_fees' || !t.feePeriodStart || !t.feePeriodEnd) return false;
+        const tStart = new Date(t.feePeriodStart); tStart.setHours(0,0,0,0);
+        const tEnd = new Date(t.feePeriodEnd); tEnd.setHours(23,59,59,999);
+        return start <= tEnd && end >= tStart;
+      });
+
+      setFeeWarning(hasOverlap ? "သတိပေးချက်: ဤကာလအတွက် ပေးသွင်းထားပြီးဖြစ်ပါသည်" : "");
+    } else {
+      setFeeWarning("");
+    }
+  }, [selectedMemberId, category, type, feeStartDate, feeEndDate, transactions]);
+
   useEffect(() => {
     let prefix = type === "income" ? "I-" : "O-";
 
@@ -103,6 +154,8 @@ export default function AddTransactionScreen() {
       prefix = "BI-";
     } else if (category === "bank_charges" && type === "expense") {
       prefix = "BO-";
+    } else if (type === "transfer") {
+      prefix = "TR-";
     }
 
     setReceiptNumber((prev) => {
@@ -143,13 +196,14 @@ export default function AddTransactionScreen() {
   };
 
   const availableCategories = useMemo(() => {
+    if (type === "transfer") return TRANSFER_CATEGORIES;
     const defaults = type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
     const customs = customCategories.filter((c) => c.type === type);
     return [...defaults, ...customs];
   }, [type, customCategories]);
 
   const getCategoryLabel = (catId: string) => {
-    const all = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES, ...customCategories];
+    const all = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES, ...TRANSFER_CATEGORIES, ...customCategories];
     const found = all.find((c) => c.id === catId);
     return found ? found.label : (CATEGORY_LABELS[catId as TransactionCategory] || catId);
   };
@@ -171,6 +225,17 @@ export default function AddTransactionScreen() {
     }
   };
 
+  const handleFeeDateChange = (isStart: boolean) => (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      if (isStart) setShowFeeStartPicker(false);
+      else setShowFeeEndPicker(false);
+    }
+    if (selectedDate) {
+      if (isStart) setFeeStartDate(selectedDate);
+      else setFeeEndDate(selectedDate);
+    }
+  };
+
   const handleSave = async () => {
     if (!amount || parseFloat(amount) <= 0) {
       Alert.alert("လိုအပ်ချက်", "ငွေပမာဏကို မှန်ကန်စွာ ထည့်သွင်းပေးပါ။");
@@ -183,6 +248,8 @@ export default function AddTransactionScreen() {
 
     setSaving(true);
     try {
+      const isFee = type === 'income' && category === 'member_fees';
+
       const transactionData = {
         id: Date.now().toString(),
         memberId: selectedMemberId || undefined,
@@ -190,12 +257,19 @@ export default function AddTransactionScreen() {
         amount: parseFloat(amount),
         type: type,
         category: category,
+        paymentMethod: type === 'transfer' ? (category === 'bank_deposit' ? 'cash' : 'bank') : paymentMethod,
         date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
         notes: notes,
         receiptNumber: receiptNumber,
         categoryLabel: getCategoryLabel(category),
+        feePeriodStart: isFee ? `${feeStartDate.getFullYear()}-${String(feeStartDate.getMonth() + 1).padStart(2, '0')}-${String(feeStartDate.getDate()).padStart(2, '0')}` : undefined,
+        feePeriodEnd: isFee ? `${feeEndDate.getFullYear()}-${String(feeEndDate.getMonth() + 1).padStart(2, '0')}-${String(feeEndDate.getDate()).padStart(2, '0')}` : undefined,
       };
-      await addTransaction(transactionData);
+      if (editId) {
+        await updateTransaction(editId, transactionData);
+      } else {
+        await addTransaction(transactionData);
+      }
       Alert.alert("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
     } catch (error) {
@@ -214,13 +288,13 @@ export default function AddTransactionScreen() {
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="close" size={24} color={Colors.light.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>ငွေစာရင်းသွင်းရန်</Text>
+        <Text style={styles.headerTitle}>{editId ? "ငွေစာရင်း ပြင်ဆင်ရန်" : "ငွေစာရင်းသွင်းရန်"}</Text>
         <Pressable onPress={handleSave} disabled={saving}>
           <Text style={styles.saveBtn}>သိမ်းမည်</Text>
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 20 }]} keyboardShouldPersistTaps="handled">
         <Text style={styles.label}>စာရင်းအမျိုးအစား</Text>
         <View style={styles.typeSelector}>
           <Pressable style={[styles.typeButton, type === "income" && styles.typeButtonActive]} onPress={() => setType("income")}>
@@ -229,8 +303,26 @@ export default function AddTransactionScreen() {
           <Pressable style={[styles.typeButton, type === "expense" && styles.typeButtonActive]} onPress={() => setType("expense")}>
             <Text style={[styles.typeButtonText, type === "expense" && styles.typeButtonTextActive]}>အသုံးစာရင်း</Text>
           </Pressable>
-          
+          <Pressable style={[styles.typeButton, type === "transfer" && styles.typeButtonActive]} onPress={() => { setType("transfer"); setCategory(null); }}>
+            <Text style={[styles.typeButtonText, type === "transfer" && styles.typeButtonTextActive]}>ဘဏ်သွင်း/ဘဏ်ထုတ်</Text>
+          </Pressable>
         </View>
+
+        {type !== "transfer" && (
+          <>
+            <Text style={styles.label}>ငွေပေးချေမှု ပုံစံ</Text>
+            <View style={styles.methodRow}>
+              <Pressable style={[styles.methodOption, paymentMethod === "cash" && styles.methodActive]} onPress={() => setPaymentMethod("cash")}>
+                <Ionicons name="cash-outline" size={20} color={paymentMethod === "cash" ? Colors.light.tint : Colors.light.textSecondary} />
+                <Text style={[styles.methodText, paymentMethod === "cash" && styles.methodTextActive]}>ငွေသား (Cash)</Text>
+              </Pressable>
+              <Pressable style={[styles.methodOption, paymentMethod === "bank" && styles.methodActive]} onPress={() => setPaymentMethod("bank")}>
+                <Ionicons name="card-outline" size={20} color={paymentMethod === "bank" ? Colors.light.tint : Colors.light.textSecondary} />
+                <Text style={[styles.methodText, paymentMethod === "bank" && styles.methodTextActive]}>ဘဏ် (Bank)</Text>
+              </Pressable>
+            </View>
+          </>
+        )}
 
         <Text style={styles.label}>ငွေပမာဏ</Text>
         <TextInput 
@@ -244,31 +336,96 @@ export default function AddTransactionScreen() {
           keyboardType="decimal-pad" 
         />
 
-        <Text style={styles.label}>အမျိုးအစား</Text>
+        <Text style={styles.label}>{type === 'transfer' ? 'ဘဏ်သွင်း/ဘဏ်ထုတ် ပုံစံ' : 'အမျိုးအစား'}</Text>
         <Pressable style={styles.dropdown} onPress={() => setCategoryModalVisible(true)}>
           <Text style={category ? styles.dropdownText : styles.dropdownPlaceholder}>
-            {category ? getCategoryLabel(category) : "အမျိုးအစား ရွေးပါ"}
+            {category ? getCategoryLabel(category) : (type === 'transfer' ? "ဘဏ်သွင်းပုံစံ ရွေးပါ" : "အမျိုးအစား ရွေးပါ")}
           </Text>
           <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
         </Pressable>
 
-        <Text style={styles.label}>{type === 'income' ? 'ငွေပေးသွင်းသူအမည်' : 'ငွေလက်ခံသူအမည်'}</Text>
-        <View style={styles.inputWithButtonContainer}>
-          <TextInput
-            style={styles.inputWithButton}
-            placeholder={type === 'income' ? 'အမည် ရိုက်ထည့်ပါ (သို့) စာရင်းမှရွေးပါ' : 'အမည် ရိုက်ထည့်ပါ (သို့) စာရင်းမှရွေးပါ'}
-            value={payerPayeeName}
-            onChangeText={(text) => {
-              setPayerPayeeName(text);
-              if (selectedMemberId) {
-                setSelectedMemberId(null);
-              }
-            }}
-          />
-          <Pressable style={styles.inputButton} onPress={() => setMemberModalVisible(true)}>
-            <Ionicons name="people-outline" size={22} color={Colors.light.tint} />
-          </Pressable>
-        </View>
+        {type === 'income' && category === 'member_fees' && (
+          <View style={{ marginTop: 15 }}>
+            <Text style={styles.label}>လစဉ်ကြေး ကာလ (From - To)</Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              {/* Start Date */}
+              <View style={{ flex: 1 }}>
+                {Platform.OS === 'web' ? (
+                  <View style={styles.dropdown}>
+                    {React.createElement('input', {
+                      type: 'date',
+                      value: feeStartDate.toISOString().split('T')[0],
+                      onChange: (e: any) => e.target.value && setFeeStartDate(new Date(e.target.value)),
+                      style: { width: '100%', border: 'none', outline: 'none', backgroundColor: 'transparent', fontSize: 14, fontFamily: 'inherit', color: Colors.light.text }
+                    })}
+                  </View>
+                ) : (
+                  <>
+                    <Pressable style={styles.dropdown} onPress={() => setShowFeeStartPicker(true)}>
+                      <Text style={styles.dropdownText}>{formatDateDisplay(feeStartDate)}</Text>
+                    </Pressable>
+                    {showFeeStartPicker && (
+                      <DateTimePicker value={feeStartDate} mode="date" display="default" onChange={handleFeeDateChange(true)} />
+                    )}
+                  </>
+                )}
+              </View>
+
+              <View style={{ justifyContent: 'center' }}><Text>-</Text></View>
+
+              {/* End Date */}
+              <View style={{ flex: 1 }}>
+                {Platform.OS === 'web' ? (
+                  <View style={styles.dropdown}>
+                    {React.createElement('input', {
+                      type: 'date',
+                      value: feeEndDate.toISOString().split('T')[0],
+                      onChange: (e: any) => e.target.value && setFeeEndDate(new Date(e.target.value)),
+                      style: { width: '100%', border: 'none', outline: 'none', backgroundColor: 'transparent', fontSize: 14, fontFamily: 'inherit', color: Colors.light.text }
+                    })}
+                  </View>
+                ) : (
+                  <>
+                    <Pressable style={styles.dropdown} onPress={() => setShowFeeEndPicker(true)}>
+                      <Text style={styles.dropdownText}>{formatDateDisplay(feeEndDate)}</Text>
+                    </Pressable>
+                    {showFeeEndPicker && (
+                      <DateTimePicker value={feeEndDate} mode="date" display="default" onChange={handleFeeDateChange(false)} />
+                    )}
+                  </>
+                )}
+              </View>
+            </View>
+            {feeWarning ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
+                <Ionicons name="warning" size={16} color="#EF4444" />
+                <Text style={{ color: "#EF4444", fontSize: 12, fontFamily: "Inter_500Medium" }}>
+                  {feeWarning}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+
+        {type !== "transfer" && (
+          <>
+            <Text style={styles.label}>{type === 'income' ? 'ငွေပေးသွင်းသူအမည်' : 'ငွေလက်ခံသူအမည်'}</Text>
+            <View style={styles.inputWithButtonContainer}>
+              <TextInput
+                style={styles.inputWithButton}
+                placeholder="အမည် ရိုက်ထည့်ပါ (သို့) စာရင်းမှရွေးပါ"
+                value={payerPayeeName}
+                onChangeText={(text) => {
+                  setPayerPayeeName(text);
+                  if (selectedMemberId) { setSelectedMemberId(null); }
+                }}
+              />
+              <Pressable style={styles.inputButton} onPress={() => setMemberModalVisible(true)}>
+                <Ionicons name="people-outline" size={22} color={Colors.light.tint} />
+              </Pressable>
+            </View>
+          </>
+        )}
 
         <Text style={styles.label}>ရက်စွဲ</Text>
         {Platform.OS === 'web' ? (
@@ -354,7 +511,7 @@ export default function AddTransactionScreen() {
                   setPayerPayeeName(item.name);
                   setMemberModalVisible(false);
                 }}>
-                  {item.profileImage ? <Image source={{ uri: item.profileImage }} style={styles.avatar} /> : <View style={[styles.avatar, { backgroundColor: item.avatarColor || Colors.light.tint }]}><Text style={styles.avatarText}>{getAvatarLabel(item.name)}</Text></View>}
+                  {item.profileImage ? <Image source={{ uri: item.profileImage }} style={styles.avatar} resizeMode="cover" /> : <View style={[styles.avatar, { backgroundColor: item.avatarColor || Colors.light.tint }]}><Text style={styles.avatarText}>{getAvatarLabel(item.name)}</Text></View>}
                   <View><Text style={styles.memberName}>{item.name}</Text><Text style={styles.memberId}>ID: {item.id}</Text></View>
                 </Pressable>
               )}
@@ -450,4 +607,9 @@ const styles = StyleSheet.create({
   inputWithButtonContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border },
   inputWithButton: { flex: 1, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: Colors.light.text },
   inputButton: { paddingHorizontal: 12 },
+  methodRow: { flexDirection: "row", gap: 10 },
+  methodOption: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.surface },
+  methodActive: { borderColor: Colors.light.tint, backgroundColor: Colors.light.tint + "15" },
+  methodText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  methodTextActive: { color: Colors.light.tint },
 });

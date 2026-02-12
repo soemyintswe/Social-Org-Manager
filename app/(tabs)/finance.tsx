@@ -8,6 +8,8 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Modal,
+  TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -16,8 +18,9 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { Transaction, Loan, CATEGORY_LABELS } from "@/lib/types";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
-type Tab = "transactions" | "loans";
+type Tab = "transactions" | "transfers" | "loans";
 
 function BalanceCard({ label, amount, icon, color }: {
   label: string;
@@ -44,6 +47,8 @@ function TransactionRow({ txn, memberName, onDelete }: {
   onDelete: (id: string) => void;
 }) {
   const isIncome = txn.type === "income";
+  const isTransfer = txn.type === "transfer";
+  const paymentMethod = (txn as any).paymentMethod || "cash";
 
   const dateObj = useMemo(() => {
     const d = txn.date as any;
@@ -58,6 +63,7 @@ function TransactionRow({ txn, memberName, onDelete }: {
   return (
     <Pressable
       style={styles.txnRow}
+      onPress={() => router.push({ pathname: "/add-transaction", params: { editId: txn.id } })}
       onLongPress={() => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         Alert.alert("ဖျက်ရန်", "ဤငွေစာရင်းကို ဖျက်လိုပါသလား?", [
@@ -66,11 +72,11 @@ function TransactionRow({ txn, memberName, onDelete }: {
         ]);
       }}
     >
-      <View style={[styles.txnIcon, { backgroundColor: (isIncome ? "#10B981" : "#F43F5E") + "15" }]}>
+      <View style={[styles.txnIcon, { backgroundColor: (isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")) + "15" }]}>
         <Ionicons
-          name={isIncome ? "arrow-down" : "arrow-up"}
+          name={isTransfer ? "swap-horizontal" : (isIncome ? "arrow-down" : "arrow-up")}
           size={20}
-          color={isIncome ? "#10B981" : "#F43F5E"}
+          color={isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")}
         />
       </View>
       <View style={styles.txnInfo}>
@@ -83,12 +89,12 @@ function TransactionRow({ txn, memberName, onDelete }: {
         <Text style={styles.txnDate}>
           {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           {" "}
-          <Text style={styles.txnMethod}>{((txn as any).paymentMethod || "CASH").toUpperCase()}</Text>
+          <Text style={styles.txnMethod}>{paymentMethod.toUpperCase()}</Text>
         </Text>
       </View>
       <View style={styles.txnRight}>
-        <Text style={[styles.txnAmount, { color: isIncome ? "#10B981" : "#F43F5E" }]}>
-          {isIncome ? "+" : "-"}{txn.amount.toLocaleString()}
+        <Text style={[styles.txnAmount, { color: isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E") }]}>
+          {isTransfer ? "" : (isIncome ? "+" : "-")}{txn.amount.toLocaleString()}
         </Text>
       </View>
     </Pressable>
@@ -155,14 +161,40 @@ export default function FinanceScreen() {
     loans,
     members,
     removeTransaction,
-    getCashBalance,
-    getBankBalance,
-    getTotalBalance,
     getLoanOutstanding,
-    loading
-  } = useData();
+    loading,
+    accountSettings,
+    refreshData,
+    updateAccountSettings
+  } = useData() as any;
 
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
+  const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1)); // Jan 1st of current year
+  const [endDate, setEndDate] = useState(new Date());
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
+
+  // Opening Balance Modal State
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [tempCash, setTempCash] = useState("");
+  const [tempBank, setTempBank] = useState("");
+
+  const handleOpenSettings = () => {
+    setTempCash(accountSettings?.openingBalanceCash?.toString() || "0");
+    setTempBank(accountSettings?.openingBalanceBank?.toString() || "0");
+    setShowSettingsModal(true);
+  };
+
+  const handleSaveSettings = async () => {
+    if (updateAccountSettings) {
+      await updateAccountSettings({
+        ...accountSettings,
+        openingBalanceCash: parseFloat(tempCash) || 0,
+        openingBalanceBank: parseFloat(tempBank) || 0,
+      });
+    }
+    setShowSettingsModal(false);
+  };
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -174,8 +206,10 @@ export default function FinanceScreen() {
     return fullName || anyM.email || anyM.phone || "";
   };
 
+  // Filter transactions by date range
   const sortedTxns = useMemo(
-    () => [...(transactions || [])].sort((a, b) => {
+    () => [...(transactions || [])]
+    .sort((a, b) => {
       const getDate = (d: any) => {
         if (!d) return 0;
         if (typeof d === 'string' && d.includes('/')) {
@@ -185,8 +219,20 @@ export default function FinanceScreen() {
         return new Date(d).getTime();
       };
       return (getDate(b.date) || 0) - (getDate(a.date) || 0);
+    })
+    .filter(t => {
+      const d = new Date(t.date);
+      // Reset times for accurate date comparison
+      const start = new Date(startDate); start.setHours(0,0,0,0);
+      const end = new Date(endDate); end.setHours(23,59,59,999);
+      const current = new Date(d);
+      if (typeof t.date === 'string' && t.date.includes('/')) {
+         const [day, month, year] = t.date.split('/');
+         current.setFullYear(parseInt(year), parseInt(month) - 1, parseInt(day));
+      }
+      return current >= start && current <= end;
     }),
-    [transactions]
+    [transactions, startDate, endDate]
   );
 
   const sortedLoans = useMemo(
@@ -197,6 +243,34 @@ export default function FinanceScreen() {
     }),
     [loans]
   );
+
+  // Calculate Balances locally to include Transfer logic
+  const balances = useMemo(() => {
+    let cash = (accountSettings?.openingBalanceCash || 0);
+    let bank = (accountSettings?.openingBalanceBank || 0);
+
+    (transactions || []).forEach((t: any) => {
+      const amt = t.amount || 0;
+      if (t.type === 'income') {
+        if (t.paymentMethod === 'bank') bank += amt;
+        else cash += amt;
+      } else if (t.type === 'expense') {
+        if (t.paymentMethod === 'bank') bank -= amt;
+        else cash -= amt;
+      } else if (t.type === 'transfer') {
+        if (t.category === 'bank_deposit') { // Cash -> Bank
+          cash -= amt;
+          bank += amt;
+        } else if (t.category === 'bank_withdraw') { // Bank -> Cash
+          bank -= amt;
+          cash += amt;
+        }
+      }
+    });
+    return { cash, bank, total: cash + bank };
+  }, [transactions, accountSettings]);
+
+  const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   if (loading) {
     return (
@@ -212,18 +286,100 @@ export default function FinanceScreen() {
         <Text style={styles.title}>ငွေစာရင်းမှတ်တမ်း</Text>
         <View style={styles.headerButtons}>
           <Pressable
+            style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, marginRight: 8 }]}
+            onPress={handleOpenSettings}
+          >
+            <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
+          </Pressable>
+          <Pressable
+            style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+            onPress={async () => refreshData && await refreshData()}
+          >
+            <Ionicons name="refresh" size={20} color={Colors.light.text} />
+          </Pressable>
+          <Pressable
             style={styles.addButton}
-            onPress={() => router.push(activeTab === "transactions" ? "/add-transaction" : "/add-loan" as any)}
+            onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
           >
             <Ionicons name="add" size={24} color="white" />
           </Pressable>
         </View>
       </View>
 
+      <View style={styles.filterContainer}>
+        {Platform.OS === 'web' ? (
+          <View style={styles.dateBtn}>
+            {React.createElement('input', {
+              type: 'date',
+              value: startDate.toISOString().split('T')[0],
+              onChange: (e: any) => e.target.value && setStartDate(new Date(e.target.value)),
+              style: {
+                border: 'none',
+                outline: 'none',
+                backgroundColor: 'transparent',
+                fontSize: 13,
+                fontFamily: 'inherit',
+                color: Colors.light.text,
+                width: 110
+              }
+            })}
+          </View>
+        ) : (
+          <Pressable style={styles.dateBtn} onPress={() => setShowStartPicker(true)}>
+            <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+            <Text style={styles.dateBtnText}>{formatDateBtn(startDate)}</Text>
+          </Pressable>
+        )}
+
+        <Text style={{ color: Colors.light.textSecondary }}>to</Text>
+
+        {Platform.OS === 'web' ? (
+          <View style={styles.dateBtn}>
+            {React.createElement('input', {
+              type: 'date',
+              value: endDate.toISOString().split('T')[0],
+              onChange: (e: any) => e.target.value && setEndDate(new Date(e.target.value)),
+              style: {
+                border: 'none',
+                outline: 'none',
+                backgroundColor: 'transparent',
+                fontSize: 13,
+                fontFamily: 'inherit',
+                color: Colors.light.text,
+                width: 110
+              }
+            })}
+          </View>
+        ) : (
+          <Pressable style={styles.dateBtn} onPress={() => setShowEndPicker(true)}>
+            <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+            <Text style={styles.dateBtnText}>{formatDateBtn(endDate)}</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {/* Date Pickers */}
+      {(showStartPicker || showEndPicker) && Platform.OS !== 'web' && (
+        <DateTimePicker
+          value={showStartPicker ? startDate : endDate}
+          mode="date"
+          display="default"
+          onChange={(event, selectedDate) => {
+            if (showStartPicker) {
+              setShowStartPicker(false);
+              if (selectedDate) setStartDate(selectedDate);
+            } else {
+              setShowEndPicker(false);
+              if (selectedDate) setEndDate(selectedDate);
+            }
+          }}
+        />
+      )}
+
       <View style={styles.balanceGrid}>
-        <BalanceCard label="လက်ဝယ်ရှိငွေ" amount={getCashBalance()} icon="cash" color="#10B981" />
-        <BalanceCard label="ဘဏ်လက်ကျန်" amount={getBankBalance()} icon="card" color="#3B82F6" />
-        <BalanceCard label="စုစုပေါင်းလက်ကျန်" amount={getTotalBalance()} icon="wallet" color="#8B5CF6" />
+        <BalanceCard label="လက်ဝယ်ရှိငွေ" amount={balances.cash} icon="cash" color="#10B981" />
+        <BalanceCard label="ဘဏ်လက်ကျန်" amount={balances.bank} icon="card" color="#3B82F6" />
+        <BalanceCard label="စုစုပေါင်းလက်ကျန်" amount={balances.total} icon="wallet" color="#8B5CF6" />
       </View>
 
       <View style={styles.tabBar}>
@@ -236,22 +392,36 @@ export default function FinanceScreen() {
           </Text>
         </Pressable>
         <Pressable
+          style={[styles.tab, activeTab === "transfers" && styles.activeTab]}
+          onPress={() => setActiveTab("transfers")}
+        >
+          <Text style={[styles.tabText, activeTab === "transfers" && styles.activeTabText]}>
+            ဘဏ်သွင်း/ဘဏ်ထုတ်
+          </Text>
+        </Pressable>
+        <Pressable
           style={[styles.tab, activeTab === "loans" && styles.activeTab]}
           onPress={() => setActiveTab("loans")}
         >
           <Text style={[styles.tabText, activeTab === "loans" && styles.activeTabText]}>
-            ချေးငွေစာရင်း
+            ချေးငွေ
           </Text>
         </Pressable>
       </View>
 
       <FlatList
         // FlatList Error အတွက် explicit typing သုံးပေးထားပါသည်
-        data={activeTab === "transactions" ? (sortedTxns as any[]) : (sortedLoans as any[])}
+        data={
+          activeTab === "loans" 
+            ? (sortedLoans as any[]) 
+            : activeTab === "transfers"
+              ? (sortedTxns.filter(t => t.type === 'transfer') as any[])
+              : (sortedTxns.filter(t => t.type !== 'transfer') as any[])
+        }
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => {
-          if (activeTab === "transactions") {
+          if (activeTab === "transactions" || activeTab === "transfers") {
             const txn = item as Transaction;
             const memberName = getMemberName(txn.memberId);
             const displayName = memberName || (item as any).payerPayee;
@@ -281,6 +451,34 @@ export default function FinanceScreen() {
           </View>
         }
       />
+
+      {/* Opening Balance Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showSettingsModal}
+        onRequestClose={() => setShowSettingsModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowSettingsModal(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Opening Balances (စာရင်းဖွင့်လက်ကျန်)</Text>
+            
+            <Text style={styles.label}>Opening Cash (ငွေသား)</Text>
+            <TextInput style={styles.input} value={tempCash} onChangeText={setTempCash} keyboardType="decimal-pad" placeholder="0.00" />
+
+            <Text style={styles.label}>Opening Bank (ဘဏ်)</Text>
+            <TextInput style={styles.input} value={tempBank} onChangeText={setTempBank} keyboardType="decimal-pad" placeholder="0.00" />
+
+            <Pressable style={styles.saveBtn} onPress={handleSaveSettings}>
+              <Text style={styles.saveBtnText}>Save Changes</Text>
+            </Pressable>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowSettingsModal(false)}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -388,4 +586,16 @@ const styles = StyleSheet.create({
   loanPaid: { backgroundColor: Colors.light.success + "15" },
   emptyContainer: { alignItems: "center", marginTop: 50 },
   emptyText: { marginTop: 10, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
+  filterContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 20, marginBottom: 15 },
+  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
+  dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
+  modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
+  label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 6, marginTop: 10 },
+  input: { backgroundColor: "#F8FAFC", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: Colors.light.border },
+  saveBtn: { backgroundColor: Colors.light.tint, paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 20 },
+  saveBtnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
+  cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });

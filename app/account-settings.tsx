@@ -11,7 +11,6 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -22,45 +21,16 @@ export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { accountSettings, updateAccountSettings } = useData();
   
-  const parseDateString = (dateString: string): Date => {
-    if (!dateString || !/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
-        return new Date();
-    }
-    const [year, month, day] = dateString.split('-').map(Number);
-    return new Date(year, month - 1, day);
-  };
-  
-  const formatDateDisplay = (date: Date) => {
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
-  };
-  
-  const [cashBalance, setCashBalance] = useState(accountSettings.openingBalanceCash.toString());
-  const [bankBalance, setBankBalance] = useState(accountSettings.openingBalanceBank.toString());
-  const [asOfDate, setAsOfDate] = useState<Date>(parseDateString(accountSettings.asOfDate));
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
-
-  const handleDateChange = (event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-        setShowDatePicker(false);
-    }
-    if (selectedDate) {
-        setAsOfDate(selectedDate);
-    }
-  };
 
   const handleSave = async () => {
     setSaving(true);
     try {
       await updateAccountSettings({
-        openingBalanceCash: parseFloat(cashBalance) || 0,
-        openingBalanceBank: parseFloat(bankBalance) || 0,
-        asOfDate: `${asOfDate.getFullYear()}-${String(asOfDate.getMonth() + 1).padStart(2, '0')}-${String(asOfDate.getDate()).padStart(2, '0')}`,
+        openingBalanceCash: accountSettings.openingBalanceCash,
+        openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -92,74 +62,30 @@ export default function AccountSettingsScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.form}
+        contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 60 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.infoCard}>
-          <Ionicons name="information-circle-outline" size={20} color={Colors.light.tint} />
-          <Text style={styles.infoText}>
-            Set your opening balances. All transactions will be calculated from these values to determine your closing balances.
-          </Text>
+        <View style={styles.storageCard}>
+          <View style={styles.storageIcon}>
+            <Ionicons name="cloud-offline" size={24} color="#F59E0B" />
+          </View>
+          <View style={styles.storageTextContainer}>
+            <Text style={styles.storageTitle}>Storage: Offline (Local)</Text>
+            <Text style={styles.storageDesc}>
+              အချက်အလက်များကို ဤစက်ထဲတွင်သာ သိမ်းဆည်းထားပါသည်။ အခြားစက်နှင့် ချိတ်ဆက်အသုံးပြုလိုပါက Backup/Restore ပြုလုပ်ရန် လိုအပ်ပါသည်။
+            </Text>
+          </View>
         </View>
 
-        <Text style={styles.label}>Opening Cash Balance</Text>
-        <TextInput
-          style={styles.input}
-          value={cashBalance}
-          onChangeText={setCashBalance}
-          placeholder="0.00"
-          placeholderTextColor={Colors.light.textSecondary}
-          keyboardType="decimal-pad"
-        />
-
-        <Text style={styles.label}>Opening Bank Balance</Text>
-        <TextInput
-          style={styles.input}
-          value={bankBalance}
-          onChangeText={setBankBalance}
-          placeholder="0.00"
-          placeholderTextColor={Colors.light.textSecondary}
-          keyboardType="decimal-pad"
-        />
-
-        <Text style={styles.label}>As Of Date</Text>
-        {Platform.OS === 'web' ? (
-            <View style={styles.dropdown}>
-                {React.createElement('input', {
-                    type: 'date',
-                    value: `${asOfDate.getFullYear()}-${String(asOfDate.getMonth() + 1).padStart(2, '0')}-${String(asOfDate.getDate()).padStart(2, '0')}`,
-                    onChange: (event: any) => {
-                        if (event.target.value) {
-                            const [y, m, d] = event.target.value.split('-');
-                            setAsOfDate(new Date(+y, +m - 1, +d));
-                        }
-                    },
-                    style: {
-                        width: '100%',
-                        border: 'none',
-                        outline: 'none',
-                        backgroundColor: 'transparent',
-                        fontSize: 16,
-                        color: Colors.light.text,
-                        fontFamily: 'inherit'
-                    } as any
-                })}
-            </View>
-        ) : (
-            <>
-                <Pressable style={styles.dropdown} onPress={() => setShowDatePicker(true)}>
-                    <Text style={styles.dropdownText}>{formatDateDisplay(asOfDate)}</Text>
-                    <Ionicons name="calendar-outline" size={20} color={Colors.light.textSecondary} />
-                </Pressable>
-                {showDatePicker && <DateTimePicker 
-                  value={asOfDate} 
-                  mode="date" 
-                  display="default" 
-                  onChange={handleDateChange} 
-                />}
-            </>
-        )}
+        <Pressable
+          style={styles.dataManagementBtn}
+          onPress={() => router.push("/data-management")}
+        >
+          <Ionicons name="server-outline" size={20} color={Colors.light.text} />
+          <Text style={styles.dataManagementText}>System & Data Management (Backup/Restore)</Text>
+          <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+        </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -243,5 +169,56 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_400Regular",
     color: Colors.light.text,
+  },
+  dataManagementBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.light.surface,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 24,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    gap: 12,
+  },
+  dataManagementText: {
+    flex: 1,
+    fontSize: 16,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
+  storageCard: {
+    flexDirection: "row",
+    backgroundColor: "#FFF7ED",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#FDBA74",
+    alignItems: "center",
+    gap: 12,
+  },
+  storageIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FFEDD5",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  storageTextContainer: {
+    flex: 1,
+  },
+  storageTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#9A3412",
+    marginBottom: 2,
+  },
+  storageDesc: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#9A3412",
+    lineHeight: 18,
   },
 });

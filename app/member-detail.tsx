@@ -1,4 +1,4 @@
-import React, { useState } from "react"; 
+import React, { useState, useMemo } from "react";
 import {
   StyleSheet,
   Text,
@@ -17,6 +17,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { CATEGORY_LABELS } from "@/lib/types";
 
 function InfoRow({ icon, label, value }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -40,10 +41,8 @@ function InfoRow({ icon, label, value }: {
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { members, groups, updateMember, deleteMember } = useData() as any;
-
+  const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding } = useData() as any;
   const member = members?.find((m: any) => m.id === id);
-  const [editing, setEditing] = useState(false);
 
   const [editName, setEditName] = useState(member?.name || "");
   const [editEmail, setEditEmail] = useState(member?.email || "");
@@ -65,6 +64,22 @@ export default function MemberDetailScreen() {
 
   const memberGroups = groups?.filter((g: any) => g.memberIds.includes(member?.id)) || [];
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  // Financial Calculations
+  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === member.id) || [], [transactions, member.id]);
+  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === member.id) || [], [loans, member.id]);
+
+  const stats = useMemo(() => {
+    return {
+      totalIncome: memberTxns.filter((t: any) => t.type === 'income').reduce((acc: number, t: any) => acc + t.amount, 0),
+      totalExpense: memberTxns.filter((t: any) => t.type === 'expense').reduce((acc: number, t: any) => acc + t.amount, 0),
+      feesPaid: memberTxns.filter((t: any) => t.category === 'member_fees').reduce((acc: number, t: any) => acc + t.amount, 0),
+      loanPrincipal: memberLoans.reduce((acc: number, l: any) => acc + l.amount, 0),
+      loanOutstanding: memberLoans.reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0),
+      activeLoans: memberLoans.filter((l: any) => l.status === 'active').length,
+    };
+  }, [memberTxns, memberLoans]);
+
 
   const handleUpdate = async () => {
     if (!editName.trim()) {
@@ -131,7 +146,7 @@ export default function MemberDetailScreen() {
         <View style={styles.profileHeader}>
           <View style={[styles.avatar, { backgroundColor: member.avatarColor, overflow: "hidden" }]}>
             {member.profileImage ? (
-              <Image source={{ uri: member.profileImage }} style={{ width: "100%", height: "100%" }} />
+              <Image source={{ uri: member.profileImage }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
             ) : (
               <Text style={styles.avatarText}>{member.name.charAt(0).toUpperCase()}</Text>
             )}
@@ -187,6 +202,50 @@ export default function MemberDetailScreen() {
               <InfoRow icon="location-outline" label="Address" value={member.address} />
             </View>
 
+            <Text style={styles.sectionTitle}>Financial Report</Text>
+            <View style={styles.statsGrid}>
+              <View style={styles.statCard}>
+                <Text style={styles.statLabel}>စုစုပေါင်း ပေးသွင်း</Text>
+                <Text style={[styles.statValue, { color: Colors.light.success }]}>{stats.totalIncome.toLocaleString()} KS</Text>
+              </View>
+              <View style={styles.statCard}>
+                <Text style={styles.statLabel}>စုစုပေါင်း ထုတ်ယူ</Text>
+                <Text style={[styles.statValue, { color: Colors.light.accent }]}>{stats.totalExpense.toLocaleString()} KS</Text>
+              </View>
+              <View style={styles.statCard}>
+                <Text style={styles.statLabel}>လစဉ်ကြေး ပေးသွင်း</Text>
+                <Text style={[styles.statValue, { color: Colors.light.tint }]}>{stats.feesPaid.toLocaleString()} KS</Text>
+              </View>
+              <View style={styles.statCard}>
+                <Text style={styles.statLabel}>ချေးငွေ လက်ကျန်</Text>
+                <Text style={[styles.statValue, { color: "#F59E0B" }]}>{stats.loanOutstanding.toLocaleString()} KS</Text>
+                <Text style={styles.statSub}>{stats.activeLoans} active loans</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sectionTitle}>Recent Transactions</Text>
+            {memberTxns.length > 0 ? (
+              memberTxns.slice(0, 5).map((t: any) => (
+                <View key={t.id} style={styles.txnRow}>
+                  <View style={[styles.txnIcon, { backgroundColor: t.type === 'income' ? Colors.light.success + "15" : Colors.light.accent + "15" }]}>
+                    <Ionicons name={t.type === 'income' ? "arrow-down" : "arrow-up"} size={16} color={t.type === 'income' ? Colors.light.success : Colors.light.accent} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.txnCat}>{t.categoryLabel || CATEGORY_LABELS[t.category] || t.category}</Text>
+                    <Text style={styles.txnDate}>{new Date(t.date).toLocaleDateString()}</Text>
+                  </View>
+                  <Text style={[styles.txnAmount, { color: t.type === 'income' ? Colors.light.success : Colors.light.accent }]}>
+                    {t.type === 'income' ? "+" : "-"}{t.amount.toLocaleString()}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyText}>No transactions found</Text>
+              </View>
+            )}
+            <View style={{ height: 20 }} />
+
             <Text style={styles.sectionTitle}>Groups</Text>
             {memberGroups.length > 0 ? (
               memberGroups.map((g: any) => (
@@ -233,4 +292,15 @@ const styles = StyleSheet.create({
   editInput: { backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
   deleteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, marginTop: 20 },
   deleteBtnText: { color: "#EF4444", fontWeight: "600" },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+  statCard: { width: '48%', backgroundColor: Colors.light.surface, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border },
+  statLabel: { fontSize: 11, color: Colors.light.textSecondary, marginBottom: 4 },
+  statValue: { fontSize: 16, fontWeight: "700" },
+  statSub: { fontSize: 10, color: Colors.light.textSecondary, marginTop: 2 },
+  txnRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, gap: 12 },
+  txnIcon: { width: 32, height: 32, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+  txnCat: { fontSize: 14, fontWeight: "600", color: Colors.light.text },
+  txnDate: { fontSize: 11, color: Colors.light.textSecondary },
+  txnAmount: { fontSize: 14, fontWeight: "700" },
+  emptyState: { padding: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, marginBottom: 20 },
 });

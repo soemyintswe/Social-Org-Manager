@@ -113,7 +113,7 @@ export default function AddLoanScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.form}>
+      <ScrollView contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 20 }]}>
         <Text style={styles.label}>အသင်းဝင် ရွေးချယ်ရန်</Text>
         <Pressable style={styles.dropdown} onPress={() => setDropdownVisible(true)}>
           <Text style={selectedMember ? styles.dropdownText : styles.dropdownPlaceholder}>
@@ -175,7 +175,7 @@ export default function AddLoanScreen() {
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <Pressable style={styles.memberItem} onPress={() => { setSelectedMemberId(item.id); setDropdownVisible(false); }}>
-                  {item.profileImage ? ( <Image source={{ uri: item.profileImage }} style={styles.avatar} /> ) : (
+                  {item.profileImage ? ( <Image source={{ uri: item.profileImage }} style={styles.avatar} resizeMode="cover" /> ) : (
                    <View style={[styles.avatar, { backgroundColor: item.avatarColor || Colors.light.tint }]}>
                       <Text style={styles.avatarText}>{getAvatarLabel(item.name)}</Text>
                    </View>

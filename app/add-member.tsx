@@ -67,7 +67,7 @@ export default function AddMemberScreen() {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.5,
+        quality: 0.3,
         base64: true,
       });
 
@@ -146,7 +146,7 @@ export default function AddMemberScreen() {
           <View style={styles.imageContainer}>
             <Pressable onPress={pickImage} style={styles.imagePicker}>
               {profileImage ? (
-                <Image source={{ uri: profileImage }} style={styles.profileImage} />
+                <Image source={{ uri: profileImage }} style={styles.profileImage} resizeMode="cover" />
               ) : (
                 <View style={styles.placeholderImage}>
                   <Ionicons name="camera" size={32} color={Colors.light.textSecondary} />

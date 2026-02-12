@@ -36,6 +36,7 @@ interface DataContextType {
   loading: boolean;
   getTotalBalance: () => number;
   getLoanOutstanding: (id: string) => number;
+  refreshData?: () => Promise<void>;
 }
 
 
@@ -44,20 +45,26 @@ function StatCard({
   label,
   value,
   color,
+  onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   value: string;
   color: string;
+  onPress?: () => void;
 }) {
   return (
-    <View style={[styles.statCard, { borderLeftColor: color }]}>
+    <Pressable
+      style={({ pressed }) => [styles.statCard, { borderLeftColor: color }, pressed && onPress && { opacity: 0.7 }]}
+      onPress={onPress}
+      disabled={!onPress}
+    >
       <View style={[styles.statIconWrap, { backgroundColor: color + "15" }]}>
         <Ionicons name={icon} size={20} color={color} />
       </View>
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -85,7 +92,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, transactions, loans, loading, getTotalBalance, getLoanOutstanding } = useData() as DataContextType;
+  const { members, transactions, loans, loading, getTotalBalance, getLoanOutstanding, refreshData } = useData() as DataContextType;
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -118,19 +125,21 @@ export default function DashboardScreen() {
           <Text style={styles.greeting}>မင်္ဂလာပါ</Text>
           <Text style={styles.orgName}>OrgHub Dashboard</Text>
         </View>
-        <Pressable 
-          style={styles.profileBtn}
-          onPress={() => router.push("/account-settings")}
-        >
-          <Ionicons name="settings-outline" size={24} color={Colors.light.text} />
-        </Pressable>
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <Pressable 
+            style={styles.profileBtn}
+            onPress={async () => refreshData && await refreshData()}
+          >
+            <Ionicons name="refresh-outline" size={24} color={Colors.light.text} />
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.statsGrid}>
-        <StatCard icon="people" label="အသင်းဝင်" value={(members?.length || 0).toString()} color="#8B5CF6" />
+        <StatCard icon="people" label="အသင်းဝင်" value={(members?.length || 0).toString()} color="#8B5CF6" onPress={() => router.push("/members")} />
         <StatCard icon="wallet" label="စုစုပေါင်းလက်ကျန်" value={formatCurrency(getTotalBalance())} color="#10B981" />
-        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" />
-        <StatCard icon="calendar" label="မှတ်တမ်းများ" value={(transactions?.length || 0).toString()} color="#3B82F6" />
+        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" onPress={() => router.push("/loans")} />
+        <StatCard icon="calendar" label="မှတ်တမ်းများ" value={(transactions?.length || 0).toString()} color="#3B82F6" onPress={() => router.push("/transactions")} />
       </View>
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
@@ -170,6 +179,11 @@ export default function DashboardScreen() {
           })}
         </>
       )}
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>Project Owner & Developer: MR. SOE MYINT SWE</Text>
+        <Text style={styles.footerSubText}>Developed with Gemini AI Assistance</Text>
+      </View>
     </ScrollView>
   );
 }
@@ -199,4 +213,7 @@ const styles = StyleSheet.create({
   recentTxnAmt: { fontSize: 14, fontWeight: "bold" },
   incomeText: { color: Colors.light.success },
   expenseText: { color: Colors.light.accent },
+  footer: { padding: 20, alignItems: "center", marginTop: 10, opacity: 0.6 },
+  footerText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text, textAlign: "center" },
+  footerSubText: { fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2, textAlign: "center" },
 });

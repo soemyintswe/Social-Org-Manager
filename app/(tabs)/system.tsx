@@ -64,7 +64,7 @@ export default function SystemScreen() {
       <View style={styles.menuContainer}>
         <Pressable
           style={[styles.menuItem, { backgroundColor: Colors.light.tint }]}
-          onPress={() => router.push("/import-members")}
+          onPress={() => router.push("/data-management")}
         >
           <View style={styles.iconBox}>
             <Ionicons name="settings-outline" size={24} color="#fff" />
@@ -90,6 +90,37 @@ export default function SystemScreen() {
           <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
         </Pressable>
       </View>
+
+      <View style={styles.infoSection}>
+        <Text style={styles.sectionHeader}>System Information</Text>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>App Version</Text>
+          <Text style={styles.infoValue}>1.0.0 (Beta)</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Developer</Text>
+          <Text style={styles.infoValue}>MR. SOE MYINT SWE</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Technology</Text>
+          <Text style={styles.infoValue}>React Native / Expo / Gemini AI</Text>
+        </View>
+      </View>
+
+      <View style={styles.infoSection}>
+        <Text style={styles.sectionHeader}>အသုံးပြုနည်း လမ်းညွှန် (User Guide)</Text>
+        <Text style={styles.guideText}>
+          ၁။ <Text style={{fontWeight: 'bold'}}>Dashboard</Text>: အသင်းဝင်၊ ငွေစာရင်းနှင့် ချေးငွေ အနှစ်ချုပ်များကို ကြည့်ရှုနိုင်ပါသည်။{"\n\n"}
+          ၂။ <Text style={{fontWeight: 'bold'}}>ငွေစာရင်း</Text>: ဝင်ငွေ/ထွက်ငွေ၊ ဘဏ်သွင်း/ထုတ် နှင့် ချေးငွေများကို စာရင်းသွင်းနိုင်ပါသည်။{"\n\n"}
+          ၃။ <Text style={{fontWeight: 'bold'}}>အစီရင်ခံစာ</Text>: လအလိုက်၊ နှစ်အလိုက် ငွေစာရင်းရှင်းတမ်းများနှင့် အသင်းဝင်ကြေး ပေးသွင်းမှုများကို စစ်ဆေးနိုင်ပါသည်။{"\n\n"}
+          ၄။ <Text style={{fontWeight: 'bold'}}>System</Text>: အချက်အလက်များကို Backup လုပ်ခြင်း၊ ပြန်လည်ထည့်သွင်းခြင်း (Restore) နှင့် System Reset ပြုလုပ်ခြင်းများ ဆောင်ရွက်နိုင်ပါသည်။
+        </Text>
+      </View>
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>© 2024 OrgHub Manager</Text>
+        <Text style={styles.footerSubText}>Created by MR. SOE MYINT SWE</Text>
+      </View>
     </ScrollView>
   );
 }
@@ -105,4 +136,13 @@ const styles = StyleSheet.create({
   menuTextContainer: { flex: 1 },
   menuTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: "#fff", marginBottom: 4 },
   menuDesc: { fontSize: 13, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.9)" },
+  infoSection: { marginTop: 30, backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: Colors.light.border },
+  sectionHeader: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 15 },
+  infoRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 10, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
+  infoLabel: { fontSize: 14, color: Colors.light.textSecondary },
+  infoValue: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  guideText: { fontSize: 14, lineHeight: 22, color: Colors.light.text },
+  footer: { marginTop: 40, alignItems: "center", opacity: 0.5, marginBottom: 20 },
+  footerText: { fontSize: 12, fontWeight: "600" },
+  footerSubText: { fontSize: 10, marginTop: 2 },
 });

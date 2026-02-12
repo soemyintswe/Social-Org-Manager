@@ -6,7 +6,6 @@ import {
   TextInput,
   Pressable,
   Alert,
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -19,7 +18,7 @@ import Colors from "@/constants/colors";
 import { clearAllData, exportData, restoreData } from "@/lib/storage";
 import { useData } from "@/lib/DataContext";
 
-export default function ImportMembersScreen() {
+export default function DataManagementScreen() {
   const insets = useSafeAreaInsets();
   const { refreshData } = useData() as any;
   const [importing, setImporting] = useState(false);
@@ -144,7 +143,6 @@ export default function ImportMembersScreen() {
           text: "အတည်ပြုသည်",
           style: "destructive",
           onPress: () => {
-            // Second Confirmation
             Alert.alert("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း", "တကယ်ဖျက်မည်မှာ သေချာပါသလား။", [
               { text: "မဖျက်ပါ", style: "cancel" },
               { text: "ဖျက်မည်", style: "destructive", onPress: async () => {
@@ -171,15 +169,9 @@ export default function ImportMembersScreen() {
         <View style={{ width: 24 }} />
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={{ flex: 1 }}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.instruction}>
-            Full System Backup & Restore
-          </Text>
-
+          <Text style={styles.instruction}>Full System Backup & Restore</Text>
           <TextInput
             style={styles.input}
             multiline
@@ -189,27 +181,17 @@ export default function ImportMembersScreen() {
             textAlignVertical="top"
             placeholderTextColor={Colors.light.textSecondary}
           />
-
           <View style={styles.btnRow}>
             <Pressable style={[styles.actionBtn, { backgroundColor: "#6366F1" }]} onPress={handleBackup} disabled={importing}>
               <Text style={styles.btnText}>{Platform.OS === 'web' ? "Download Backup File" : "Backup"}</Text>
             </Pressable>
           </View>
-
           <Pressable style={[styles.actionBtn, { backgroundColor: "#F59E0B", marginTop: 10 }]} onPress={handleRestore} disabled={importing}>
             <Text style={styles.btnText}>{Platform.OS === 'web' ? "Restore from File" : "Restore from Backup Text"}</Text>
           </Pressable>
-
           <View style={styles.divider} />
-
-          <Text style={[styles.instruction, { color: "#EF4444", marginTop: 10 }]}>
-            Danger Zone (သတိထားရန်)
-          </Text>
-
-          <Pressable
-            style={[styles.actionBtn, { backgroundColor: "#EF4444" }]}
-            onPress={handleClear}
-          >
+          <Text style={[styles.instruction, { color: "#EF4444", marginTop: 10 }]}>Danger Zone (သတိထားရန်)</Text>
+          <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={handleClear}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Ionicons name="trash-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
               <Text style={styles.btnText}>System Reset (Delete All)</Text>
@@ -223,69 +205,14 @@ export default function ImportMembersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-  },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: Colors.light.surface },
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   backBtn: { padding: 4 },
   content: { padding: 20, flexGrow: 1 },
   instruction: { fontSize: 14, color: Colors.light.text, marginBottom: 12, fontFamily: "Inter_400Regular", lineHeight: 20 },
-  formatBox: { backgroundColor: Colors.light.surface, padding: 12, borderRadius: 8, marginBottom: 20, borderWidth: 1, borderColor: Colors.light.border },
-  format: { fontSize: 13, color: Colors.light.tint, marginBottom: 6, fontFamily: "Inter_600SemiBold" },
-  example: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", fontStyle: "italic" },
-  input: {
-    flex: 1,
-    minHeight: 200,
-    backgroundColor: Colors.light.surface,
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 14,
-    color: Colors.light.text,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    marginBottom: 20,
-  },
-  btnRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-    gap: 10, // If using React Native >= 0.71, otherwise use marginRight on children
-  },
-  importBtn: {
-    backgroundColor: Colors.light.tint,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  importBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-  },
-  actionBtn: {
-    flex: 1,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  btnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-  },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.light.border,
-    marginVertical: 20,
-    borderRadius: 1,
-  },
+  input: { flex: 1, minHeight: 200, backgroundColor: Colors.light.surface, borderRadius: 12, padding: 16, fontSize: 14, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border, marginBottom: 20 },
+  btnRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10 },
+  actionBtn: { flex: 1, paddingVertical: 16, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  btnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  divider: { height: 1, backgroundColor: Colors.light.border, marginVertical: 20, borderRadius: 1 },
 });

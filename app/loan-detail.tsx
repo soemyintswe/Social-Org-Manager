@@ -117,7 +117,7 @@ export default function LoanDetailScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 20 }]}>
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Borrower</Text>
           <Text style={styles.borrowerName}>{member?.name || "Unknown Member"}</Text>
