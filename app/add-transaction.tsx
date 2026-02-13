@@ -35,7 +35,7 @@ if (Platform.OS === 'web') {
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
   let text = name.trim();
-  const prefixes = ["ဆရာတော်", "ဦး", "ဒေါ်", "မောင်", "ကို", "မ"];
+  const prefixes = ["ဆရာတော်", "ဦး", "ဒေါ်", "မောင်", "ကို", "မ", "ကိုရင်", "ဦးဇင်း", "ဆရာလေး", "သီလရှင်"];
   prefixes.sort((a, b) => b.length - a.length);
   for (const prefix of prefixes) {
     if (text.startsWith(prefix)) {

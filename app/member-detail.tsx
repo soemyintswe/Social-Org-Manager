@@ -11,6 +11,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -18,6 +19,23 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS } from "@/lib/types";
+
+const getAvatarLabel = (name: string) => {
+  if (!name) return "?";
+  let text = name.trim();
+  const prefixes = ["ဆရာတော်", "ဦး", "ဒေါ်", "မောင်", "ကို", "မ", "ကိုရင်", "ဦးဇင်း", "ဆရာလေး", "သီလရှင်"];
+  prefixes.sort((a, b) => b.length - a.length);
+  for (const prefix of prefixes) {
+    if (text.startsWith(prefix)) {
+      const remaining = text.slice(prefix.length).trim();
+      if (remaining.length > 0) {
+        text = remaining;
+        break;
+      }
+    }
+  }
+  return text.charAt(0).toUpperCase();
+};
 
 function InfoRow({ icon, label, value }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -41,14 +59,17 @@ function InfoRow({ icon, label, value }: {
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding } = useData() as any;
+  const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
   const member = members?.find((m: any) => m.id === id);
 
   const [editName, setEditName] = useState(member?.name || "");
+  const [editMemberId, setEditMemberId] = useState(member?.id || "");
   const [editEmail, setEditEmail] = useState(member?.email || "");
+  const [editDob, setEditDob] = useState(member?.dob || "");
   const [editPhone, setEditPhone] = useState(member?.phone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
   const [editResignDate, setEditResignDate] = useState(member?.resignDate || "");
+  const [showDobPicker, setShowDobPicker] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -81,16 +102,73 @@ export default function MemberDetailScreen() {
     };
   }, [memberTxns, memberLoans]);
 
+  const handleDobChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === "android") {
+      setShowDobPicker(false);
+    }
+    if (selectedDate) {
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setEditDob(`${day}/${month}/${year}`);
+    }
+  };
+
+  const getInitialDate = () => {
+    if (!editDob) return new Date();
+    const parts = editDob.split(/[\/\.\-]/);
+    if (parts.length === 3) {
+      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  };
 
   const handleUpdate = async () => {
     if (!editName.trim()) {
       Alert.alert("Error", "Name is required");
       return;
     }
+    if (!editMemberId.trim()) {
+      Alert.alert("Error", "Member ID is required");
+      return;
+    }
+
     setSaving(true);
     try {
+      // ID ပြောင်းလဲမှုရှိမရှိ စစ်ဆေးခြင်း
+      if (editMemberId.trim() !== member.id) {
+        const existing = members.find((m: any) => m.id === editMemberId.trim());
+        if (existing) {
+          Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
+          setSaving(false);
+          return;
+        }
+
+        // Cascade Update: Transactions
+        const memberTxns = transactions.filter((t: any) => t.memberId === member.id);
+        for (const txn of memberTxns) {
+          if (updateTransaction) await updateTransaction(txn.id, { ...txn, memberId: editMemberId.trim() });
+        }
+
+        // Cascade Update: Loans
+        const memberLoans = loans.filter((l: any) => l.memberId === member.id);
+        for (const loan of memberLoans) {
+          if (updateLoan) await updateLoan(loan.id, { ...loan, memberId: editMemberId.trim() });
+        }
+
+        // Cascade Update: Groups
+        const memberGroups = groups.filter((g: any) => g.memberIds.includes(member.id));
+        for (const group of memberGroups) {
+          const newMemberIds = group.memberIds.map((mid: string) => mid === member.id ? editMemberId.trim() : mid);
+          if (updateGroup) await updateGroup(group.id, { ...group, memberIds: newMemberIds });
+        }
+      }
+
       await updateMember(member.id, {
+        id: editMemberId.trim(),
         name: editName.trim(),
+        dob: editDob.trim(),
         email: editEmail.trim(),
         phone: editPhone.trim(),
         address: editAddress.trim(),
@@ -98,6 +176,10 @@ export default function MemberDetailScreen() {
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
+      // ID ပြောင်းသွားရင် Route ပါ ပြောင်းပေးရမယ် (သို့) Back ပြန်
+      if (editMemberId.trim() !== member.id) {
+        router.replace({ pathname: "/member-detail", params: { id: editMemberId.trim() } } as any);
+      }
     } catch (err) {
       Alert.alert("Error", "Could not update member");
     } finally {
@@ -149,7 +231,7 @@ export default function MemberDetailScreen() {
             {member.profileImage ? (
               <Image source={{ uri: member.profileImage }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
             ) : (
-              <Text style={styles.avatarText}>{member.name.charAt(0).toUpperCase()}</Text>
+              <Text style={styles.avatarText}>{getAvatarLabel(member.name)}</Text>
             )}
           </View>
           <Text style={styles.name}>{member.name}</Text>
@@ -160,12 +242,60 @@ export default function MemberDetailScreen() {
               Joined on {new Date(createdAtValue).toLocaleDateString()}
             </Text>
           )}
+
+          <Pressable 
+            style={styles.cardBtn} 
+            onPress={() => router.push({ pathname: "/member-card", params: { id: member.id } } as any)}
+          >
+            <Ionicons name="card-outline" size={18} color="#fff" />
+            <Text style={styles.cardBtnText}>View Member Card</Text>
+          </Pressable>
         </View>
 
         {editing ? (
           <View style={styles.editForm}>
+            <Text style={styles.editLabel}>Member ID</Text>
+            <TextInput style={styles.editInput} value={editMemberId} onChangeText={setEditMemberId} />
+
             <Text style={styles.editLabel}>Full Name</Text>
             <TextInput style={styles.editInput} value={editName} onChangeText={setEditName} />
+
+            <Text style={styles.editLabel}>Date of Birth</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TextInput
+                style={[styles.editInput, { flex: 1 }]}
+                value={editDob}
+                onChangeText={setEditDob}
+                placeholder="DD/MM/YYYY"
+              />
+              {Platform.OS === 'web' ? (
+                <View style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }]}>
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                  {React.createElement('input', {
+                    type: 'date',
+                    style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' },
+                    onChange: (e: any) => {
+                      if (e.target.value) {
+                        const [y, m, d] = e.target.value.split('-');
+                        setEditDob(`${d}/${m}/${y}`);
+                      }
+                    }
+                  })}
+                </View>
+              ) : (
+                <Pressable onPress={() => setShowDobPicker(true)} style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }]}>
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                </Pressable>
+              )}
+            </View>
+            {showDobPicker && Platform.OS !== 'web' && (
+              <DateTimePicker
+                value={getInitialDate()}
+                mode="date"
+                display="default"
+                onChange={handleDobChange}
+              />
+            )}
 
             <Text style={styles.editLabel}>Email Address</Text>
             <TextInput style={styles.editInput} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" />
@@ -197,6 +327,7 @@ export default function MemberDetailScreen() {
                 label="အခြေအနေ" 
                 value={statusLabel} 
               />
+              <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
               {isResigned && <InfoRow icon="calendar-outline" label="နှုတ်ထွက်သည့်နေ့" value={member.resignDate} />}
               <InfoRow icon="mail-outline" label="Email" value={member.email} />
               <InfoRow icon="call-outline" label="Phone" value={member.phone} />
@@ -277,6 +408,8 @@ const styles = StyleSheet.create({
   avatarText: { fontSize: 32, color: "#fff", fontWeight: "bold" },
   name: { fontSize: 22, fontWeight: "700", color: Colors.light.text },
   joinDate: { fontSize: 13, color: Colors.light.textSecondary, marginTop: 4 },
+  cardBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.light.tint, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginTop: 16, gap: 6 },
+  cardBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   infoCard: { backgroundColor: Colors.light.surface, borderRadius: 16, padding: 16, marginBottom: 20 },
   infoRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
   infoIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.light.background, justifyContent: "center", alignItems: "center", marginRight: 12 },

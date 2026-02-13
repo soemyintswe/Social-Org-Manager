@@ -284,7 +284,7 @@ export default function FinanceScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.title}>ငွေစာရင်းမှတ်တမ်း</Text>
-        <View style={styles.headerButtons}>
+        <View style={[styles.headerButtons, { marginRight: 150 }]}>
           <Pressable
             style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, marginRight: 8 }]}
             onPress={handleOpenSettings}
