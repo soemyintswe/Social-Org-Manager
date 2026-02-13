@@ -28,13 +28,19 @@ export default function DataManagementScreen() {
   const [backupText, setBackupText] = useState("");
 
   const handleBackup = async () => {
+    console.log("Starting backup...");
     let dataString = "";
     try {
       const data = await exportData();
       dataString = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 
-      if (dataString === "{}" || dataString === "[]") {
-        Alert.alert("No Data", "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။ Restore အရင်လုပ်ပါ။");
+      if (!data || dataString === "{}" || dataString === "[]") {
+        const msg = "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။ Restore အရင်လုပ်ပါ။";
+        if (Platform.OS === 'web') {
+          window.alert(msg);
+        } else {
+          Alert.alert("No Data", msg);
+        }
         return;
       }
       
@@ -88,7 +94,11 @@ export default function DataManagementScreen() {
       ]);
     } catch (e: any) {
       console.warn("Backup Error:", e);
-      Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
+      if (Platform.OS === 'web') {
+        window.alert("Backup Error: " + (e.message || "Unknown error"));
+      } else {
+        Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
+      }
     }
   };
 
