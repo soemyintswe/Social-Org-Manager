@@ -18,6 +18,12 @@
 - **Loan Management**: 
   - Issue loans with interest rates.
   - Track repayments and calculate outstanding balances automatically.
+- **Events & News**:
+  - Manage organization activities, news, and announcements.
+  - Attach images to events.
+- **Tools**:
+  - QR Code Scanner for quick member lookup.
+  - Digital Member Cards with QR codes.
 - **Reports**: 
   - Income/Expense Statements.
   - Loan Status Reports.
