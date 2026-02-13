@@ -9,15 +9,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Share,
   ActivityIndicator,
 } from "react-native";
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import * as DocumentPicker from 'expo-document-picker';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
+import * as Clipboard from 'expo-clipboard';
 import Colors from "@/constants/colors";
 import { clearAllData, exportData, restoreData } from "@/lib/storage";
 import { useData } from "@/lib/DataContext";
@@ -32,27 +31,25 @@ export default function DataManagementScreen() {
   const handleBackup = async () => {
     if (processing) return;
     setProcessing(true);
-    console.log("Starting backup...");
     
     try {
       const data = await exportData();
       const dataString = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 
       if (!data || dataString === "{}" || dataString === "[]") {
-        const msg = "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။ Restore အရင်လုပ်ပါ။";
-        if (Platform.OS === 'web') {
-          alert(msg);
-        } else {
-          Alert.alert("No Data", msg);
-        }
+        const msg = "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။";
+        Platform.OS === 'web' ? alert(msg) : Alert.alert("No Data", msg);
         setProcessing(false);
         return;
       }
-      
-      // Web သို့မဟုတ် Replit Web View (Phone Browser) အတွက် Download Logic
+
+      // ၁။ Unicode စာသားများကို Textbox ထဲ အမြဲအသင့်ထည့်ပေးထားမည်
+      setBackupText(dataString);
+
       if (Platform.OS === 'web') {
         try {
-          const blob = new Blob([dataString], { type: 'application/json' });
+          // ၂။ ဒေါင်းလုဒ်ဆွဲရန် အရင်ကြိုးစားမည် (UTF-8 Encoding ပါဝင်သည်)
+          const blob = new Blob([dataString], { type: 'application/json;charset=utf-8' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
@@ -61,184 +58,98 @@ export default function DataManagementScreen() {
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          setProcessing(false);
-          return;
+          
+          alert("Backup File (.json) ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။");
         } catch (webErr) {
-          console.error("Web Download Error:", webErr);
-        }
-      }
-
-      // Native Mobile (Expo Go App) အတွက် Logic
-      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
-      
-      if (directory && Platform.OS !== 'web') {
-        try {
-          const fileName = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
-          const fileUri = directory + fileName;
-
-          await FileSystem.writeAsStringAsync(fileUri, dataString, {
-            encoding: FileSystem.EncodingType.UTF8,
-          });
-
-          if (await Sharing.isAvailableAsync()) {
-            await Sharing.shareAsync(fileUri, {
-              mimeType: 'application/json',
-              dialogTitle: 'Backup File ကို သိမ်းဆည်းပါ',
-              UTI: 'public.json',
+          // ၃။ ဒေါင်းမရလျှင် Share Screen (Telegram/Gmail/Notes) ကို တိုက်ရိုက်ဖွင့်ပေးမည်
+          if (navigator.share) {
+            await navigator.share({
+              title: 'OrgHub Backup Data',
+              text: dataString,
+            }).catch(async () => {
+              // Share Menu ပိတ်သွားလျှင် သို့မဟုတ် မရလျှင် Clipboard သို့ အလိုအလျောက်ကူးပေးမည်
+              await Clipboard.setStringAsync(dataString);
+              alert("ဒေါင်းလုဒ်နှင့် Share မရသဖြင့် အချက်အလက်များကို Clipboard သို့ Copy ကူးပေးလိုက်ပါသည်။ Notes ထဲတွင် Paste လုပ်သိမ်းပါ။");
             });
-            setProcessing(false);
-            return;
+          } else {
+            await Clipboard.setStringAsync(dataString);
+            alert("Share စနစ်အားမပေးသဖြင့် အချက်အလက်များကို Copy ကူးပေးလိုက်ပါသည်။");
           }
-        } catch (err) {
-          console.warn("File save failed, falling back to text share:", err);
         }
+        setProcessing(false);
+        return;
       }
 
-      // Fallback: အပေါ်ကနည်းလမ်းတွေ အလုပ်မလုပ်ရင် Text Share လုပ်မည်
-      setBackupText(dataString);
-      Alert.alert("Backup Ready", "ဖိုင်တိုက်ရိုက်သိမ်းဆည်းမရနိုင်ပါ။ အောက်ပါစာသားများကို Copy ကူး၍ သိမ်းဆည်းနိုင်ပါသည်။", [
-        {
-          text: "Share Text",
-          onPress: async () => {
-            await Share.share({ message: dataString });
-          },
-        },
-        { text: "OK" },
-      ]);
-    } catch (e: any) {
-      console.warn("Backup Error:", e);
-      const errorMsg = "Backup Error: " + (e.message || "Unknown error");
-      Platform.OS === 'web' ? alert(errorMsg) : Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
+      // Native Mobile (Expo Go) အတွက် ပုံမှန် Sharing စနစ်
+      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      if (directory) {
+        const fileName = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
+        const fileUri = directory + fileName;
+        await FileSystem.writeAsStringAsync(fileUri, dataString, { encoding: FileSystem.EncodingType.UTF8 });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri);
+        }
+      }
+    } catch (e) {
+      console.error("Backup Error:", e);
+      alert("Backup ပြုလုပ်ရာတွင် အမှားတစ်ခုရှိနေပါသည်။");
     }
     setProcessing(false);
   };
 
   const handleRestore = async () => {
-    if (Platform.OS === 'web') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'application/json';
-      input.onchange = async (e: any) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        if (!confirm("လက်ရှိအချက်အလက်များအားလုံး ပျက်စီးပြီး Backup ဖိုင်မှ အချက်အလက်များဖြင့် အစားထိုးပါမည်။ သေချာပါသလား။")) {
-          return;
-        }
-
-        setImporting(true);
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          const content = ev.target?.result as string;
-          if (content) {
-            const success = await restoreData(content);
-            if (success) {
-              if (refreshData) await refreshData();
-              alert("အောင်မြင်ပါသည်\nအချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
-              router.replace("/members");
-            } else {
-              alert("အမှား\nRestore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
-            }
-          }
-          setImporting(false);
-        };
-        reader.readAsText(file);
-      };
-      input.click();
-      return;
-    }
-
-    // Native Mobile Restore
     if (!backupText.trim()) {
-      Alert.alert("Restore Options", "Backup ဖိုင်ကို ရွေးချယ်မလား (သို့) Text ထည့်မလား?", [
-        {
-          text: "Select File",
-          onPress: async () => {
-            try {
-              const result = await DocumentPicker.getDocumentAsync({
-                type: 'application/json',
-                copyToCacheDirectory: true
-              });
-              
-              if (result.canceled) return;
-              
-              const file = result.assets[0];
-              const content = await FileSystem.readAsStringAsync(file.uri);
-              
-              setImporting(true);
-              const success = await restoreData(content);
-              if (success) {
-                if (refreshData) await refreshData();
-                Alert.alert("အောင်မြင်ပါသည်", "အချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
-              } else {
-                Alert.alert("အမှား", "Restore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
-              }
-              setImporting(false);
-            } catch (e) {
-              Alert.alert("Error", "ဖိုင်ဖတ်မရပါ။ Text ထည့်သွင်းနည်းကို အသုံးပြုပါ။");
-            }
-          }
-        },
-        { text: "Use Text Input", onPress: () => {} },
-        { text: "Cancel", style: "cancel" }
-      ]);
+      alert("Restore လုပ်ရန် အပေါ်ရှိ အကွက်ထဲတွင် Backup စာသားများကို Paste လုပ်ပေးပါ။");
       return;
     }
 
-    Alert.alert("အတည်ပြုရန်", "လက်ရှိအချက်အလက်များအားလုံး ပျက်စီးပြီး Backup အချက်အလက်များဖြင့် အစားထိုးပါမည်။ သေချာပါသလား။", [
-      { text: "မလုပ်ပါ", style: "cancel" },
-      {
-        text: "Restore လုပ်မည်",
-        style: "destructive",
-        onPress: async () => {
-          setImporting(true);
-          const success = await restoreData(backupText);
-          if (success) {
-            if (refreshData) await refreshData();
-            Alert.alert("အောင်မြင်ပါသည်", "အချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
-          } else {
-            Alert.alert("အမှား", "Restore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
-          }
-          setImporting(false);
-        },
-      },
-    ]);
+    const confirmMsg = "လက်ရှိအချက်အလက်များ အားလုံးပျက်စီးသွားပါမည်။ သေချာပါသလား။";
+    const proceed = Platform.OS === 'web' ? confirm(confirmMsg) : true;
+
+    if (proceed) {
+      if (Platform.OS !== 'web') {
+        Alert.alert("Confirm", confirmMsg, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Restore", style: "destructive", onPress: async () => performRestore() }
+        ]);
+      } else {
+        performRestore();
+      }
+    }
+  };
+
+  const performRestore = async () => {
+    setImporting(true);
+    const success = await restoreData(backupText);
+    if (success) {
+      if (refreshData) await refreshData();
+      alert("အောင်မြင်ပါသည်\nအချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
+      router.replace("/members");
+    } else {
+      alert("အမှား\nစာသားများ မပြည့်စုံသဖြင့် Restore မအောင်မြင်ပါ။");
+    }
+    setImporting(false);
   };
 
   const handleClear = () => {
-    const msg = "System Reset သတိပေးချက်\n\nဤလုပ်ဆောင်ချက်သည် အသင်းဝင်များ၊ ငွေစာရင်းများ၊ မှတ်တမ်းများ အားလုံးကို အပြီးတိုင် ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ ဆက်လုပ်မည်လား။";
-    
-    if (Platform.OS === "web") {
+    const msg = "အချက်အလက်အားလုံးကို ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ သေချာပါသလား။";
+    if (Platform.OS === 'web') {
       if (confirm(msg)) {
-        if (confirm("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း\n\nတကယ်ဖျက်မည်မှာ သေချာပါသလား။")) {
-          clearAllData().then(async () => {
-            alert("အောင်မြင်ပါသည်\nSystem Reset ပြုလုပ်ပြီးပါပြီ။");
-            router.replace("/");
-          });
-        }
+        clearAllData().then(() => {
+          alert("Reset ပြီးပါပြီ။");
+          router.replace("/");
+        });
       }
-      return;
+    } else {
+      Alert.alert("Warning", msg, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete All", style: "destructive", onPress: async () => {
+          await clearAllData();
+          if (refreshData) await refreshData();
+          router.replace("/");
+        }}
+      ]);
     }
-
-    Alert.alert("System Reset သတိပေးချက်", msg, [
-      { text: "မဖျက်ပါ", style: "cancel" },
-      {
-        text: "အတည်ပြုသည်",
-        style: "destructive",
-        onPress: () => {
-          Alert.alert("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း", "တကယ်ဖျက်မည်မှာ သေချာပါသလား။", [
-            { text: "မဖျက်ပါ", style: "cancel" },
-            { text: "ဖျက်မည်", style: "destructive", onPress: async () => {
-              await clearAllData();
-              if (refreshData) await refreshData();
-              setTimeout(() => {
-                Alert.alert("အောင်မြင်ပါသည်", "System Reset ပြုလုပ်ပြီးပါပြီ။");
-              }, 100);
-            }}
-          ]);
-        },
-      },
-    ]);
   };
 
   return (
@@ -253,47 +164,46 @@ export default function DataManagementScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.instruction}>Full System Backup & Restore</Text>
+          <Text style={styles.instruction}>Data Backup & Restore System</Text>
+          
+          <Pressable 
+            style={[styles.actionBtn, { backgroundColor: "#6366F1", marginBottom: 15 }]} 
+            onPress={handleBackup} 
+            disabled={processing}
+          >
+            {processing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="cloud-upload-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.btnText}>Backup (Download/Share)</Text>
+              </View>
+            )}
+          </Pressable>
+
           <TextInput
             style={styles.input}
             multiline
-            placeholder="Backup Code ကို ဒီမှာ Paste လုပ်ပါ..."
+            placeholder="Restore လုပ်ရန် Backup စာသားများကို ဒီမှာ Paste လုပ်ပါ..."
             value={backupText}
             onChangeText={setBackupText}
             textAlignVertical="top"
-            placeholderTextColor={Colors.light.textSecondary}
           />
-          <View style={styles.btnRow}>
-            <Pressable 
-              style={[styles.actionBtn, { backgroundColor: "#6366F1" }]} 
-              onPress={handleBackup} 
-              disabled={importing || processing}
-            >
-              {processing ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.btnText}>
-                  {Platform.OS === 'web' ? "Download Backup File" : "Backup to File"}
-                </Text>
-              )}
-            </Pressable>
-          </View>
+
           <Pressable 
-            style={[styles.actionBtn, { backgroundColor: "#F59E0B", marginTop: 10 }]} 
+            style={[styles.actionBtn, { backgroundColor: "#F59E0B" }]} 
             onPress={handleRestore} 
             disabled={importing}
           >
-            <Text style={styles.btnText}>
-              {Platform.OS === 'web' ? "Restore from File" : "Restore from Backup Text"}
-            </Text>
-          </Pressable>
-          <View style={styles.divider} />
-          <Text style={[styles.instruction, { color: "#EF4444", marginTop: 10 }]}>Danger Zone (သတိထားရန်)</Text>
-          <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={handleClear}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="trash-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
-              <Text style={styles.btnText}>System Reset (Delete All)</Text>
+              <Ionicons name="download-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.btnText}>Restore from Textbox</Text>
             </View>
+          </Pressable>
+
+          <View style={styles.divider} />
+          <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={handleClear}>
+            <Text style={styles.btnText}>System Reset (Delete All)</Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -307,10 +217,9 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   backBtn: { padding: 4 },
   content: { padding: 20, flexGrow: 1 },
-  instruction: { fontSize: 14, color: Colors.light.text, marginBottom: 12, fontFamily: "Inter_400Regular", lineHeight: 20 },
-  input: { flex: 1, minHeight: 200, backgroundColor: Colors.light.surface, borderRadius: 12, padding: 16, fontSize: 14, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border, marginBottom: 20 },
-  btnRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10 },
-  actionBtn: { flex: 1, paddingVertical: 16, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  instruction: { fontSize: 14, color: Colors.light.text, marginBottom: 12, fontFamily: "Inter_400Regular" },
+  input: { flex: 1, minHeight: 250, backgroundColor: Colors.light.surface, borderRadius: 12, padding: 16, fontSize: 12, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border, marginBottom: 20 },
+  actionBtn: { paddingVertical: 16, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   btnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
-  divider: { height: 1, backgroundColor: Colors.light.border, marginVertical: 20, borderRadius: 1 },
+  divider: { height: 1, backgroundColor: Colors.light.border, marginVertical: 30 },
 });
