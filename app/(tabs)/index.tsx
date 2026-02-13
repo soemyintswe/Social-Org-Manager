@@ -136,17 +136,17 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.statsGrid}>
-        <StatCard icon="people" label="အသင်းဝင်" value={(members?.length || 0).toString()} color="#8B5CF6" onPress={() => router.push("/members")} />
+        <StatCard icon="people" label="အသင်းဝင်" value={(members?.length || 0).toString()} color="#8B5CF6" onPress={() => router.push("/members" as any)} />
         <StatCard icon="wallet" label="စုစုပေါင်းလက်ကျန်" value={formatCurrency(getTotalBalance())} color="#10B981" />
-        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" onPress={() => router.push("/loans")} />
-        <StatCard icon="calendar" label="မှတ်တမ်းများ" value={(transactions?.length || 0).toString()} color="#3B82F6" onPress={() => router.push("/transactions")} />
+        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" onPress={() => router.push("/loans" as any)} />
+        <StatCard icon="calendar" label="မှတ်တမ်းများ" value={(transactions?.length || 0).toString()} color="#3B82F6" onPress={() => router.push("/transactions" as any)} />
       </View>
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
       <View style={styles.quickActions}>
-        <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member")} />
-        <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction")} />
-        <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan")} />
+        <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />
+        <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />
+        <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />
       </View>
 
       {recentTxns.length > 0 && (

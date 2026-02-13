@@ -29,6 +29,7 @@ export default function AccountSettingsScreen() {
     setSaving(true);
     try {
       await updateAccountSettings({
+        ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
         openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",

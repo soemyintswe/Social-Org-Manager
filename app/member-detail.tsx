@@ -49,6 +49,7 @@ export default function MemberDetailScreen() {
   const [editPhone, setEditPhone] = useState(member?.phone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
   const [editResignDate, setEditResignDate] = useState(member?.resignDate || "");
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
   if (!member) {
@@ -231,7 +232,7 @@ export default function MemberDetailScreen() {
                     <Ionicons name={t.type === 'income' ? "arrow-down" : "arrow-up"} size={16} color={t.type === 'income' ? Colors.light.success : Colors.light.accent} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.txnCat}>{t.categoryLabel || CATEGORY_LABELS[t.category] || t.category}</Text>
+                    <Text style={styles.txnCat}>{t.categoryLabel || CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
                     <Text style={styles.txnDate}>{new Date(t.date).toLocaleDateString()}</Text>
                   </View>
                   <Text style={[styles.txnAmount, { color: t.type === 'income' ? Colors.light.success : Colors.light.accent }]}>

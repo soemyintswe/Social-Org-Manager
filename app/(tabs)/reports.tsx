@@ -361,7 +361,7 @@ export default function ReportsScreen() {
                 </View>
 
                 <ScrollView showsVerticalScrollIndicator={false}>
-                {members.map((member) => (
+                {members.map((member: any) => (
                   <View key={member.id} style={styles.tableRow}>
                     <View style={styles.tableNameCol}>
                       <Text style={styles.tableName} numberOfLines={1}>

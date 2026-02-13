@@ -81,10 +81,12 @@ export default function DataManagementScreen() {
       }
 
       // Native Mobile (Expo Go) အတွက် ပုံမှန် Sharing စနစ်
+      // @ts-ignore
       const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
       if (directory) {
         const fileName = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
         const fileUri = directory + fileName;
+        // @ts-ignore
         await FileSystem.writeAsStringAsync(fileUri, dataString, { encoding: FileSystem.EncodingType.UTF8 });
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(fileUri);

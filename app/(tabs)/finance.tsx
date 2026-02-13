@@ -47,7 +47,7 @@ function TransactionRow({ txn, memberName, onDelete }: {
   onDelete: (id: string) => void;
 }) {
   const isIncome = txn.type === "income";
-  const isTransfer = txn.type === "transfer";
+  const isTransfer = (txn.type as string) === "transfer";
   const paymentMethod = (txn as any).paymentMethod || "cash";
 
   const dateObj = useMemo(() => {
@@ -198,7 +198,7 @@ export default function FinanceScreen() {
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
-    const m = members.find((member) => member.id === id);
+    const m = members.find((member: any) => member.id === id);
     if (!m) return "";
     const anyM = m as any;
     if (anyM.name) return anyM.name;
@@ -434,7 +434,7 @@ export default function FinanceScreen() {
             );
           } else {
             const loan = item as Loan;
-            const member = members.find(m => m.id === loan.memberId);
+            const member = members.find((m: any) => m.id === loan.memberId);
             return (
               <LoanRow
                 loan={loan}

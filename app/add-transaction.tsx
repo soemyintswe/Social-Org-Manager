@@ -189,7 +189,7 @@ export default function AddTransactionScreen() {
       type: type,
     };
     const updated = [...customCategories, newCat];
-    setCustomCategories(updated);
+    setCustomCategories(updated as any);
     await AsyncStorage.setItem("@custom_categories", JSON.stringify(updated));
     setNewCategoryName("");
     setShowAddCategoryInput(false);
