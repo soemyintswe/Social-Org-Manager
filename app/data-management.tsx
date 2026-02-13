@@ -11,6 +11,9 @@ import {
   ScrollView,
   Share,
 } from "react-native";
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -25,11 +28,18 @@ export default function DataManagementScreen() {
   const [backupText, setBackupText] = useState("");
 
   const handleBackup = async () => {
+    let dataString = "";
     try {
       const data = await exportData();
+      dataString = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+
+      if (dataString === "{}" || dataString === "[]") {
+        Alert.alert("No Data", "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။ Restore အရင်လုပ်ပါ။");
+        return;
+      }
       
       if (Platform.OS === 'web') {
-        const blob = new Blob([data], { type: 'application/json' });
+        const blob = new Blob([dataString], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -41,17 +51,43 @@ export default function DataManagementScreen() {
         return;
       }
 
-      setBackupText(data);
-      Alert.alert("Backup Ready", "အချက်အလက်များကို အောက်ပါကွက်လပ်တွင် ဖော်ပြထားပါသည်။ Copy ကူးယူ၍ သိမ်းဆည်းထားနိုင်ပါသည်။", [
+      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      
+      if (directory) {
+        try {
+          const fileName = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
+          const fileUri = directory + fileName;
+
+          await FileSystem.writeAsStringAsync(fileUri, dataString, {
+            encoding: FileSystem.EncodingType.UTF8,
+          });
+
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(fileUri, {
+              mimeType: 'application/json',
+              dialogTitle: 'Backup File ကို သိမ်းဆည်းပါ',
+              UTI: 'public.json',
+            });
+            return;
+          }
+        } catch (err) {
+          console.warn("File save failed, falling back to text share:", err);
+        }
+      }
+
+      // Fallback to text share
+      setBackupText(dataString);
+      Alert.alert("Backup Ready", "ဖိုင်သိမ်းဆည်းမရနိုင်ပါ။ Text ကို Copy/Share လုပ်၍ သိမ်းဆည်းနိုင်ပါသည်။", [
         {
-          text: "Share/Copy",
+          text: "Share Text",
           onPress: async () => {
-            await Share.share({ message: data });
+            await Share.share({ message: dataString });
           },
         },
         { text: "OK" },
       ]);
-    } catch (e) {
+    } catch (e: any) {
+      console.warn("Backup Error:", e);
       Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
     }
   };
@@ -88,6 +124,43 @@ export default function DataManagementScreen() {
         reader.readAsText(file);
       };
       input.click();
+      return;
+    }
+
+    // Mobile Restore Options
+    if (!backupText.trim()) {
+      Alert.alert("Restore Options", "Backup ဖိုင်ကို ရွေးချယ်မလား (သို့) Text ထည့်မလား?", [
+        {
+          text: "Select File",
+          onPress: async () => {
+            try {
+              const result = await DocumentPicker.getDocumentAsync({
+                type: 'application/json',
+                copyToCacheDirectory: true
+              });
+              
+              if (result.canceled) return;
+              
+              const file = result.assets[0];
+              const content = await FileSystem.readAsStringAsync(file.uri);
+              
+              setImporting(true);
+              const success = await restoreData(content);
+              if (success) {
+                if (refreshData) await refreshData();
+                Alert.alert("အောင်မြင်ပါသည်", "အချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
+              } else {
+                Alert.alert("အမှား", "Restore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
+              }
+              setImporting(false);
+            } catch (e) {
+              Alert.alert("Error", "ဖိုင်ဖတ်မရပါ။ Text ထည့်သွင်းနည်းကို အသုံးပြုပါ။");
+            }
+          }
+        },
+        { text: "Use Text Input", onPress: () => {} }, // Do nothing, let user type
+        { text: "Cancel", style: "cancel" }
+      ]);
       return;
     }
 
