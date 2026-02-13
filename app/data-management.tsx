@@ -33,15 +33,15 @@ export default function DataManagementScreen() {
     if (processing) return;
     setProcessing(true);
     console.log("Starting backup...");
-    let dataString = "";
+    
     try {
       const data = await exportData();
-      dataString = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+      const dataString = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 
       if (!data || dataString === "{}" || dataString === "[]") {
         const msg = "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။ Restore အရင်လုပ်ပါ။";
         if (Platform.OS === 'web') {
-          (window as any).alert(msg);
+          alert(msg);
         } else {
           Alert.alert("No Data", msg);
         }
@@ -49,23 +49,29 @@ export default function DataManagementScreen() {
         return;
       }
       
+      // Web သို့မဟုတ် Replit Web View (Phone Browser) အတွက် Download Logic
       if (Platform.OS === 'web') {
-        const blob = new (window as any).Blob([dataString], { type: 'application/json' });
-        const url = (window as any).URL.createObjectURL(blob);
-        const a = (document as any).createElement('a');
-        a.href = url;
-        a.download = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
-        (document as any).body.appendChild(a);
-        a.click();
-        (document as any).body.removeChild(a);
-        (window as any).URL.revokeObjectURL(url);
-        setProcessing(false);
-        return;
+        try {
+          const blob = new Blob([dataString], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setProcessing(false);
+          return;
+        } catch (webErr) {
+          console.error("Web Download Error:", webErr);
+        }
       }
 
+      // Native Mobile (Expo Go App) အတွက် Logic
       const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
       
-      if (directory) {
+      if (directory && Platform.OS !== 'web') {
         try {
           const fileName = `orghub_backup_${new Date().toISOString().split('T')[0]}.json`;
           const fileUri = directory + fileName;
@@ -80,6 +86,7 @@ export default function DataManagementScreen() {
               dialogTitle: 'Backup File ကို သိမ်းဆည်းပါ',
               UTI: 'public.json',
             });
+            setProcessing(false);
             return;
           }
         } catch (err) {
@@ -87,9 +94,9 @@ export default function DataManagementScreen() {
         }
       }
 
-      // Fallback to text share
+      // Fallback: အပေါ်ကနည်းလမ်းတွေ အလုပ်မလုပ်ရင် Text Share လုပ်မည်
       setBackupText(dataString);
-      Alert.alert("Backup Ready", "ဖိုင်သိမ်းဆည်းမရနိုင်ပါ။ Text ကို Copy/Share လုပ်၍ သိမ်းဆည်းနိုင်ပါသည်။", [
+      Alert.alert("Backup Ready", "ဖိုင်တိုက်ရိုက်သိမ်းဆည်းမရနိုင်ပါ။ အောက်ပါစာသားများကို Copy ကူး၍ သိမ်းဆည်းနိုင်ပါသည်။", [
         {
           text: "Share Text",
           onPress: async () => {
@@ -100,40 +107,37 @@ export default function DataManagementScreen() {
       ]);
     } catch (e: any) {
       console.warn("Backup Error:", e);
-      if (Platform.OS === 'web') {
-        (window as any).alert("Backup Error: " + (e.message || "Unknown error"));
-      } else {
-        Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
-      }
+      const errorMsg = "Backup Error: " + (e.message || "Unknown error");
+      Platform.OS === 'web' ? alert(errorMsg) : Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
     }
     setProcessing(false);
   };
 
   const handleRestore = async () => {
     if (Platform.OS === 'web') {
-      const input = (document as any).createElement('input');
+      const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'application/json';
       input.onchange = async (e: any) => {
         const file = e.target.files[0];
         if (!file) return;
         
-        if (!(window as any).confirm("လက်ရှိအချက်အလက်များအားလုံး ပျက်စီးပြီး Backup ဖိုင်မှ အချက်အလက်များဖြင့် အစားထိုးပါမည်။ သေချာပါသလား။")) {
+        if (!confirm("လက်ရှိအချက်အလက်များအားလုံး ပျက်စီးပြီး Backup ဖိုင်မှ အချက်အလက်များဖြင့် အစားထိုးပါမည်။ သေချာပါသလား။")) {
           return;
         }
 
         setImporting(true);
-        const reader = new (window as any).FileReader();
+        const reader = new FileReader();
         reader.onload = async (ev) => {
           const content = ev.target?.result as string;
           if (content) {
             const success = await restoreData(content);
             if (success) {
               if (refreshData) await refreshData();
-              (window as any).alert("အောင်မြင်ပါသည်\nအချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
-              (window as any).location.href = "/members";
+              alert("အောင်မြင်ပါသည်\nအချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
+              router.replace("/members");
             } else {
-              (window as any).alert("အမှား\nRestore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
+              alert("အမှား\nRestore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
             }
           }
           setImporting(false);
@@ -144,7 +148,7 @@ export default function DataManagementScreen() {
       return;
     }
 
-    // Mobile Restore Options
+    // Native Mobile Restore
     if (!backupText.trim()) {
       Alert.alert("Restore Options", "Backup ဖိုင်ကို ရွေးချယ်မလား (သို့) Text ထည့်မလား?", [
         {
@@ -175,14 +179,9 @@ export default function DataManagementScreen() {
             }
           }
         },
-        { text: "Use Text Input", onPress: () => {} }, // Do nothing, let user type
+        { text: "Use Text Input", onPress: () => {} },
         { text: "Cancel", style: "cancel" }
       ]);
-      return;
-    }
-
-    if (!backupText.trim()) {
-      Alert.alert("သတိပေးချက်", "Restore လုပ်ရန် Backup စာသားများကို ကွက်လပ်တွင် ထည့်ပါ။");
       return;
     }
 
@@ -196,12 +195,7 @@ export default function DataManagementScreen() {
           const success = await restoreData(backupText);
           if (success) {
             if (refreshData) await refreshData();
-            if (Platform.OS === "web") {
-              (window as any).alert("အောင်မြင်ပါသည်\nအချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
-              (window as any).location.href = "/members";
-            } else {
-              Alert.alert("အောင်မြင်ပါသည်", "အချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
-            }
+            Alert.alert("အောင်မြင်ပါသည်", "အချက်အလက်များကို ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
           } else {
             Alert.alert("အမှား", "Restore မအောင်မြင်ပါ။ Format မှားယွင်းနေနိုင်ပါသည်။");
           }
@@ -212,41 +206,39 @@ export default function DataManagementScreen() {
   };
 
   const handleClear = () => {
+    const msg = "System Reset သတိပေးချက်\n\nဤလုပ်ဆောင်ချက်သည် အသင်းဝင်များ၊ ငွေစာရင်းများ၊ မှတ်တမ်းများ အားလုံးကို အပြီးတိုင် ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ ဆက်လုပ်မည်လား။";
+    
     if (Platform.OS === "web") {
-      if ((window as any).confirm("System Reset သတိပေးချက်\n\nဤလုပ်ဆောင်ချက်သည် အသင်းဝင်များ၊ ငွေစာရင်းများ၊ မှတ်တမ်းများ အားလုံးကို အပြီးတိုင် ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ ဆက်လုပ်မည်လား။")) {
-        if ((window as any).confirm("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း\n\nတကယ်ဖျက်မည်မှာ သေချာပါသလား။")) {
+      if (confirm(msg)) {
+        if (confirm("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း\n\nတကယ်ဖျက်မည်မှာ သေချာပါသလား။")) {
           clearAllData().then(async () => {
-            (window as any).alert("အောင်မြင်ပါသည်\nSystem Reset ပြုလုပ်ပြီးပါပြီ။");
-            (window as any).location.href = "/";
+            alert("အောင်မြင်ပါသည်\nSystem Reset ပြုလုပ်ပြီးပါပြီ။");
+            router.replace("/");
           });
         }
       }
       return;
     }
 
-    Alert.alert(
-      "System Reset သတိပေးချက်",
-      "ဤလုပ်ဆောင်ချက်သည် အသင်းဝင်များ၊ ငွေစာရင်းများ၊ မှတ်တမ်းများ အားလုံးကို အပြီးတိုင် ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ ဆက်လုပ်မည်လား။",
-      [
-        { text: "မဖျက်ပါ", style: "cancel" },
-        {
-          text: "အတည်ပြုသည်",
-          style: "destructive",
-          onPress: () => {
-            Alert.alert("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း", "တကယ်ဖျက်မည်မှာ သေချာပါသလား။", [
-              { text: "မဖျက်ပါ", style: "cancel" },
-              { text: "ဖျက်မည်", style: "destructive", onPress: async () => {
-                await clearAllData();
-                if (refreshData) await refreshData();
-                setTimeout(() => {
-                  Alert.alert("အောင်မြင်ပါသည်", "System Reset ပြုလုပ်ပြီးပါပြီ။");
-                }, 100);
-              }}
-            ]);
-          },
+    Alert.alert("System Reset သတိပေးချက်", msg, [
+      { text: "မဖျက်ပါ", style: "cancel" },
+      {
+        text: "အတည်ပြုသည်",
+        style: "destructive",
+        onPress: () => {
+          Alert.alert("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း", "တကယ်ဖျက်မည်မှာ သေချာပါသလား။", [
+            { text: "မဖျက်ပါ", style: "cancel" },
+            { text: "ဖျက်မည်", style: "destructive", onPress: async () => {
+              await clearAllData();
+              if (refreshData) await refreshData();
+              setTimeout(() => {
+                Alert.alert("အောင်မြင်ပါသည်", "System Reset ပြုလုပ်ပြီးပါပြီ။");
+              }, 100);
+            }}
+          ]);
         },
-      ]
-    );
+      },
+    ]);
   };
 
   return (
@@ -272,16 +264,28 @@ export default function DataManagementScreen() {
             placeholderTextColor={Colors.light.textSecondary}
           />
           <View style={styles.btnRow}>
-            <Pressable style={[styles.actionBtn, { backgroundColor: "#6366F1" }]} onPress={handleBackup} disabled={importing || processing}>
+            <Pressable 
+              style={[styles.actionBtn, { backgroundColor: "#6366F1" }]} 
+              onPress={handleBackup} 
+              disabled={importing || processing}
+            >
               {processing ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.btnText}>{Platform.OS === 'web' ? "Download Backup File" : "Backup"}</Text>
+                <Text style={styles.btnText}>
+                  {Platform.OS === 'web' ? "Download Backup File" : "Backup to File"}
+                </Text>
               )}
             </Pressable>
           </View>
-          <Pressable style={[styles.actionBtn, { backgroundColor: "#F59E0B", marginTop: 10 }]} onPress={handleRestore} disabled={importing}>
-            <Text style={styles.btnText}>{Platform.OS === 'web' ? "Restore from File" : "Restore from Backup Text"}</Text>
+          <Pressable 
+            style={[styles.actionBtn, { backgroundColor: "#F59E0B", marginTop: 10 }]} 
+            onPress={handleRestore} 
+            disabled={importing}
+          >
+            <Text style={styles.btnText}>
+              {Platform.OS === 'web' ? "Restore from File" : "Restore from Backup Text"}
+            </Text>
           </Pressable>
           <View style={styles.divider} />
           <Text style={[styles.instruction, { color: "#EF4444", marginTop: 10 }]}>Danger Zone (သတိထားရန်)</Text>
