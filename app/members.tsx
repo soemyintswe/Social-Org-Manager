@@ -262,7 +262,7 @@ export default function MembersScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
    <Text style={styles.headerTitle}>အသင်းဝင်များ ({members?.length || 0})</Text>
-        <View style={{ flexDirection: 'row', marginRight: 10, alignItems: 'center', justifyContent: 'flex-end' }}>
+        <View style={{ flexDirection: 'row', marginRight: 50, alignItems: 'center', justifyContent: 'flex-end' }}>
         <Pressable onPress={() => router.push("/data-management")} style={styles.addBtn}>
         <Ionicons name="cloud-download-outline" size={24} color={Colors.light.tint} />
          </Pressable>
@@ -308,6 +308,13 @@ export default function MembersScreen() {
           >
             <Text style={[styles.statusChipText, filterStatus === "inactive" && styles.statusChipTextActive]}>နှုတ်ထွက်</Text>
           </Pressable>
+
+          <Pressable
+              style={[styles.statusChip, filterAge === "upcoming" && styles.statusChipActive]}
+              onPress={() => setFilterAge("upcoming")}
+            >
+              <Text style={[styles.statusChipText, filterAge === "upcoming" && styles.statusChipTextActive]}>မွေးနေ့နီးသူများ</Text>
+            </Pressable>
         </View>
 
         <View style={styles.statusFilterRow}>
@@ -332,19 +339,21 @@ export default function MembersScreen() {
         </View>
 
         <View style={styles.statusFilterRow}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3 }}>
             <Pressable
               style={[styles.statusChip, filterAge === "all" && styles.statusChipActive]}
               onPress={() => setFilterAge("all")}
             >
               <Text style={[styles.statusChipText, filterAge === "all" && styles.statusChipTextActive]}>အသက် အားလုံး</Text>
             </Pressable>
-            <Pressable
+
+           <Pressable
               style={[styles.statusChip, filterAge === "under18" && styles.statusChipActive]}
               onPress={() => setFilterAge("under18")}
             >
               <Text style={[styles.statusChipText, filterAge === "under18" && styles.statusChipTextActive]}>18 နှစ်အောက်</Text>
             </Pressable>
+
             <Pressable
               style={[styles.statusChip, filterAge === "18-60" && styles.statusChipActive]}
               onPress={() => setFilterAge("18-60")}
@@ -357,12 +366,7 @@ export default function MembersScreen() {
             >
               <Text style={[styles.statusChipText, filterAge === "over60" && styles.statusChipTextActive]}>60 နှစ်အထက်</Text>
             </Pressable>
-            <Pressable
-              style={[styles.statusChip, filterAge === "upcoming" && styles.statusChipActive]}
-              onPress={() => setFilterAge("upcoming")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "upcoming" && styles.statusChipTextActive]}>မွေးနေ့နီးသူများ</Text>
-            </Pressable>
+            
                 <Pressable
                   style={[styles.statusChip, filterAge === "custom" && styles.statusChipActive]}
                   onPress={() => { setFilterAge("custom"); setCustomAgeModalVisible(true); }}
@@ -527,7 +531,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   backBtn: { padding: 4 },
-  addBtn: { padding: 4 },
+  addBtn: { padding: 8 },
   searchBar: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, margin: 15, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, height: 44 },
   searchInput: { flex: 1, marginLeft: 10, fontSize: 15, color: Colors.light.text },
   filterRow: { flexDirection: "row", paddingHorizontal: 15, marginBottom: 10, gap: 10 },
