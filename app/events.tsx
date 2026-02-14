@@ -217,7 +217,7 @@ export default function EventsScreen() {
         </View>
         <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>လှုပ်ရှားမှုနှင့် သတင်းများ</Text>
         <View style={{ width: 50, alignItems: 'flex-end' }}>
-          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={styles.addBtn}>
+          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.addBtn, { padding: 40 }]}>
             <Ionicons name="add" size={24} color={Colors.light.tint} {...({ title: "လှုပ်ရှားမှုအသစ်" } as any)} />
           </Pressable>
         </View>
@@ -341,8 +341,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  backBtn: { padding: 4 },
-  addBtn: { padding: 4 },
+  backBtn: { padding: 1 },
+  addBtn: { padding: 15 },
   list: { padding: 20 },
   card: { backgroundColor: "white", borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: Colors.light.border, overflow: 'hidden' },
   cardContent: { padding: 15 },
