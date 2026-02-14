@@ -212,15 +212,13 @@ export default function EventsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <View style={{ width: 50, alignItems: 'flex-start', display: 'none' }}>
-            
-        </View>
+        <View style={{ width: 50, alignItems: 'flex-start' }}>
+         <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.addBtn, { flexDirection: 'row', alignItems: 'center', padding: 4 }]}>
+           <Ionicons name="add" size={24} color={Colors.light.tint} />
+           <Text style={{ color: Colors.light.tint, marginLeft: 5, fontSize: 16, textAlign: 'left' }}>အသစ်ထည့်ရန်</Text>
+         </Pressable>        </View>
         <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>လှုပ်ရှားမှုနှင့် သတင်းများ</Text>
-        <View style={{ width: 50, alignItems: 'flex-end' }}>
-          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.addBtn, { padding: 40 }]}>
-            <Ionicons name="add" size={24} color={Colors.light.tint} {...({ title: "လှုပ်ရှားမှုအသစ်" } as any)} />
-          </Pressable>
-        </View>
+        <View style={{ width: 50, alignItems: 'flex-end', display: 'none' }}/>
       </View>
 
       <FlatList
