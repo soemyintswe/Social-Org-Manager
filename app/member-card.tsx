@@ -124,6 +124,11 @@ export default function MemberCardScreen() {
                   <Text style={styles.detailLabel}>PHONE</Text>
                   <Text style={styles.detailValue}>{phoneDisplay || '-'}</Text>
                 </View>
+
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>EMAIL</Text>
+                  <Text style={styles.detailValue}>{member.email || '-'}</Text>
+                </View>
               </View>
             </View>
 

@@ -18,7 +18,13 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { CATEGORY_LABELS } from "@/lib/types";
+import {
+  CATEGORY_LABELS,
+  MEMBER_STATUS_LABELS,
+  MEMBER_STATUS_VALUES,
+  normalizeMemberStatus,
+  type MemberStatus,
+} from "@/lib/types";
 import { formatDateDdMmYyyy, formatPhoneForDisplay, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
 const getAvatarLabel = (name: string) => {
@@ -70,8 +76,11 @@ export default function MemberDetailScreen() {
   const [editPhone, setEditPhone] = useState(member?.phone || "");
   const [editSecondaryPhone, setEditSecondaryPhone] = useState((member as any)?.secondaryPhone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
-  const [editResignDate, setEditResignDate] = useState(member?.resignDate || "");
+  const [editStatus, setEditStatus] = useState<MemberStatus>(normalizeMemberStatus(member?.status));
+  const [editStatusDate, setEditStatusDate] = useState((member as any)?.statusDate || member?.resignDate || "");
+  const [editStatusReason, setEditStatusReason] = useState((member as any)?.statusReason || "");
   const [showDobPicker, setShowDobPicker] = useState(false);
+  const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -149,6 +158,7 @@ export default function MemberDetailScreen() {
       }
 
       const { primaryPhone, secondaryPhone } = splitPhoneNumbers(editPhone, editSecondaryPhone);
+      const normalizedStatusDate = normalizeDateText(editStatusDate);
       await updateMember(member.id, {
         id: editMemberId.trim(),
         name: editName.trim(),
@@ -157,7 +167,10 @@ export default function MemberDetailScreen() {
         phone: primaryPhone,
         secondaryPhone: secondaryPhone || undefined,
         address: editAddress.trim(),
-        resignDate: normalizeDateText(editResignDate),
+        status: normalizeMemberStatus(editStatus),
+        statusDate: normalizedStatusDate || undefined,
+        resignDate: normalizedStatusDate || undefined,
+        statusReason: editStatusReason.trim() || undefined,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
@@ -189,9 +202,10 @@ export default function MemberDetailScreen() {
   // createdAt error ကို ရှောင်ရန် helper variable
   const createdAtValue = (member as any)?.createdAt;
 
-  // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
-  const isResigned = member?.resignDate && String(member.resignDate).trim() !== "";
-  const statusLabel = isResigned ? "နှုတ်ထွက်" : "ပုံမှန်";
+  const currentStatus = normalizeMemberStatus(member?.status);
+  const statusLabel = MEMBER_STATUS_LABELS[currentStatus];
+  const statusDateLabel = (member as any)?.statusDate || member?.resignDate || "";
+  const statusReasonLabel = (member as any)?.statusReason || "";
 
   if (!member) {
     return (
@@ -301,16 +315,75 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Secondary Phone Number</Text>
             <TextInput style={styles.editInput} value={editSecondaryPhone} onChangeText={setEditSecondaryPhone} keyboardType="phone-pad" />
 
+            <Text style={styles.editLabel}>Status</Text>
+            <View style={styles.statusRow}>
+              {MEMBER_STATUS_VALUES.map((statusOption) => (
+                <Pressable
+                  key={statusOption}
+                  style={[styles.statusChip, editStatus === statusOption ? styles.statusChipActive : undefined]}
+                  onPress={() => setEditStatus(statusOption)}
+                >
+                  <Text style={[styles.statusChipText, editStatus === statusOption ? styles.statusChipTextActive : undefined]}>
+                    {MEMBER_STATUS_LABELS[statusOption]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.editLabel}>Status Date</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TextInput
+                style={[styles.editInput, { flex: 1 }]}
+                value={editStatusDate}
+                onChangeText={setEditStatusDate}
+                placeholder="DD/MM/YYYY"
+              />
+              {Platform.OS === "web" ? (
+                <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }]}>
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                  {React.createElement("input", {
+                    type: "date",
+                    style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
+                    onChange: (e: any) => {
+                      if (e.target.value) {
+                        const [y, m, d] = e.target.value.split("-");
+                        setEditStatusDate(normalizeDateText(`${d}/${m}/${y}`));
+                      }
+                    },
+                  })}
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => setShowStatusDatePicker(true)}
+                  style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }]}
+                >
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                </Pressable>
+              )}
+            </View>
+            {showStatusDatePicker && Platform.OS !== "web" && (
+              <DateTimePicker
+                value={parseGregorianDate(editStatusDate) || new Date()}
+                mode="date"
+                display="default"
+                onChange={(_event, selectedDate) => {
+                  if (Platform.OS === "android") setShowStatusDatePicker(false);
+                  if (selectedDate) setEditStatusDate(formatDateDdMmYyyy(selectedDate));
+                }}
+              />
+            )}
+
+            <Text style={styles.editLabel}>Status Note</Text>
+            <TextInput
+              style={[styles.editInput, { minHeight: 70, textAlignVertical: "top" }]}
+              value={editStatusReason}
+              onChangeText={setEditStatusReason}
+              placeholder="အခြေအနေမှတ်ချက်"
+              multiline
+            />
+
             <Text style={styles.editLabel}>Address</Text>
             <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
-
-            <Text style={styles.editLabel}>Resign Date (နှုတ်ထွက်သည့်နေ့)</Text>
-            <TextInput 
-              style={styles.editInput} 
-              value={editResignDate} 
-              onChangeText={setEditResignDate} 
-              placeholder="YYYY-MM-DD" 
-            />
 
             <Pressable style={styles.deleteBtn} onPress={handleDelete}>
               <Ionicons name="trash-outline" size={20} color="#EF4444" />
@@ -321,12 +394,13 @@ export default function MemberDetailScreen() {
           <View>
             <View style={styles.infoCard}>
               <InfoRow 
-                icon={isResigned ? "alert-circle-outline" : "checkmark-circle-outline"} 
+                icon={currentStatus === "active" ? "checkmark-circle-outline" : "alert-circle-outline"} 
                 label="အခြေအနေ" 
                 value={statusLabel} 
               />
               <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
-              {isResigned && <InfoRow icon="calendar-outline" label="နှုတ်ထွက်သည့်နေ့" value={member.resignDate} />}
+              <InfoRow icon="calendar-outline" label="Status Date" value={statusDateLabel} />
+              <InfoRow icon="document-text-outline" label="Status Note" value={statusReasonLabel} />
               <InfoRow icon="mail-outline" label="Email" value={member.email} />
               <InfoRow icon="call-outline" label="Phone" value={formatPhoneForDisplay(member.phone, (member as any).secondaryPhone) || member.phone} />
               <InfoRow icon="location-outline" label="Address" value={member.address} />
@@ -422,6 +496,20 @@ const styles = StyleSheet.create({
   editForm: { gap: 4 },
   editLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 12 },
   editInput: { backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
+  statusRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 },
+  statusChip: {
+    minWidth: "31%",
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
+  statusChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  statusChipText: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  statusChipTextActive: { color: "#fff", fontFamily: "Inter_600SemiBold" },
   deleteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, marginTop: 20 },
   deleteBtnText: { color: "#EF4444", fontWeight: "600" },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },

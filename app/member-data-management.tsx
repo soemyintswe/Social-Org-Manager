@@ -23,7 +23,7 @@ import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import * as store from "@/lib/storage";
-import type { Member } from "@/lib/types";
+import { normalizeMemberStatus, type Member } from "@/lib/types";
 import { normalizeDateText, splitPhoneNumbers } from "@/lib/member-utils";
 
 const MEMBER_AUTO_BACKUP_FILE = "members_auto_backup.json";
@@ -86,9 +86,22 @@ function normalizeMember(raw: unknown, index: number): Member | null {
       ? obj.phone2
       : "";
   const { primaryPhone, secondaryPhone } = splitPhoneNumbers(primaryPhoneInput, secondaryPhoneInput);
+  const status = normalizeMemberStatus(obj.status);
+  const statusDate = normalizeDateText(
+    typeof obj.statusDate === "string"
+      ? obj.statusDate
+      : typeof obj.resignDate === "string"
+      ? obj.resignDate
+      : ""
+  );
+  const statusReason =
+    typeof obj.statusReason === "string"
+      ? obj.statusReason.trim()
+      : typeof obj.resignReason === "string"
+      ? obj.resignReason.trim()
+      : "";
   const joinDate =
     normalizeDateText(typeof obj.joinDate === "string" ? obj.joinDate : "") || today;
-  const status = obj.status === "inactive" ? "inactive" : "active";
   const createdAt =
     typeof obj.createdAt === "string" && obj.createdAt.trim() ? obj.createdAt : nowIso;
   const color =
@@ -106,9 +119,20 @@ function normalizeMember(raw: unknown, index: number): Member | null {
     id,
     name,
     phone: primaryPhone,
+    email:
+      typeof obj.email === "string"
+        ? obj.email.trim()
+        : typeof obj["e-mail"] === "string"
+        ? (obj["e-mail"] as string).trim()
+        : typeof obj.mail === "string"
+        ? (obj.mail as string).trim()
+        : "",
     dob: normalizeDateText(typeof obj.dob === "string" ? obj.dob : ""),
     joinDate,
     status,
+    statusDate,
+    resignDate: statusDate,
+    statusReason,
     createdAt,
     color,
     avatarColor,
@@ -118,6 +142,12 @@ function normalizeMember(raw: unknown, index: number): Member | null {
   if (secondaryPhone) {
     (normalizedMember as any).secondaryPhone = secondaryPhone;
   }
+  if (!normalizedMember.email) delete (normalizedMember as any).email;
+  if (!statusDate) {
+    delete (normalizedMember as any).statusDate;
+    delete (normalizedMember as any).resignDate;
+  }
+  if (!statusReason) delete (normalizedMember as any).statusReason;
 
   return normalizedMember;
 }

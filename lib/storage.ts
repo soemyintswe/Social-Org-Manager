@@ -1,5 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings } from "./types";
+import {
+  Member,
+  OrgEvent,
+  Group,
+  AttendanceRecord,
+  Transaction,
+  Loan,
+  AccountSettings,
+  normalizeMemberStatus,
+} from "./types";
 import { normalizeDateText, splitPhoneNumbers } from "./member-utils";
 
 const KEYS = {
@@ -38,16 +47,35 @@ export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
 
 function normalizeMemberData(member: any): Member {
   const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member?.phone, member?.secondaryPhone);
+  const normalizedStatus = normalizeMemberStatus(member?.status);
+  const normalizedStatusDate = normalizeDateText(member?.statusDate || member?.resignDate);
+  const normalizedReason =
+    typeof member?.statusReason === "string"
+      ? member.statusReason.trim()
+      : typeof member?.resignReason === "string"
+      ? member.resignReason.trim()
+      : "";
+  const normalizedEmail = typeof member?.email === "string" ? member.email.trim() : "";
   const normalized = {
     ...member,
     phone: primaryPhone,
+    email: normalizedEmail,
     dob: normalizeDateText(member?.dob),
     joinDate: normalizeDateText(member?.joinDate) || new Date().toLocaleDateString("en-GB"),
-    resignDate: normalizeDateText(member?.resignDate),
+    status: normalizedStatus,
+    statusDate: normalizedStatusDate,
+    resignDate: normalizedStatusDate,
+    statusReason: normalizedReason,
   };
 
   if (secondaryPhone) normalized.secondaryPhone = secondaryPhone;
   else delete normalized.secondaryPhone;
+  if (!normalizedEmail) delete normalized.email;
+  if (!normalizedStatusDate) {
+    delete normalized.statusDate;
+    delete normalized.resignDate;
+  }
+  if (!normalizedReason) delete normalized.statusReason;
 
   return normalized as Member;
 }

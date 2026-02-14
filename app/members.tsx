@@ -17,7 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import type { Member } from "@/lib/types";
+import { MEMBER_STATUS_LABELS, MEMBER_STATUS_VALUES, normalizeMemberStatus, type Member, type MemberStatus } from "@/lib/types";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
@@ -31,7 +31,7 @@ export default function MembersScreen() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | MemberStatus>("all");
   const [filterGender, setFilterGender] = useState<"all" | "male" | "female">("all");
   const [filterAge, setFilterAge] = useState<"all" | "under18" | "18-60" | "over60" | "upcoming" | "custom">("all");
   const [showSortModal, setShowSortModal] = useState(false);
@@ -105,7 +105,7 @@ export default function MembersScreen() {
     let data: MemberListItem[] = [...(members as MemberListItem[])];
 
     if (filterStatus !== "all") {
-      data = data.filter((m) => m.status === filterStatus);
+      data = data.filter((m) => normalizeMemberStatus(m.status) === filterStatus);
     }
 
     if (filterAge !== "all") {
@@ -159,9 +159,13 @@ export default function MembersScreen() {
     }
 
     if (search) {
+      const needle = search.toLowerCase();
       data = data.filter(m => 
-        (m.name || "").toLowerCase().includes(search.toLowerCase()) || 
-        String(m.id || "").toLowerCase().includes(search.toLowerCase())
+        (m.name || "").toLowerCase().includes(needle) ||
+        String(m.id || "").toLowerCase().includes(needle) ||
+        (m.email || "").toLowerCase().includes(needle) ||
+        (m.phone || "").toLowerCase().includes(needle) ||
+        ((m as any).secondaryPhone || "").toLowerCase().includes(needle)
       );
     }
 
@@ -293,38 +297,38 @@ export default function MembersScreen() {
           <Ionicons name="search" size={20} color={Colors.light.textSecondary} />
           <TextInput 
             style={styles.searchInput} 
-            placeholder="အမည် သို့မဟုတ် ID ရှာရန်..." 
+            placeholder="အမည် / ID / Phone / Email ရှာရန်..." 
             value={search}
             onChangeText={setSearch}
           />
         </View>
 
         <View style={styles.statusFilterRow}>
-          <Pressable
-            style={[styles.statusChip, filterStatus === "all" && styles.statusChipActive]}
-            onPress={() => setFilterStatus("all")}
-          >
-            <Text style={[styles.statusChipText, filterStatus === "all" && styles.statusChipTextActive]}>အားလုံး</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.statusChip, filterStatus === "active" && styles.statusChipActive]}
-            onPress={() => setFilterStatus("active")}
-          >
-            <Text style={[styles.statusChipText, filterStatus === "active" && styles.statusChipTextActive]}>Active</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.statusChip, filterStatus === "inactive" && styles.statusChipActive]}
-            onPress={() => setFilterStatus("inactive")}
-          >
-            <Text style={[styles.statusChipText, filterStatus === "inactive" && styles.statusChipTextActive]}>နှုတ်ထွက်</Text>
-          </Pressable>
-
-          <Pressable
-              style={[styles.statusChip, filterAge === "upcoming" && styles.statusChipActive]}
-              onPress={() => setFilterAge("upcoming")}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            <Pressable
+              style={[styles.statusChip, filterStatus === "all" && styles.statusChipActive]}
+              onPress={() => setFilterStatus("all")}
             >
-              <Text style={[styles.statusChipText, filterAge === "upcoming" && styles.statusChipTextActive]}>မွေးနေ့နီးသူများ</Text>
+              <Text style={[styles.statusChipText, filterStatus === "all" && styles.statusChipTextActive]}>အားလုံး</Text>
             </Pressable>
+            {MEMBER_STATUS_VALUES.map((statusOption) => (
+              <Pressable
+                key={statusOption}
+                style={[styles.statusChip, filterStatus === statusOption && styles.statusChipActive]}
+                onPress={() => setFilterStatus(statusOption)}
+              >
+                <Text style={[styles.statusChipText, filterStatus === statusOption && styles.statusChipTextActive]}>
+                  {MEMBER_STATUS_LABELS[statusOption]}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable
+                style={[styles.statusChip, filterAge === "upcoming" && styles.statusChipActive]}
+                onPress={() => setFilterAge("upcoming")}
+              >
+                <Text style={[styles.statusChipText, filterAge === "upcoming" && styles.statusChipTextActive]}>မွေးနေ့နီးသူများ</Text>
+              </Pressable>
+          </ScrollView>
         </View>
 
         <View style={styles.statusFilterRow}>
@@ -424,6 +428,7 @@ export default function MembersScreen() {
               <Text style={styles.memberName}>{item.name}</Text>
               <Text style={styles.memberId}>ID: {item.id}</Text>
               <View style={styles.metaRow}>
+                <Text style={styles.metaText}>{MEMBER_STATUS_LABELS[normalizeMemberStatus(item.status)]}</Text>
                 {(() => {
                   const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
                   if (age === null) return null;
@@ -447,7 +452,12 @@ export default function MembersScreen() {
               <View style={styles.metaRow}>
                 {sortBy === 'joinDate' && <Text style={styles.metaText}>Joined: {item.joinDate}</Text>}
                 {sortBy === 'dob' && <Text style={styles.metaText}>DOB: {item.dob}</Text>}
-                {sortBy === 'name' && <Text style={styles.metaText}>{formatPhoneForDisplay(item.phone, (item as any).secondaryPhone) || item.phone}</Text>}
+                {sortBy === 'name' && (
+                  <Text style={styles.metaText}>
+                    {formatPhoneForDisplay(item.phone, (item as any).secondaryPhone) || item.phone}
+                    {item.email ? ` • ${item.email}` : ""}
+                  </Text>
+                )}
               </View>
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />

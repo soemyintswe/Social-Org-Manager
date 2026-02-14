@@ -19,7 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
+import { CATEGORY_LABELS, normalizeMemberStatus, TransactionCategory } from "@/lib/types";
 import { exportData } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
@@ -267,7 +267,9 @@ export default function DashboardScreen() {
   const upcomingBirthdays = useMemo(() => {
     if (!members) return [];
     
-    const filtered = members.filter((m: any) => m.dob && getOccurrenceDate(m.dob) !== null);
+    const filtered = members.filter(
+      (m: any) => normalizeMemberStatus(m.status) === "active" && m.dob && getOccurrenceDate(m.dob) !== null
+    );
 
     return filtered.sort((a: any, b: any) => {
         const dateA = getOccurrenceDate(a.dob);

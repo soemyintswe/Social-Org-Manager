@@ -1,5 +1,33 @@
 // lib/types.ts
 
+export const MEMBER_STATUS_VALUES = ["active", "resigned", "deceased", "expelled", "suspended"] as const;
+
+export type MemberStatus = (typeof MEMBER_STATUS_VALUES)[number];
+
+export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
+  active: "ပုံမှန်",
+  resigned: "နှုတ်ထွက်",
+  deceased: "ကွယ်လွန်",
+  expelled: "ထုတ်ပယ်",
+  suspended: "ဆိုင်းငံ့",
+};
+
+export function normalizeMemberStatus(value: unknown): MemberStatus {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "ပုံမှန်") return "active";
+  if (raw === "နှုတ်ထွက်") return "resigned";
+  if (raw === "ကွယ်လွန်") return "deceased";
+  if (raw === "ထုတ်ပယ်") return "expelled";
+  if (raw === "ဆိုင်းငံ့") return "suspended";
+  if (raw === "inactive") return "resigned";
+  if (raw === "suspend") return "suspended";
+  if (raw === "deactive") return "resigned";
+  if ((MEMBER_STATUS_VALUES as readonly string[]).includes(raw)) {
+    return raw as MemberStatus;
+  }
+  return "active";
+}
+
 export interface Member {
   id: string;
   name: string;
@@ -10,7 +38,10 @@ export interface Member {
   email?: string;
   address?: string;
   joinDate: string;
-  status: "active" | "inactive";
+  status: MemberStatus;
+  statusDate?: string;
+  statusReason?: string;
+  resignDate?: string;
   avatarColor?: string;
   createdAt: string;
   color: string;

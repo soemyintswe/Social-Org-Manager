@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import {
   StyleSheet,
   Text,
@@ -14,9 +14,10 @@ import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { CATEGORY_LABELS } from "@/lib/types"; // မသုံးတဲ့ types တွေကို ဖယ်ထုတ်လိုက်သည်
+import { CATEGORY_LABELS, MEMBER_STATUS_LABELS, normalizeMemberStatus } from "@/lib/types"; // မသုံးတဲ့ types တွေကို ဖယ်ထုတ်လိုက်သည်
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { formatPhoneForDisplay } from "@/lib/member-utils";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -107,10 +108,10 @@ export default function ReportsScreen() {
     const totalOutstanding = (loans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
     
     return { disbursed, repaid, interest, totalOutstanding };
-  }, [filteredTxns, loans]);
+  }, [filteredTxns, loans, getLoanOutstanding]);
 
   // Funds Stats (Opening/Closing)
-  const getBalancesAt = (date: Date) => {
+  const getBalancesAt = useCallback((date: Date) => {
     let cash = accountSettings?.openingBalanceCash || 0;
     let bank = accountSettings?.openingBalanceBank || 0;
     
@@ -131,14 +132,14 @@ export default function ReportsScreen() {
       }
     });
     return { cash, bank, total: cash + bank };
-  };
+  }, [accountSettings, transactions]);
 
   const fundStats = useMemo(() => {
     const start = new Date(startDate); start.setDate(start.getDate() - 1);
     const opening = getBalancesAt(start);
     const closing = getBalancesAt(endDate);
     return { opening, closing };
-  }, [startDate, endDate, transactions, accountSettings]);
+  }, [startDate, endDate, getBalancesAt]);
 
   const monthsInRange = useMemo(() => {
     const months = [];
@@ -184,6 +185,7 @@ export default function ReportsScreen() {
                 <th>Name</th>
                 <th>ID</th>
                 <th>Phone</th>
+                <th>Email</th>
                 <th>NRC</th>
                 <th>Join Date</th>
                 <th>Status</th>
@@ -195,10 +197,11 @@ export default function ReportsScreen() {
                   <td>${index + 1}</td>
                   <td>${m.name}</td>
                   <td>${m.id}</td>
-                  <td>${m.phone || '-'}</td>
+                  <td>${formatPhoneForDisplay(m.phone, m.secondaryPhone) || '-'}</td>
+                  <td>${m.email || '-'}</td>
                   <td>${m.nrc || '-'}</td>
                   <td>${m.joinDate || '-'}</td>
-                  <td>${m.status === 'active' ? 'Active' : 'Resigned'}</td>
+                  <td>${MEMBER_STATUS_LABELS[normalizeMemberStatus(m.status)]}</td>
                 </tr>
               `).join('')}
             </tbody>
