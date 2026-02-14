@@ -76,7 +76,7 @@ export default function DataManagementScreen() {
       const content = await FileSystem.readAsStringAsync(fileUri);
       setBackupText(content);
       Alert.alert("Loaded", "Auto Backup ဖိုင်ကို ဖတ်ပြီးပါပြီ။ Restore ခလုတ်နှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ။");
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "ဖိုင်ဖတ်မရနိုင်ပါ။");
     }
   };
@@ -89,7 +89,7 @@ export default function DataManagementScreen() {
       let data: any = await exportData();
       // exportData က string ပြန်ပေးခဲ့ရင် object ပြောင်းမည်
       if (typeof data === 'string') {
-        try { data = JSON.parse(data); } catch (e) {}
+        try { data = JSON.parse(data); } catch {}
       }
 
       // Events နှင့် Custom Categories များကို သီးသန့်ဆွဲထုတ်ပြီး ပေါင်းထည့်မည်
@@ -102,7 +102,11 @@ export default function DataManagementScreen() {
 
       if (!data || dataString === "{}" || dataString === "[]") {
         const msg = "သိမ်းဆည်းစရာ အချက်အလက် မရှိပါ။";
-        Platform.OS === 'web' ? alert(msg) : Alert.alert("No Data", msg);
+        if (Platform.OS === 'web') {
+          alert(msg);
+        } else {
+          Alert.alert("No Data", msg);
+        }
         setProcessing(false);
         return;
       }
@@ -125,7 +129,7 @@ export default function DataManagementScreen() {
           URL.revokeObjectURL(url);
           
           alert("Backup File (.json) ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။");
-        } catch (webErr) {
+        } catch {
           // ၃။ ဒေါင်းမရလျှင် Share Screen (Telegram/Gmail/Notes) ကို တိုက်ရိုက်ဖွင့်ပေးမည်
           if (navigator.share) {
             await navigator.share({
@@ -190,7 +194,11 @@ export default function DataManagementScreen() {
 
       setBackupText(content);
       const msg = "ဖိုင်ထဲမှ အချက်အလက်များကို ထည့်သွင်းပြီးပါပြီ။ Restore ခလုတ်နှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ။";
-      Platform.OS === "web" ? alert(msg) : Alert.alert("File Loaded", msg);
+      if (Platform.OS === "web") {
+        alert(msg);
+      } else {
+        Alert.alert("File Loaded", msg);
+      }
     } catch (e) {
       console.log(e);
       Alert.alert("Error", "ဖိုင်ဖွင့်မရနိုင်ပါ။");
@@ -258,7 +266,7 @@ export default function DataManagementScreen() {
             onPress: async () => {
               try {
                 await Updates.reloadAsync();
-              } catch (e) {
+              } catch {
                 router.replace("/");
               }
             } 
@@ -432,4 +440,36 @@ const styles = StyleSheet.create({
   lastBackup: { fontSize: 11, color: Colors.light.tint, marginBottom: 10, fontStyle: 'italic' },
   restoreAutoBtn: { backgroundColor: Colors.light.background, padding: 10, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: Colors.light.border },
   restoreAutoText: { color: Colors.light.text, fontSize: 13, fontFamily: "Inter_500Medium" },
+  loadingOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  loadingBox: {
+    width: "86%",
+    maxWidth: 360,
+    backgroundColor: Colors.light.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingVertical: 22,
+    paddingHorizontal: 18,
+    alignItems: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
+    textAlign: "center",
+  },
+  loadingSubText: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+    textAlign: "center",
+  },
 });
