@@ -212,10 +212,8 @@ export default function EventsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <View style={{ width: 50, alignItems: 'flex-start' }}>
-          <Pressable onPress={() => router.replace('/')} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color={Colors.light.text} {...({ title: "နောက်သို့" } as any)} />
-          </Pressable>
+        <View style={{ width: 50, alignItems: 'flex-start', display: 'none' }}>
+            
         </View>
         <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>လှုပ်ရှားမှုနှင့် သတင်းများ</Text>
         <View style={{ width: 50, alignItems: 'flex-end' }}>
