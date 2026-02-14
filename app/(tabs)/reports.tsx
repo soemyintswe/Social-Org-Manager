@@ -20,8 +20,8 @@ import * as Sharing from 'expo-sharing';
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
-  { label: "၃ လ", months: 3 },
-  { label: "၆ လ", months: 6 },
+  { label: "၄ လ", months: 4 },
+  { label: "၈ လ", months: 8 },
   { label: "၁ နှစ်", months: 12 },
 ];
 
@@ -29,7 +29,7 @@ type ReportTab = "income_expense" | "loans" | "funds" | "fees";
 
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
-  const { transactions, members, loading, refreshData, accountSettings, loans, getLoanOutstanding } = useData() as any;
+  const { transactions, members, loading, accountSettings, loans, getLoanOutstanding } = useData() as any;
   
   // Default to Current Year Jan 1 to Today (or end of current month)
   const [pickerStartDate, setPickerStartDate] = useState(new Date(new Date().getFullYear(), 0, 1));
@@ -50,10 +50,11 @@ export default function ReportsScreen() {
     let start, end;
 
     if (months === 0) {
-      // This Month: 1st to Today
+      // ယခုလ: လက်ရှိလ ၁ ရက်နေ့မှ ယနေ့အထိ
       start = new Date(year, now.getMonth(), 1);
-      end = new Date(); // Today
+      end = new Date();
     } else {
+      // ၄ လ / ၈ လ / ၁ နှစ်: နှစ်အစ (Jan 1) မှ သတ်မှတ်လအဆုံးနေ့အထိ
       start = new Date(year, 0, 1);
       end = new Date(year, months, 0);
     }
@@ -64,7 +65,8 @@ export default function ReportsScreen() {
 
     setPickerStartDate(start);
     setPickerEndDate(end);
-    // Note: We don't auto-apply here, user must click "Report"
+    setStartDate(start);
+    setEndDate(end);
   };
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -230,18 +232,12 @@ export default function ReportsScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.title}>အစီရင်ခံစာ</Text>
-        <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center', marginRight: 150 }}>
+        <View style={styles.headerActions}>
           <Pressable 
-             style={{ padding: 8 }}
+             style={styles.headerIconBtn}
              onPress={generatePdf}
           >
             <Ionicons name="print-outline" size={22} color={Colors.light.text} />
-          </Pressable>
-          <Pressable 
-             style={{ padding: 8 }}
-             onPress={async () => refreshData && await refreshData()}
-          >
-            <Ionicons name="refresh" size={22} color={Colors.light.text} />
           </Pressable>
         </View>
       </View>
@@ -281,14 +277,14 @@ export default function ReportsScreen() {
               <Text style={styles.dateBtnText}>{formatDateBtn(pickerEndDate)}</Text>
             </Pressable>
           )}
-        </View>
 
-        <Pressable 
-          style={styles.searchBtn}
-          onPress={() => { setStartDate(pickerStartDate); setEndDate(pickerEndDate); }}
-        >
-          <Ionicons name="search" size={20} color="white" />
-        </Pressable>
+          <Pressable 
+            style={styles.searchBtn}
+            onPress={() => { setStartDate(pickerStartDate); setEndDate(pickerEndDate); }}
+          >
+            <Ionicons name="search" size={20} color="white" />
+          </Pressable>
+        </View>
 
         <View style={styles.periodPicker}>
           {PERIOD_OPTIONS.map((opt) => (
@@ -512,8 +508,10 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
   title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  headerActions: { flexDirection: "row", alignItems: "center", marginRight: 108 },
+  headerIconBtn: { padding: 8 },
   filterSection: { paddingHorizontal: 20, marginBottom: 15, gap: 10 },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
   searchBtn: { backgroundColor: Colors.light.tint, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
