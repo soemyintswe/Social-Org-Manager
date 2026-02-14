@@ -3,11 +3,10 @@ import React, {
   useContext,
   useState,
   useEffect,
-  useMemo,
   useCallback,
-  ReactNode,
 } from "react";
-import {
+import type { ReactNode } from "react";
+import type {
   Member,
   OrgEvent,
   Group,
@@ -101,7 +100,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   // --- Actions ---
   const addMember = async (m: Omit<Member, "id">) => {
-    const newMember = await store.addMember(m as any);
+    const newMember = await store.addMember(m);
     await refreshData();
     return newMember;
   };
@@ -117,19 +116,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const addEvent = async (e: Omit<OrgEvent, "id">) => {
-    // Note: storage.ts ထဲတွင် addEvent function မရှိသေးပါက store.addEvent ကို implementation လုပ်ရန်လိုပါမည်
-    const newEvent = await (store as any).addEvent(e); 
+    const newEvent = await store.addEvent(e);
     await refreshData();
     return newEvent;
   };
 
   const editEvent = async (id: string, u: Partial<OrgEvent>) => {
-    await (store as any).updateEvent(id, u);
+    await store.updateEvent(id, u);
     await refreshData();
   };
 
   const removeEvent = async (id: string) => {
-    await (store as any).deleteEvent(id);
+    await store.deleteEvent(id);
     await refreshData();
   };
 
@@ -213,30 +211,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const markAttendance = async (eventId: string, memberId: string, status: "present" | "absent") => {
-    // store.saveAttendance သည် implementation လုပ်ရန်လိုအပ်နိုင်ပါသည်
-    if ((store as any).saveAttendance) {
-      await (store as any).saveAttendance(eventId, memberId, status);
-    }
+    await store.saveAttendance(eventId, memberId, status);
     await refreshData();
   };
 
-  const value = useMemo(
-    () => ({
-      members, events, groups, attendance, transactions, loans, accountSettings, loading,
-      refreshData, addMember, updateMember, deleteMember,
-      addEvent, editEvent, removeEvent,
-      addGroup, editGroup, removeGroup,
-      addTransaction, removeTransaction,
-      addLoan, editLoan, removeLoan,
-      updateAccountSettings,
-      getLoanOutstanding, getLoanInterestDue,
-      getCashBalance, getBankBalance, getTotalBalance,
-      getEventAttendance, markAttendance,
-    }),
-    [members, events, groups, attendance, transactions, loans, accountSettings, loading, refreshData]
-  );
+  const value: DataContextValue = {
+    members, events, groups, attendance, transactions, loans, accountSettings, loading,
+    refreshData, addMember, updateMember, deleteMember,
+    addEvent, editEvent, removeEvent,
+    addGroup, editGroup, removeGroup,
+    addTransaction, removeTransaction,
+    addLoan, editLoan, removeLoan,
+    updateAccountSettings,
+    getLoanOutstanding, getLoanInterestDue,
+    getCashBalance, getBankBalance, getTotalBalance,
+    getEventAttendance, markAttendance,
+  };
 
-  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
+  return React.createElement(DataContext.Provider, { value }, children);
 }
 
 export function useData() {

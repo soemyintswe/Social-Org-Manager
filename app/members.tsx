@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -17,14 +17,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import type { Member } from "@/lib/types";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 
 type SortOption = "id" | "name" | "joinDate" | "dob" | "age";
+type MemberListItem = Member & { profileImage?: string };
 
 export default function MembersScreen() {
   const insets = useSafeAreaInsets();
-  const { members, loading, refreshData } = useData() as any;
+  const { members, loading } = useData();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -36,17 +38,18 @@ export default function MembersScreen() {
   // Custom Age Filter State
   const [customAgeModalVisible, setCustomAgeModalVisible] = useState(false);
   const [targetDate, setTargetDate] = useState(new Date());
+  const [targetDateText, setTargetDateText] = useState(new Date().toISOString().split("T")[0]);
   const [minAge, setMinAge] = useState("");
   const [maxAge, setMaxAge] = useState("");
   const [showTargetDatePicker, setShowTargetDatePicker] = useState(false);
 
-  const convertToEnglishDigits = (str: string) => {
+  const convertToEnglishDigits = useCallback((str: string) => {
     const myanmarNumbers = ["၀", "၁", "၂", "၃", "၄", "၅", "၆", "၇", "၈", "၉"];
     return str.replace(/[၀-၉]/g, (s) => myanmarNumbers.indexOf(s).toString());
-  };
+  }, []);
 
   // DD/MM/YYYY format ကို Timestamp ပြောင်းရန်
-  const parseDate = (dateStr: string) => {
+  const parseDate = useCallback((dateStr?: string) => {
     if (!dateStr) return 0;
     const cleanStr = convertToEnglishDigits(dateStr);
     const parts = cleanStr.split(/[\/\.\-]/);
@@ -54,20 +57,20 @@ export default function MembersScreen() {
       return new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)).getTime();
     }
     return 0;
-  };
+  }, [convertToEnglishDigits]);
 
   // အသက်တွက်ချက်ရန်
-  const calculateAge = (dobStr: string, refDate: Date = new Date()) => {
-    if (!dobStr) return "";
+  const calculateAge = useCallback((dobStr?: string, refDate: Date = new Date()) => {
+    if (!dobStr) return null;
     const cleanStr = convertToEnglishDigits(dobStr);
     const parts = cleanStr.split(/[\/\.\-]/);
     if (parts.length === 3) {
       const day = parseInt(parts[0], 10);
       const month = parseInt(parts[1], 10);
       const year = parseInt(parts[2], 10);
-      if (isNaN(day) || isNaN(month) || isNaN(year)) return "";
+      if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
 
-      if (year < 1900) return ""; // Myanmar Era or invalid year
+      if (year < 1900) return null; // Myanmar Era or invalid year
 
       const birthDate = new Date(year, month - 1, day);
       let age = refDate.getFullYear() - birthDate.getFullYear();
@@ -77,10 +80,10 @@ export default function MembersScreen() {
       }
       return age;
     }
-    return "";
-  };
+    return null;
+  }, [convertToEnglishDigits]);
 
-  const getUpcomingBirthdayDate = (dobStr: string) => {
+  const getUpcomingBirthdayDate = useCallback((dobStr?: string) => {
     if (!dobStr) return null;
     const cleanStr = convertToEnglishDigits(dobStr);
     const parts = cleanStr.split(/[\/\.\-]/);
@@ -112,29 +115,31 @@ export default function MembersScreen() {
         }
     }
     return null;
-  };
+  }, [convertToEnglishDigits]);
 
   const sortedMembers = useMemo(() => {
-    let data = [...(members || [])];
+    let data: MemberListItem[] = [...(members as MemberListItem[])];
 
     if (filterStatus !== "all") {
-      data = data.filter((m: any) => m.status === filterStatus);
+      data = data.filter((m) => m.status === filterStatus);
     }
 
     if (filterAge !== "all") {
-      data = data.filter((m: any) => {
+      data = data.filter((m) => {
         const refDate = filterAge === "custom" ? targetDate : new Date();
         const age = calculateAge(m.dob, refDate);
         
         if (filterAge === "upcoming") return !!getUpcomingBirthdayDate(m.dob);
-        if (age === "") return false;
-        const ageNum = typeof age === 'number' ? age : parseInt(age as string);
+        if (age === null) return false;
+        const ageNum = age;
         if (filterAge === "under18") return ageNum < 18;
         if (filterAge === "18-60") return ageNum >= 18 && ageNum <= 60;
         if (filterAge === "over60") return ageNum > 60;
         if (filterAge === "custom") {
-             const min = minAge ? parseInt(minAge) : 0;
-             const max = maxAge ? parseInt(maxAge) : 999;
+             const minParsed = minAge ? parseInt(minAge, 10) : 0;
+             const maxParsed = maxAge ? parseInt(maxAge, 10) : 999;
+             const min = Number.isNaN(minParsed) ? 0 : minParsed;
+             const max = Number.isNaN(maxParsed) ? 999 : maxParsed;
              return ageNum >= min && ageNum <= max;
         }
         return true;
@@ -142,7 +147,7 @@ export default function MembersScreen() {
     }
 
     if (filterGender !== "all") {
-      data = data.filter((m: any) => {
+      data = data.filter((m) => {
         const name = (m.name || "").trim();
         const isMale = 
           name.startsWith("ဦး") || 
@@ -171,46 +176,49 @@ export default function MembersScreen() {
 
     if (search) {
       data = data.filter(m => 
-        m.name.toLowerCase().includes(search.toLowerCase()) || 
-        m.id.toLowerCase().includes(search.toLowerCase())
+        (m.name || "").toLowerCase().includes(search.toLowerCase()) || 
+        String(m.id || "").toLowerCase().includes(search.toLowerCase())
       );
     }
 
     return data.sort((a, b) => {
-      let valA, valB;
-
       switch (sortBy) {
-        case "id":
-          valA = a.id.toString();
-          valB = b.id.toString();
+        case "id": {
+          const valA = String(a.id || "");
+          const valB = String(b.id || "");
           return sortOrder === "asc" ? valA.localeCompare(valB, undefined, { numeric: true }) : valB.localeCompare(valA, undefined, { numeric: true });
+        }
 
-        case "name":
-          valA = a.name.toLowerCase();
-          valB = b.name.toLowerCase();
+        case "name": {
+          const valA = (a.name || "").toLowerCase();
+          const valB = (b.name || "").toLowerCase();
           return sortOrder === "asc" ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        }
         
-        case "joinDate":
-          valA = parseDate(a.joinDate);
-          valB = parseDate(b.joinDate);
+        case "joinDate": {
+          const valA = parseDate(a.joinDate);
+          const valB = parseDate(b.joinDate);
           return sortOrder === "asc" ? valA - valB : valB - valA;
+        }
 
-        case "dob": 
-          valA = parseDate(a.dob);
-          valB = parseDate(b.dob);
+        case "dob": {
+          const valA = parseDate(a.dob);
+          const valB = parseDate(b.dob);
           return sortOrder === "asc" ? valA - valB : valB - valA;
+        }
 
-        case "age": 
-           // Age Asc (အသက်အငယ်ဆုံးမှ အကြီးဆုံး) -> DOB Desc
-           valA = parseDate(a.dob);
-           valB = parseDate(b.dob);
-           return sortOrder === "asc" ? valB - valA : valA - valB;
+        case "age": {
+          // Age Asc (အသက်အငယ်ဆုံးမှ အကြီးဆုံး) -> DOB Desc
+          const valA = parseDate(a.dob);
+          const valB = parseDate(b.dob);
+          return sortOrder === "asc" ? valB - valA : valA - valB;
+        }
            
         default:
           return 0;
       }
     });
-  }, [members, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge]);
+  }, [members, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, calculateAge, getUpcomingBirthdayDate]);
 
   const getAvatarLabel = (name: string) => {
     if (!name) return "?";
@@ -236,15 +244,26 @@ export default function MembersScreen() {
       case "joinDate": return "အသင်းဝင်ရက်";
       case "dob": return "မွေးသက္ကရာဇ်";
       case "age": return "အသက်";
+      default: return "အသင်းဝင်အမှတ် (ID)";
     }
   };
 
-  const handleTargetDateChange = (event: any, selectedDate?: Date) => {
+  const handleTargetDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
       setShowTargetDatePicker(false);
     }
     if (selectedDate) {
       setTargetDate(selectedDate);
+      setTargetDateText(selectedDate.toISOString().split("T")[0]);
+    }
+  };
+
+  const handleWebDateChange = (text: string) => {
+    setTargetDateText(text);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return;
+    const parsed = new Date(`${text}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      setTargetDate(parsed);
     }
   };
 
@@ -261,19 +280,26 @@ export default function MembersScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-   <Text style={styles.headerTitle}>အသင်းဝင်များ ({members?.length || 0})</Text>
-        <View style={{ flexDirection: 'row', marginRight: 50, alignItems: 'center', justifyContent: 'flex-end' }}>
-        <Pressable onPress={() => router.push("/data-management")} style={styles.addBtn}>
-        <Ionicons name="cloud-download-outline" size={24} color={Colors.light.tint} />
-         </Pressable>
-           <Pressable onPress={() => router.push("/add-member" as any)} style={styles.addBtn}>
-        <Ionicons name="add" size={24} color={Colors.light.tint} />
-         </Pressable>
-             <Pressable  style={styles.addBtn}>
-             <Ionicons name="menu-outline" size={24} color={Colors.light.tint} />
-             </Pressable>
-        
-
+        <Text style={styles.headerTitle}>အသင်းဝင်များ ({members?.length || 0})</Text>
+        <View style={styles.headerActions}>
+          <Pressable
+            onPress={() => router.push("/member-data-management")}
+            style={styles.headerActionBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Member Data Tools"
+          >
+            <Ionicons name="cloud-download-outline" size={21} color={Colors.light.tint} />
+            <Text style={styles.headerActionText}>Data</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push("/add-member" as any)}
+            style={styles.headerActionBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Add Member"
+          >
+            <Ionicons name="add-circle-outline" size={21} color={Colors.light.tint} />
+            <Text style={styles.headerActionText}>Add</Text>
+          </Pressable>
         </View>
       </View>
 
@@ -369,7 +395,11 @@ export default function MembersScreen() {
             
                 <Pressable
                   style={[styles.statusChip, filterAge === "custom" && styles.statusChipActive]}
-                  onPress={() => { setFilterAge("custom"); setCustomAgeModalVisible(true); }}
+                  onPress={() => {
+                    setFilterAge("custom");
+                    setTargetDateText(targetDate.toISOString().split("T")[0]);
+                    setCustomAgeModalVisible(true);
+                  }}
                 >
                   <Text style={[styles.statusChipText, filterAge === "custom" && styles.statusChipTextActive]}>စိတ်ကြိုက် (Custom)</Text>
                 </Pressable>
@@ -389,15 +419,15 @@ export default function MembersScreen() {
         </View>
       </View>
 
-      <FlatList
+      <FlatList<MemberListItem>
         data={sortedMembers}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => String(item.id)}
         contentContainerStyle={styles.list}
         style={{ flex: 1 }}
         renderItem={({ item }) => (
           <Pressable 
             style={styles.memberItem} 
-            onPress={() => router.push({ pathname: "/member-detail", params: { id: item.id } } as any)}
+            onPress={() => router.push({ pathname: "/member-detail", params: { id: String(item.id) } } as any)}
           >
             {item.profileImage ? (
               <Image source={{ uri: item.profileImage }} style={styles.avatar} resizeMode="cover" />
@@ -410,9 +440,11 @@ export default function MembersScreen() {
               <Text style={styles.memberName}>{item.name}</Text>
               <Text style={styles.memberId}>ID: {item.id}</Text>
               <View style={styles.metaRow}>
-                {calculateAge(item.dob, filterAge === 'custom' ? targetDate : new Date()) !== "" && (
-                  <Text style={styles.metaText}>အသက်: {calculateAge(item.dob, filterAge === 'custom' ? targetDate : new Date())} နှစ်</Text>
-                )}
+                {(() => {
+                  const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
+                  if (age === null) return null;
+                  return <Text style={styles.metaText}>အသက်: {age} နှစ်</Text>;
+                })()}
                 {(() => {
                   const upcoming = getUpcomingBirthdayDate(item.dob);
                   if (upcoming) {
@@ -480,12 +512,14 @@ export default function MembersScreen() {
             <Text style={styles.label}>ရည်ညွှန်းရက်စွဲ (Target Date)</Text>
             {Platform.OS === 'web' ? (
               <View style={styles.dateInputContainer}>
-                {React.createElement('input', {
-                  type: 'date',
-                  value: targetDate.toISOString().split('T')[0],
-                  onChange: (e: any) => e.target.value && setTargetDate(new Date(e.target.value)),
-                  style: { border: 'none', outline: 'none', backgroundColor: 'transparent', fontSize: 16, width: '100%', color: Colors.light.text }
-                })}
+                <TextInput
+                  style={styles.webDateInput}
+                  value={targetDateText}
+                  onChangeText={handleWebDateChange}
+                  placeholder="YYYY-MM-DD"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
               </View>
             ) : (
               <>
@@ -529,13 +563,31 @@ export default function MembersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
- header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   backBtn: { padding: 4 },
   addBtn: { padding: 8 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8, marginRight: 120 },
+  headerActionBtn: {
+    minWidth: 56,
+    height: 48,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerActionText: {
+    marginTop: 2,
+    fontSize: 10,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+  },
   searchBar: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, margin: 15, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, height: 44 },
   searchInput: { flex: 1, marginLeft: 10, fontSize: 15, color: Colors.light.text },
   filterRow: { flexDirection: "row", paddingHorizontal: 15, marginBottom: 10, gap: 10 },
-  headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1, textAlign: 'center' },
+  headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },
   sortBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: Colors.light.surface, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   sortBtnText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_500Medium" },
   orderBtn: { width: 40, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.surface, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
@@ -562,6 +614,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginBottom: 6 },
   input: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 10, fontSize: 14, color: Colors.light.text },
   dateInputContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 10 },
+  webDateInput: { flex: 1, fontSize: 16, color: Colors.light.text, padding: 0 },
   modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 15, marginTop: 20 },
   cancelBtn: { padding: 10 },
   cancelText: { color: Colors.light.textSecondary },
