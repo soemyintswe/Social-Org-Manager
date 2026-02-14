@@ -1,4 +1,0 @@
-id,type,payment_method,amount,category,member_id,payer_payee,date,receipt_number,notes,fee_period_start,fee_period_end
-,income,cash,5000,member_fees,M-001,ဦးအောင်,2026-02-15,I-TR001,ဇန်နဝါရီမှ ဧပြီလကြေး,2026-01-01,2026-04-30
-,expense,bank,12000,general_expenses,,ဆိုင်စရိတ်,2026-02-20,O-TR001,ရုံးသုံးစရိတ်,,
-,transfer,cash,300000,bank_deposit,,,2026-02-25,TR-0001,ဘဏ်သွင်း,,

@@ -1,0 +1,4 @@
+id,payment_method,amount,category,payer_payee,date,receipt_number,notes
+,cash,15000,general_expenses,ရုံးသုံးဆိုင်,2026-02-20,O-TR001,ရုံးသုံးစရိတ်
+,bank,8000,health_support,ဦးကျော်,2026-02-21,O-TR002,ကျန်းမာရေးထောက်ပံ့
+,cash,3500,other_expenses,အထွေထွေ,2026-02-22,O-TR003,အခြားအသုံးစရိတ်

@@ -26,13 +26,37 @@ import * as store from "@/lib/storage";
 
 const TXN_AUTO_BACKUP_FILE = "transactions_auto_backup.json";
 const LEGACY_AUTO_BACKUP_FILE = "auto_backup.json";
-const TEMPLATE_FILE_NAME = "transactions_import_template.csv";
 
-const TEMPLATE_CSV = `id,type,payment_method,amount,category,member_id,payer_payee,date,receipt_number,notes,fee_period_start,fee_period_end
-,income,cash,5000,member_fees,M-001,ဦးအောင်,2026-02-15,I-TR001,ဇန်နဝါရီမှ ဧပြီလကြေး,2026-01-01,2026-04-30
-,expense,bank,12000,general_expenses,,ဆိုင်စရိတ်,2026-02-20,O-TR001,ရုံးသုံးစရိတ်,,
-,transfer,cash,300000,bank_deposit,,,2026-02-25,TR-0001,ဘဏ်သွင်း,,
-`;
+const TEMPLATE_FILES = {
+  income: {
+    fileName: "transactions_income_template.csv",
+    title: "ရငွေစာရင်း Template",
+    csv: `id,payment_method,amount,category,member_id,payer_payee,date,receipt_number,notes,fee_period_start,fee_period_end
+,cash,5000,member_fees,M-001,ဦးအောင်,2026-02-15,I-TR001,ဇန်နဝါရီမှ ဧပြီလကြေး,2026-01-01,2026-04-30
+,bank,20000,donations,,မမီ,2026-02-16,I-TR002,အလှူငွေရရှိ,,
+,cash,3500,other_income,,ဦးဘ,2026-02-18,I-TR003,အခြားရငွေ,,
+`,
+  },
+  expense: {
+    fileName: "transactions_expense_template.csv",
+    title: "အသုံးစာရင်း Template",
+    csv: `id,payment_method,amount,category,payer_payee,date,receipt_number,notes
+,cash,15000,general_expenses,ရုံးသုံးဆိုင်,2026-02-20,O-TR001,ရုံးသုံးစရိတ်
+,bank,8000,health_support,ဦးကျော်,2026-02-21,O-TR002,ကျန်းမာရေးထောက်ပံ့
+,cash,3500,other_expenses,အထွေထွေ,2026-02-22,O-TR003,အခြားအသုံးစရိတ်
+`,
+  },
+  transfer: {
+    fileName: "transactions_transfer_template.csv",
+    title: "ဘဏ်သွင်း/ဘဏ်ထုတ် Template",
+    csv: `id,amount,category,date,receipt_number,notes
+,300000,bank_deposit,2026-02-25,TR-0001,ငွေသားမှ ဘဏ်သို့သွင်း
+,50000,bank_withdraw,2026-02-26,TR-0002,ဘဏ်မှ ငွေသားထုတ်
+`,
+  },
+} as const;
+
+type TemplateKind = keyof typeof TEMPLATE_FILES;
 
 const categoryMap: Record<string, string> = {
   monthly_fee: "member_fees",
@@ -336,26 +360,32 @@ export default function TransactionDataManagementScreen() {
     await FileSystem.writeAsStringAsync(dir + TXN_AUTO_BACKUP_FILE, buildBackup(latest as any[]));
   };
 
-  const downloadTemplate = async () => {
-    const csv = `\uFEFF${TEMPLATE_CSV}`;
+  const downloadTemplate = async (kind: TemplateKind) => {
+    const template = TEMPLATE_FILES[kind];
+    const csv = `\uFEFF${template.csv}`;
     if (Platform.OS === "web") {
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = TEMPLATE_FILE_NAME;
+      a.download = template.fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      msg("Template", "Excel Template CSV ကို download လုပ်ပြီးပါပြီ။");
+      msg("Template", `${template.title} CSV ကို download လုပ်ပြီးပါပြီ။`);
       return;
     }
     const dir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
     if (!dir) return msg("Error", "Template file သိမ်းရန် directory မတွေ့ပါ။");
-    const uri = dir + TEMPLATE_FILE_NAME;
+    const uri = dir + template.fileName;
     await FileSystem.writeAsStringAsync(uri, csv);
-    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: "text/csv", dialogTitle: "Template CSV ကို share/save လုပ်ပါ" });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, {
+        mimeType: "text/csv",
+        dialogTitle: `${template.title} CSV ကို share/save လုပ်ပါ`,
+      });
+    }
   };
 
   const doBackup = async () => {
@@ -506,19 +536,46 @@ export default function TransactionDataManagementScreen() {
             </Pressable>
           </View>
 
-          <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
-            <Pressable style={[styles.actionBtn, { backgroundColor: "#6366F1", flex: 1, opacity: busy ? 0.7 : 1 }]} onPress={doBackup} disabled={busy}>
-              <View style={styles.actionContent}>
-                <Ionicons name="cloud-upload-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
-                <Text style={styles.btnText}>Backup</Text>
-              </View>
-            </Pressable>
-            <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5A4", flex: 1, opacity: busy ? 0.7 : 1 }]} onPress={downloadTemplate} disabled={busy}>
-              <View style={styles.actionContent}>
-                <Ionicons name="download-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
-                <Text style={styles.btnText}>Excel Template</Text>
-              </View>
-            </Pressable>
+          <Pressable
+            style={[styles.actionBtn, { backgroundColor: "#6366F1", marginBottom: 10, opacity: busy ? 0.7 : 1 }]}
+            onPress={doBackup}
+            disabled={busy}
+          >
+            <View style={styles.actionContent}>
+              <Ionicons name="cloud-upload-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.btnText}>Backup</Text>
+            </View>
+          </Pressable>
+
+          <View style={styles.templateCard}>
+            <Text style={styles.templateTitle}>Excel Templates (စာရင်းအမျိုးအစားခွဲ)</Text>
+            <Text style={styles.templateHint}>
+              `member_fees` အတွက် `member_id`, `fee_period_start`, `fee_period_end` ဖြည့်ရန်လိုပါသည်။
+              `payer_payee` တွင် Member မဟုတ်သူအမည်လည်း ထည့်နိုင်ပါသည်။
+            </Text>
+            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+              <Pressable
+                style={[styles.templateBtn, { backgroundColor: "#0EA5A4" }]}
+                onPress={() => void downloadTemplate("income")}
+                disabled={busy}
+              >
+                <Text style={styles.templateBtnText}>ရငွေစာရင်း</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.templateBtn, { backgroundColor: "#F59E0B" }]}
+                onPress={() => void downloadTemplate("expense")}
+                disabled={busy}
+              >
+                <Text style={styles.templateBtnText}>အသုံးစာရင်း</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.templateBtn, { backgroundColor: "#8B5CF6" }]}
+                onPress={() => void downloadTemplate("transfer")}
+                disabled={busy}
+              >
+                <Text style={styles.templateBtnText}>ဘဏ်သွင်း/ဘဏ်ထုတ်</Text>
+              </Pressable>
+            </View>
           </View>
 
           <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
@@ -610,6 +667,24 @@ const styles = StyleSheet.create({
   actionBtn: { paddingVertical: 16, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   actionContent: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
   btnText: { color: "#fff", fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  templateCard: {
+    backgroundColor: Colors.light.surface,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    gap: 8,
+  },
+  templateTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  templateHint: { fontSize: 11, lineHeight: 17, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
+  templateBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    opacity: 1,
+  },
+  templateBtnText: { color: "#fff", fontSize: 12, fontFamily: "Inter_600SemiBold" },
   autoBackupCard: {
     backgroundColor: Colors.light.surface,
     padding: 16,
