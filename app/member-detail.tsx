@@ -22,7 +22,11 @@ import {
   CATEGORY_LABELS,
   MEMBER_STATUS_LABELS,
   MEMBER_STATUS_VALUES,
+  ORG_POSITION_LABELS,
+  ORG_POSITION_VALUES,
   normalizeMemberStatus,
+  normalizeOrgPosition,
+  type OrgPosition,
   type MemberStatus,
 } from "@/lib/types";
 import { formatDateDdMmYyyy, formatPhoneForDisplay, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
@@ -77,6 +81,7 @@ export default function MemberDetailScreen() {
   const [editSecondaryPhone, setEditSecondaryPhone] = useState((member as any)?.secondaryPhone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
   const [editStatus, setEditStatus] = useState<MemberStatus>(normalizeMemberStatus(member?.status));
+  const [editOrgPosition, setEditOrgPosition] = useState<OrgPosition>(normalizeOrgPosition((member as any)?.orgPosition || member?.status));
   const [editStatusDate, setEditStatusDate] = useState((member as any)?.statusDate || member?.resignDate || "");
   const [editStatusReason, setEditStatusReason] = useState((member as any)?.statusReason || "");
   const [showDobPicker, setShowDobPicker] = useState(false);
@@ -159,6 +164,12 @@ export default function MemberDetailScreen() {
 
       const { primaryPhone, secondaryPhone } = splitPhoneNumbers(editPhone, editSecondaryPhone);
       const normalizedStatusDate = normalizeDateText(editStatusDate);
+      const normalizedStatus = normalizeMemberStatus(editStatus);
+      const normalizedPosition =
+        editOrgPosition === "applicant" || normalizedStatus === "applicant"
+          ? "applicant"
+          : normalizeOrgPosition(editOrgPosition);
+      const finalStatus = normalizedPosition === "applicant" ? "applicant" : normalizedStatus;
       await updateMember(member.id, {
         id: editMemberId.trim(),
         name: editName.trim(),
@@ -167,7 +178,8 @@ export default function MemberDetailScreen() {
         phone: primaryPhone,
         secondaryPhone: secondaryPhone || undefined,
         address: editAddress.trim(),
-        status: normalizeMemberStatus(editStatus),
+        status: finalStatus,
+        orgPosition: normalizedPosition,
         statusDate: normalizedStatusDate || undefined,
         resignDate: normalizedStatusDate || undefined,
         statusReason: editStatusReason.trim() || undefined,
@@ -204,6 +216,7 @@ export default function MemberDetailScreen() {
 
   const currentStatus = normalizeMemberStatus(member?.status);
   const statusLabel = MEMBER_STATUS_LABELS[currentStatus];
+  const orgPositionLabel = ORG_POSITION_LABELS[normalizeOrgPosition((member as any)?.orgPosition || currentStatus)];
   const statusDateLabel = (member as any)?.statusDate || member?.resignDate || "";
   const statusReasonLabel = (member as any)?.statusReason || "";
 
@@ -330,6 +343,21 @@ export default function MemberDetailScreen() {
               ))}
             </View>
 
+            <Text style={styles.editLabel}>Org Position</Text>
+            <View style={styles.statusRow}>
+              {ORG_POSITION_VALUES.map((positionOption) => (
+                <Pressable
+                  key={positionOption}
+                  style={[styles.statusChip, editOrgPosition === positionOption ? styles.statusChipActive : undefined]}
+                  onPress={() => setEditOrgPosition(positionOption)}
+                >
+                  <Text style={[styles.statusChipText, editOrgPosition === positionOption ? styles.statusChipTextActive : undefined]}>
+                    {ORG_POSITION_LABELS[positionOption]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
             <Text style={styles.editLabel}>Status Date</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
@@ -398,6 +426,7 @@ export default function MemberDetailScreen() {
                 label="အခြေအနေ" 
                 value={statusLabel} 
               />
+              <InfoRow icon="ribbon-outline" label="တာဝန်" value={orgPositionLabel} />
               <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
               <InfoRow icon="calendar-outline" label="Status Date" value={statusDateLabel} />
               <InfoRow icon="document-text-outline" label="Status Note" value={statusReasonLabel} />

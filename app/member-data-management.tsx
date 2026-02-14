@@ -23,7 +23,7 @@ import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import * as store from "@/lib/storage";
-import { normalizeMemberStatus, type Member } from "@/lib/types";
+import { normalizeMemberStatus, normalizeOrgPosition, type Member } from "@/lib/types";
 import { normalizeDateText, splitPhoneNumbers } from "@/lib/member-utils";
 
 const MEMBER_AUTO_BACKUP_FILE = "members_auto_backup.json";
@@ -100,6 +100,17 @@ function normalizeMember(raw: unknown, index: number): Member | null {
       : typeof obj.resignReason === "string"
       ? obj.resignReason.trim()
       : "";
+  const orgPosition = normalizeOrgPosition(
+    typeof obj.orgPosition === "string"
+      ? obj.orgPosition
+      : typeof obj.position === "string"
+      ? obj.position
+      : typeof obj.role === "string"
+      ? obj.role
+      : status === "applicant"
+      ? "applicant"
+      : "member"
+  );
   const joinDate =
     normalizeDateText(typeof obj.joinDate === "string" ? obj.joinDate : "") || today;
   const createdAt =
@@ -130,6 +141,8 @@ function normalizeMember(raw: unknown, index: number): Member | null {
     dob: normalizeDateText(typeof obj.dob === "string" ? obj.dob : ""),
     joinDate,
     status,
+    orgPosition,
+    systemRole: obj.systemRole === "admin" ? "admin" : "org_user",
     statusDate,
     resignDate: statusDate,
     statusReason,

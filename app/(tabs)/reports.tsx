@@ -14,7 +14,13 @@ import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { CATEGORY_LABELS, MEMBER_STATUS_LABELS, normalizeMemberStatus } from "@/lib/types"; // မသုံးတဲ့ types တွေကို ဖယ်ထုတ်လိုက်သည်
+import {
+  CATEGORY_LABELS,
+  MEMBER_STATUS_LABELS,
+  normalizeMemberStatus,
+  normalizeOrgPosition,
+  ORG_POSITION_LABELS,
+} from "@/lib/types"; // မသုံးတဲ့ types တွေကို ဖယ်ထုတ်လိုက်သည်
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatPhoneForDisplay } from "@/lib/member-utils";
@@ -184,6 +190,7 @@ export default function ReportsScreen() {
                 <th style="width: 40px;">No.</th>
                 <th>Name</th>
                 <th>ID</th>
+                <th>Position</th>
                 <th>Phone</th>
                 <th>Email</th>
                 <th>NRC</th>
@@ -197,6 +204,7 @@ export default function ReportsScreen() {
                   <td>${index + 1}</td>
                   <td>${m.name}</td>
                   <td>${m.id}</td>
+                  <td>${ORG_POSITION_LABELS[normalizeOrgPosition(m.orgPosition || m.status)]}</td>
                   <td>${formatPhoneForDisplay(m.phone, m.secondaryPhone) || '-'}</td>
                   <td>${m.email || '-'}</td>
                   <td>${m.nrc || '-'}</td>

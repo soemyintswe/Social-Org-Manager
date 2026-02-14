@@ -21,7 +21,15 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { formatDateDdMmYyyy, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
-import { MEMBER_STATUS_LABELS, MEMBER_STATUS_VALUES, normalizeMemberStatus, type MemberStatus } from "@/lib/types";
+import {
+  MEMBER_STATUS_LABELS,
+  MEMBER_STATUS_VALUES,
+  normalizeMemberStatus,
+  ORG_POSITION_LABELS,
+  ORG_POSITION_VALUES,
+  type MemberStatus,
+  type OrgPosition,
+} from "@/lib/types";
 
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
 const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
@@ -61,6 +69,7 @@ export default function AddMemberScreen() {
   const [statusDate, setStatusDate] = useState("");
   const [statusReason, setStatusReason] = useState("");
   const [status, setStatus] = useState<MemberStatus>("active");
+  const [orgPosition, setOrgPosition] = useState<OrgPosition>("member");
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [showJoinDatePicker, setShowJoinDatePicker] = useState(false);
@@ -85,6 +94,7 @@ export default function AddMemberScreen() {
         setStatusDate((member as any).statusDate || (member as any).resignDate || "");
         setStatusReason((member as any).statusReason || "");
         setStatus(normalizeMemberStatus(member.status));
+        setOrgPosition((member as any).orgPosition || (normalizeMemberStatus(member.status) === "applicant" ? "applicant" : "member"));
         setProfileImage(member.profileImage || null);
       }
     }
@@ -154,6 +164,10 @@ export default function AddMemberScreen() {
       const normalizedDob = normalizeDateText(dob);
       const normalizedJoinDate = normalizeDateText(joinDate);
       const normalizedStatusDate = normalizeDateText(statusDate);
+      const normalizedStatus = normalizeMemberStatus(status);
+      const normalizedPosition =
+        orgPosition === "applicant" || normalizedStatus === "applicant" ? "applicant" : orgPosition;
+      const finalStatus = normalizedPosition === "applicant" ? "applicant" : normalizedStatus;
 
       // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
       const memberData: any = {
@@ -166,7 +180,9 @@ export default function AddMemberScreen() {
         dob: normalizedDob,
         address: address.trim(),
         joinDate: normalizedJoinDate || new Date().toLocaleDateString("en-GB"),
-        status: normalizeMemberStatus(status),
+        status: finalStatus,
+        orgPosition: normalizedPosition,
+        systemRole: "org_user",
         statusDate: normalizedStatusDate || undefined,
         resignDate: normalizedStatusDate || undefined,
         statusReason: statusReason.trim() || undefined,
@@ -467,6 +483,21 @@ export default function AddMemberScreen() {
               >
                 <Text style={[styles.statusChipText, status === s ? styles.statusChipTextActive : undefined]}>
                   {MEMBER_STATUS_LABELS[s]}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <Text style={styles.label}>အသင်းတွင်းတာဝန် (Org Position)</Text>
+          <View style={styles.statusRow}>
+            {ORG_POSITION_VALUES.map((position) => (
+              <Pressable
+                key={position}
+                style={[styles.statusChip, orgPosition === position ? styles.statusChipActive : undefined]}
+                onPress={() => setOrgPosition(position)}
+              >
+                <Text style={[styles.statusChipText, orgPosition === position ? styles.statusChipTextActive : undefined]}>
+                  {ORG_POSITION_LABELS[position]}
                 </Text>
               </Pressable>
             ))}

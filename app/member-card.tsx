@@ -9,6 +9,7 @@ import QRCode from 'react-native-qrcode-svg';
 import * as MediaLibrary from 'expo-media-library';
 import { captureRef } from 'react-native-view-shot';
 import { formatPhoneForDisplay } from "@/lib/member-utils";
+import { normalizeOrgPosition, ORG_POSITION_LABELS } from "@/lib/types";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -35,6 +36,7 @@ export default function MemberCardScreen() {
   const imageRef = useRef<View>(null);
   const [status, requestPermission] = MediaLibrary.usePermissions();
   const phoneDisplay = formatPhoneForDisplay(member?.phone, (member as any)?.secondaryPhone);
+  const orgPositionLabel = ORG_POSITION_LABELS[normalizeOrgPosition((member as any)?.orgPosition || member?.status)];
 
   if (!member) return null;
 
@@ -128,6 +130,11 @@ export default function MemberCardScreen() {
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>EMAIL</Text>
                   <Text style={styles.detailValue}>{member.email || '-'}</Text>
+                </View>
+
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>POSITION</Text>
+                  <Text style={styles.detailValue}>{orgPositionLabel}</Text>
                 </View>
               </View>
             </View>

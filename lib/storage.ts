@@ -8,6 +8,7 @@ import {
   Loan,
   AccountSettings,
   normalizeMemberStatus,
+  normalizeOrgPosition,
 } from "./types";
 import { normalizeDateText, splitPhoneNumbers } from "./member-utils";
 
@@ -48,6 +49,9 @@ export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
 function normalizeMemberData(member: any): Member {
   const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member?.phone, member?.secondaryPhone);
   const normalizedStatus = normalizeMemberStatus(member?.status);
+  const normalizedOrgPosition = normalizeOrgPosition(
+    member?.orgPosition || (normalizedStatus === "applicant" ? "applicant" : "member")
+  );
   const normalizedStatusDate = normalizeDateText(member?.statusDate || member?.resignDate);
   const normalizedReason =
     typeof member?.statusReason === "string"
@@ -60,6 +64,8 @@ function normalizeMemberData(member: any): Member {
     ...member,
     phone: primaryPhone,
     email: normalizedEmail,
+    systemRole: member?.systemRole === "admin" ? "admin" : "org_user",
+    orgPosition: normalizedOrgPosition,
     dob: normalizeDateText(member?.dob),
     joinDate: normalizeDateText(member?.joinDate) || new Date().toLocaleDateString("en-GB"),
     status: normalizedStatus,

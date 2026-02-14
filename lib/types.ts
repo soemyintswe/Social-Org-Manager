@@ -1,10 +1,11 @@
 // lib/types.ts
 
-export const MEMBER_STATUS_VALUES = ["active", "resigned", "deceased", "expelled", "suspended"] as const;
+export const MEMBER_STATUS_VALUES = ["applicant", "active", "resigned", "deceased", "expelled", "suspended"] as const;
 
 export type MemberStatus = (typeof MEMBER_STATUS_VALUES)[number];
 
 export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
+  applicant: "လျှောက်ထားသူ",
   active: "ပုံမှန်",
   resigned: "နှုတ်ထွက်",
   deceased: "ကွယ်လွန်",
@@ -12,13 +13,45 @@ export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
   suspended: "ဆိုင်းငံ့",
 };
 
+export const ORG_POSITION_VALUES = [
+  "patron",
+  "chairperson",
+  "secretary",
+  "treasurer",
+  "auditor",
+  "committee_member",
+  "member",
+  "applicant",
+] as const;
+
+export type OrgPosition = (typeof ORG_POSITION_VALUES)[number];
+
+export const ORG_POSITION_LABELS: Record<OrgPosition, string> = {
+  patron: "နာယက",
+  chairperson: "ဥက္ကဋ္ဌ",
+  secretary: "အတွင်းရေးမှူး",
+  treasurer: "ဘဏ္ဍာရေးမှူး",
+  auditor: "စာရင်းစစ်",
+  committee_member: "ကော်မတီအဖွဲ့ဝင်",
+  member: "သာမန်အသင်းဝင်",
+  applicant: "လျှောက်ထားသူ",
+};
+
+export const SYSTEM_ROLE_VALUES = ["admin", "org_user"] as const;
+
+export type SystemRole = (typeof SYSTEM_ROLE_VALUES)[number];
+
 export function normalizeMemberStatus(value: unknown): MemberStatus {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "လျှောက်ထားသူ") return "applicant";
   if (raw === "ပုံမှန်") return "active";
   if (raw === "နှုတ်ထွက်") return "resigned";
   if (raw === "ကွယ်လွန်") return "deceased";
   if (raw === "ထုတ်ပယ်") return "expelled";
   if (raw === "ဆိုင်းငံ့") return "suspended";
+  if (raw === "pending") return "applicant";
+  if (raw === "applying") return "applicant";
+  if (raw === "applicant") return "applicant";
   if (raw === "inactive") return "resigned";
   if (raw === "suspend") return "suspended";
   if (raw === "deactive") return "resigned";
@@ -26,6 +59,24 @@ export function normalizeMemberStatus(value: unknown): MemberStatus {
     return raw as MemberStatus;
   }
   return "active";
+}
+
+export function normalizeOrgPosition(value: unknown): OrgPosition {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "နာယက") return "patron";
+  if (raw === "ဥက္ကဋ္ဌ") return "chairperson";
+  if (raw === "အတွင်းရေးမှူး") return "secretary";
+  if (raw === "ဘဏ္ဍာရေးမှူး") return "treasurer";
+  if (raw === "စာရင်းစစ်") return "auditor";
+  if (raw === "ကော်မတီအဖွဲ့ဝင်") return "committee_member";
+  if (raw === "သာမန်အသင်းဝင်") return "member";
+  if (raw === "လျှောက်ထားသူ") return "applicant";
+  if (raw === "member") return "member";
+  if (raw === "committee") return "committee_member";
+  if ((ORG_POSITION_VALUES as readonly string[]).includes(raw)) {
+    return raw as OrgPosition;
+  }
+  return "member";
 }
 
 export interface Member {
@@ -36,6 +87,8 @@ export interface Member {
   phone: string;
   secondaryPhone?: string;
   email?: string;
+  systemRole?: SystemRole;
+  orgPosition?: OrgPosition;
   address?: string;
   joinDate: string;
   status: MemberStatus;

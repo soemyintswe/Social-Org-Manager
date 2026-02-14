@@ -17,7 +17,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { MEMBER_STATUS_LABELS, MEMBER_STATUS_VALUES, normalizeMemberStatus, type Member, type MemberStatus } from "@/lib/types";
+import {
+  MEMBER_STATUS_LABELS,
+  MEMBER_STATUS_VALUES,
+  normalizeMemberStatus,
+  normalizeOrgPosition,
+  ORG_POSITION_LABELS,
+  type Member,
+  type MemberStatus,
+} from "@/lib/types";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
@@ -165,7 +173,8 @@ export default function MembersScreen() {
         String(m.id || "").toLowerCase().includes(needle) ||
         (m.email || "").toLowerCase().includes(needle) ||
         (m.phone || "").toLowerCase().includes(needle) ||
-        ((m as any).secondaryPhone || "").toLowerCase().includes(needle)
+        ((m as any).secondaryPhone || "").toLowerCase().includes(needle) ||
+        ORG_POSITION_LABELS[normalizeOrgPosition((m as any).orgPosition || m.status)].toLowerCase().includes(needle)
       );
     }
 
@@ -429,6 +438,9 @@ export default function MembersScreen() {
               <Text style={styles.memberId}>ID: {item.id}</Text>
               <View style={styles.metaRow}>
                 <Text style={styles.metaText}>{MEMBER_STATUS_LABELS[normalizeMemberStatus(item.status)]}</Text>
+                <Text style={[styles.metaText, { marginLeft: 8 }]}>
+                  {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || item.status)]}
+                </Text>
                 {(() => {
                   const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
                   if (age === null) return null;
