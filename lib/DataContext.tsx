@@ -37,6 +37,7 @@ interface DataContextValue {
   editGroup: (id: string, u: Partial<Group>) => Promise<void>;
   removeGroup: (id: string) => Promise<void>;
   addTransaction: (t: Omit<Transaction, "id">) => Promise<Transaction>;
+  updateTransaction: (id: string, u: Partial<Transaction>) => Promise<void>;
   removeTransaction: (id: string) => Promise<void>;
   addLoan: (l: Omit<Loan, "id">) => Promise<Loan>;
   editLoan: (id: string, u: Partial<Loan>) => Promise<void>;
@@ -153,6 +154,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return newTxn;
   };
 
+  const updateTransaction = async (id: string, u: Partial<Transaction>) => {
+    await store.updateTransaction(id, u);
+    await refreshData();
+  };
+
   const removeTransaction = async (id: string) => {
     await store.deleteTransaction(id);
     await refreshData();
@@ -220,7 +226,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
-    addTransaction, removeTransaction,
+    addTransaction, updateTransaction, removeTransaction,
     addLoan, editLoan, removeLoan,
     updateAccountSettings,
     getLoanOutstanding, getLoanInterestDue,

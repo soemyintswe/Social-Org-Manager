@@ -164,7 +164,6 @@ export default function FinanceScreen() {
     getLoanOutstanding,
     loading,
     accountSettings,
-    refreshData,
     updateAccountSettings
   } = useData() as any;
 
@@ -285,7 +284,13 @@ export default function FinanceScreen() {
       <View style={styles.header}>
         <View style={{ width: 140 }} />
         <Text style={[styles.title, { flex: 1, textAlign: 'center' }]}>ငွေစာရင်းမှတ်တမ်း</Text>
-        <View style={[styles.headerButtons, { width: 140, justifyContent: 'flex-end', paddingRight: 110 }]}>
+        <View style={[styles.headerButtons, { width: 190, justifyContent: 'flex-end', paddingRight: 110 }]}>
+          <Pressable
+            style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+            onPress={() => router.push("/transaction-data-management")}
+          >
+            <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} {...({ title: "ငွေစာရင်း Data Tools" } as any)} />
+          </Pressable>
           <Pressable
             style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
             onPress={handleOpenSettings}

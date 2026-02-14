@@ -28,6 +28,7 @@ function RootLayoutNav() {
       <Stack.Screen name="add-loan" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="account-settings" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="member-data-management" options={{ headerShown: false, presentation: "modal" }} />
+      <Stack.Screen name="transaction-data-management" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="event-detail" options={{ headerShown: false }} />
       <Stack.Screen name="member-detail" options={{ headerShown: false }} />
       <Stack.Screen name="group-detail" options={{ headerShown: false }} />

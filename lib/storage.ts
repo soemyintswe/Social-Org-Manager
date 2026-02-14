@@ -147,17 +147,39 @@ export async function saveAttendance(eventId: string, memberId: string, status: 
 
 // --- Transactions ---
 export const getTransactions = () => safeGet<Transaction[]>(KEYS.TRANSACTIONS, []);
+export const saveTransactions = (data: any[]) => AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(data));
+
+export async function importTransactions(newTransactions: any[]): Promise<void> {
+  const existing = await getTransactions();
+  const transactionMap = new Map(existing.map((t: any) => [t.id, t]));
+
+  for (const txn of newTransactions) {
+    const id = txn?.id || generateId();
+    transactionMap.set(id, { ...txn, id });
+  }
+
+  await saveTransactions(Array.from(transactionMap.values()));
+}
 
 export async function addTransaction(txn: any) {
   const txns = await getTransactions();
   const newTxn = { ...txn, id: generateId() };
-  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTxn, ...txns]));
+  await saveTransactions([newTxn, ...txns]);
   return newTxn;
+}
+
+export async function updateTransaction(id: string, updates: any) {
+  const txns = await getTransactions();
+  const idx = txns.findIndex((t: any) => t.id === id);
+  if (idx !== -1) {
+    txns[idx] = { ...txns[idx], ...updates };
+    await saveTransactions(txns);
+  }
 }
 
 export async function deleteTransaction(id: string) {
   const txns = await getTransactions();
-  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns.filter(t => t.id !== id)));
+  await saveTransactions(txns.filter((t: any) => t.id !== id));
 }
 
 // --- Loans ---
