@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -17,8 +17,8 @@ import { router } from "expo-router";
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from "expo-image-picker";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
+import { useData } from "@/lib/DataContext";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 
 interface OrgEvent {
@@ -32,7 +32,7 @@ interface OrgEvent {
 
 export default function EventsScreen() {
   const insets = useSafeAreaInsets();
-  const [events, setEvents] = useState<OrgEvent[]>([]);
+  const { events, addEvent, updateEvent, deleteEvent } = useData() as any;
   const [modalVisible, setModalVisible] = useState(false);
   
   // Form State
@@ -41,21 +41,6 @@ export default function EventsScreen() {
   const [type, setType] = useState<"activity" | "news" | "announcement">("activity");
   const [image, setImage] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-
-  useEffect(() => {
-    loadEvents();
-  }, []);
-
-  const loadEvents = async () => {
-    try {
-      const stored = await AsyncStorage.getItem("@org_events");
-      if (stored) {
-        setEvents(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const pickImage = async () => {
     try {
@@ -101,16 +86,17 @@ export default function EventsScreen() {
       return;
     }
 
-    let updatedEvents;
-
     if (editingId) {
-      updatedEvents = events.map(e => e.id === editingId ? {
-        ...e,
-        title: title.trim(),
-        description: description.trim(),
-        type,
-        image: image || undefined,
-      } : e);
+      if (updateEvent) {
+        const existing = events.find((e: any) => e.id === editingId);
+        await updateEvent({
+          ...existing,
+          title: title.trim(),
+          description: description.trim(),
+          type,
+          image: image || undefined,
+        });
+      }
     } else {
       const newEvent: OrgEvent = {
         id: Date.now().toString(),
@@ -120,26 +106,21 @@ export default function EventsScreen() {
         type,
         image: image || undefined,
       };
-      updatedEvents = [newEvent, ...events];
+      if (addEvent) await addEvent(newEvent);
     }
 
-    setEvents(updatedEvents);
-    await AsyncStorage.setItem("@org_events", JSON.stringify(updatedEvents));
-    
     resetForm();
     setModalVisible(false);
   };
 
-  const deleteEvent = async (id: string) => {
+  const handleDelete = async (id: string) => {
     Alert.alert("Delete", "ဖျက်ရန် သေချာပါသလား?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          const updated = events.filter(e => e.id !== id);
-          setEvents(updated);
-          await AsyncStorage.setItem("@org_events", JSON.stringify(updated));
+          if (deleteEvent) await deleteEvent(id);
         }
       }
     ]);
@@ -231,13 +212,17 @@ export default function EventsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.replace('/')} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </Pressable>
-        <Text style={styles.headerTitle}>လှုပ်ရှားမှုနှင့် သတင်းများ</Text>
-        <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.addBtn, { marginRight: 150 }]}>
-          <Ionicons name="add" size={24} color={Colors.light.tint} />
-        </Pressable>
+        <View style={{ width: 50, alignItems: 'flex-start' }}>
+          <Pressable onPress={() => router.replace('/')} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={24} color={Colors.light.text} {...({ title: "နောက်သို့" } as any)} />
+          </Pressable>
+        </View>
+        <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>လှုပ်ရှားမှုနှင့် သတင်းများ</Text>
+        <View style={{ width: 50, alignItems: 'flex-end' }}>
+          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={styles.addBtn}>
+            <Ionicons name="add" size={24} color={Colors.light.tint} {...({ title: "လှုပ်ရှားမှုအသစ်" } as any)} />
+          </Pressable>
+        </View>
       </View>
 
       <FlatList
@@ -264,13 +249,13 @@ export default function EventsScreen() {
             </View>
             <View style={styles.actionRow}>
               <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); onShare(item); }}>
-                <Ionicons name="share-social-outline" size={20} color={Colors.light.text} />
+                <Ionicons name="share-social-outline" size={20} color={Colors.light.text} {...({ title: "မျှဝေရန်" } as any)} />
               </Pressable>
               <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); handleEdit(item); }}>
-                <Ionicons name="create-outline" size={20} color={Colors.light.tint} />
+                <Ionicons name="create-outline" size={20} color={Colors.light.tint} {...({ title: "ပြင်ဆင်ရန်" } as any)} />
               </Pressable>
-              <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); deleteEvent(item.id); }}>
-                <Ionicons name="trash-outline" size={20} color="#EF4444" />
+              <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); handleDelete(item.id); }}>
+                <Ionicons name="trash-outline" size={20} color="#EF4444" {...({ title: "ဖျက်ရန်" } as any)} />
               </Pressable>
             </View>
           </Pressable>

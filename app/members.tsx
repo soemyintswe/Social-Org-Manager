@@ -261,22 +261,22 @@ export default function MembersScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-        <Pressable onPress={() => router.replace('/')} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </Pressable>
-        <Text style={styles.headerTitle}>အသင်းဝင်များ ({members?.length || 0})</Text>
-        <View style={{ flexDirection: 'row', gap: 15, marginRight: 150, alignItems: 'center' }}>
-          <Pressable onPress={async () => refreshData && await refreshData()} style={styles.addBtn}>
-            <Ionicons name="refresh" size={24} color={Colors.light.tint} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/data-management")} style={styles.addBtn}>
-            <Ionicons name="cloud-download-outline" size={24} color={Colors.light.tint} />
-          </Pressable>
-          <Pressable onPress={() => router.push("/add-member" as any)} style={styles.addBtn}>
-            <Ionicons name="add" size={24} color={Colors.light.tint} />
-          </Pressable>
+   <Text style={styles.headerTitle}>အသင်းဝင်များ ({members?.length || 0})</Text>
+        <View style={{ flexDirection: 'row', marginRight: 10, alignItems: 'center', justifyContent: 'flex-end' }}>
+        <Pressable onPress={() => router.push("/data-management")} style={styles.addBtn}>
+        <Ionicons name="cloud-download-outline" size={24} color={Colors.light.tint} />
+         </Pressable>
+           <Pressable onPress={() => router.push("/add-member" as any)} style={styles.addBtn}>
+        <Ionicons name="add" size={24} color={Colors.light.tint} />
+         </Pressable>
+             <Pressable  style={styles.addBtn}>
+             <Ionicons name="menu-outline" size={24} color={Colors.light.tint} />
+             </Pressable>
+        
+
         </View>
       </View>
+
 
       <View>
         <View style={styles.searchBar}>
@@ -525,13 +525,13 @@ export default function MembersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
-  headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+ header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   backBtn: { padding: 4 },
   addBtn: { padding: 4 },
   searchBar: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, margin: 15, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, height: 44 },
   searchInput: { flex: 1, marginLeft: 10, fontSize: 15, color: Colors.light.text },
   filterRow: { flexDirection: "row", paddingHorizontal: 15, marginBottom: 10, gap: 10 },
+  headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1, textAlign: 'center' },
   sortBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: Colors.light.surface, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   sortBtnText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_500Medium" },
   orderBtn: { width: 40, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.surface, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },

@@ -49,11 +49,11 @@ export default function LoansScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.replace('/')} style={styles.backBtn}>
+        <Pressable onPress={() => router.replace('/')} style={[styles.backBtn, { marginLeft: 130 }]}>
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>ချေးငွေစာရင်း</Text>
-        <Pressable onPress={() => router.push("/add-loan" as any)} style={[styles.addBtn, { marginRight: 150 }]}>
+        <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>ချေးငွေစာရင်း</Text>
+        <Pressable onPress={() => router.push("/add-loan" as any)} style={styles.addBtn}>
           <Ionicons name="add" size={24} color={Colors.light.tint} />
         </Pressable>
       </View>

@@ -365,7 +365,7 @@ export default function DashboardScreen() {
           <Text style={styles.greeting}>မင်္ဂလာပါ</Text>
           <Text style={styles.orgName}>OrgHub Dashboard</Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 10, marginRight: 150 }}>
+        <View style={{ flexDirection: 'row', gap: 10, marginRight: 110 }}>
           <Pressable 
             style={styles.profileBtn}
             onPress={() => router.replace("/")}

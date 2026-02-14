@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Switch,
   ToastAndroid,
+  Modal,
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -294,10 +295,10 @@ export default function DataManagementScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.replace("/")} style={styles.backBtn}>
+        <Pressable onPress={() => router.replace("/")} style={[styles.backBtn, { marginLeft: 130 }]}>
           <Ionicons name="home" size={24} color={Colors.light.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>System Settings</Text>
+        <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>System Settings</Text>
         <View style={{ width: 24 }} />
       </View>
 
@@ -393,6 +394,22 @@ export default function DataManagementScreen() {
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={importing}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="large" color={Colors.light.tint} />
+            <Text style={styles.loadingText}>Restoring Data...</Text>
+            <Text style={styles.loadingSubText}>Please wait while we process your backup file.</Text>
+          </View>
+        </View>
+      </Modal>
+
       <FloatingTabMenu />
     </View>
   );

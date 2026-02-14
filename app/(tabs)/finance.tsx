@@ -283,25 +283,20 @@ export default function FinanceScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>ငွေစာရင်းမှတ်တမ်း</Text>
-        <View style={[styles.headerButtons, { marginRight: 150 }]}>
-          <Pressable
-            style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, marginRight: 8 }]}
-            onPress={handleOpenSettings}
-          >
-            <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
-          </Pressable>
+        <View style={{ width: 140 }} />
+        <Text style={[styles.title, { flex: 1, textAlign: 'center' }]}>ငွေစာရင်းမှတ်တမ်း</Text>
+        <View style={[styles.headerButtons, { width: 140, justifyContent: 'flex-end', paddingRight: 110 }]}>
           <Pressable
             style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-            onPress={async () => refreshData && await refreshData()}
+            onPress={handleOpenSettings}
           >
-            <Ionicons name="refresh" size={20} color={Colors.light.text} />
+            <Ionicons name="wallet-outline" size={20} color={Colors.light.text} {...({ title: "လက်ကျန်ငွေစာရင်း" } as any)} />
           </Pressable>
           <Pressable
             style={styles.addButton}
             onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
           >
-            <Ionicons name="add" size={24} color="white" />
+            <Ionicons name="add" size={24} color="white" {...({ title: "စာရင်းသစ်ထည့်ရန်" } as any)} />
           </Pressable>
         </View>
       </View>
