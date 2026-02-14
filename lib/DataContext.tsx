@@ -14,6 +14,7 @@ import type {
   Transaction,
   Loan,
   AccountSettings,
+  UserAccount,
 } from "./types";
 import * as store from "./storage";
 
@@ -24,6 +25,7 @@ interface DataContextValue {
   attendance: AttendanceRecord[];
   transactions: Transaction[];
   loans: Loan[];
+  users: UserAccount[];
   accountSettings: AccountSettings;
   loading: boolean;
   refreshData: () => Promise<void>;
@@ -42,6 +44,8 @@ interface DataContextValue {
   addLoan: (l: Omit<Loan, "id">) => Promise<Loan>;
   editLoan: (id: string, u: Partial<Loan>) => Promise<void>;
   removeLoan: (id: string) => Promise<void>;
+  upsertUserAccount: (u: UserAccount) => Promise<void>;
+  removeUserAccount: (id: string) => Promise<void>;
   updateAccountSettings: (s: AccountSettings) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
@@ -61,6 +65,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [users, setUsers] = useState<UserAccount[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
     orgName: "My Organization",
     currency: "MMK",
@@ -72,13 +77,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const refreshData = useCallback(async () => {
     try {
-      const [m, e, g, a, t, l, s] = await Promise.all([
+      await store.seedDefaultAdminUser();
+      const [m, e, g, a, t, l, u, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
         store.getAttendance(),
         store.getTransactions(),
         store.getLoans(),
+        store.getUsers(),
         store.getAccountSettings(),
       ]);
       setMembers(m);
@@ -87,6 +94,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setAttendance(a);
       setTransactions(t);
       setLoans(l);
+      setUsers(u);
       if (s) setAccountSettings(s);
     } catch (error) {
       console.error("Refresh Error:", error);
@@ -180,6 +188,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData();
   };
 
+  const upsertUserAccount = async (u: UserAccount) => {
+    await store.upsertUserAccount(u);
+    await refreshData();
+  };
+
+  const removeUserAccount = async (id: string) => {
+    await store.deleteUserAccount(id);
+    await refreshData();
+  };
+
   const updateAccountSettings = async (s: AccountSettings) => {
     await store.saveAccountSettings(s);
     await refreshData();
@@ -222,12 +240,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
     addTransaction, updateTransaction, removeTransaction,
     addLoan, editLoan, removeLoan,
+    upsertUserAccount, removeUserAccount,
     updateAccountSettings,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,

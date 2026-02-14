@@ -7,6 +7,7 @@ import {
   Transaction,
   Loan,
   AccountSettings,
+  UserAccount,
   normalizeMemberStatus,
   normalizeOrgPosition,
 } from "./types";
@@ -20,6 +21,7 @@ const KEYS = {
   TRANSACTIONS: "@orghub_transactions",
   LOANS: "@orghub_loans",
   ACCOUNT_SETTINGS: "@orghub_account_settings",
+  USERS: "@orghub_users",
 };
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
@@ -45,6 +47,9 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
 
 // --- Members ---
 export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
+export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
+
+const DEFAULT_ADMIN_USER_ID = "admin-root";
 
 function normalizeMemberData(member: any): Member {
   const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member?.phone, member?.secondaryPhone);
@@ -86,8 +91,71 @@ function normalizeMemberData(member: any): Member {
   return normalized as Member;
 }
 
-export const saveMembers = (data: Member[]) =>
-  AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data.map((member) => normalizeMemberData(member))));
+function mapMemberToUser(member: Member, existing?: UserAccount): UserAccount {
+  const now = new Date().toISOString();
+  const memberStatus = normalizeMemberStatus(member.status);
+  const displayName = member.name || existing?.displayName || member.id;
+  return {
+    id: existing?.id || `user-${member.id}`,
+    memberId: member.id,
+    systemRole: "org_user",
+    orgPosition: normalizeOrgPosition((member as any).orgPosition || member.status),
+    displayName,
+    email: member.email || existing?.email,
+    phone: member.phone || existing?.phone,
+    isActive: memberStatus !== "deceased" && memberStatus !== "expelled",
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export async function saveUsers(data: UserAccount[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
+}
+
+async function syncUsersFromMembers(members: Member[]): Promise<void> {
+  const existingUsers = await getUsers();
+  const userByMemberId = new Map(existingUsers.filter((u) => u.memberId).map((u) => [u.memberId as string, u]));
+  const nonMemberUsers = existingUsers.filter((u) => !u.memberId);
+  const memberUsers = members.map((member) => mapMemberToUser(member, userByMemberId.get(member.id)));
+  await saveUsers([...nonMemberUsers, ...memberUsers]);
+}
+
+export async function seedDefaultAdminUser(): Promise<void> {
+  const users = await getUsers();
+  if (users.some((u) => u.systemRole === "admin")) return;
+  const now = new Date().toISOString();
+  const adminUser: UserAccount = {
+    id: DEFAULT_ADMIN_USER_ID,
+    systemRole: "admin",
+    displayName: "System Admin",
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await saveUsers([adminUser, ...users]);
+}
+
+export async function upsertUserAccount(account: UserAccount): Promise<void> {
+  const users = await getUsers();
+  const idx = users.findIndex((u) => u.id === account.id);
+  const now = new Date().toISOString();
+  const next = { ...account, updatedAt: now, createdAt: account.createdAt || now };
+  if (idx >= 0) users[idx] = next;
+  else users.unshift(next);
+  await saveUsers(users);
+}
+
+export async function deleteUserAccount(id: string): Promise<void> {
+  const users = await getUsers();
+  await saveUsers(users.filter((user) => user.id !== id));
+}
+
+export async function saveMembers(data: Member[]): Promise<void> {
+  const normalizedMembers = data.map((member) => normalizeMemberData(member));
+  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalizedMembers));
+  await syncUsersFromMembers(normalizedMembers);
+}
 
 export async function importMembers(newMembers: Member[]): Promise<void> {
   const members = await getMembers();

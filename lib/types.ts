@@ -101,6 +101,19 @@ export interface Member {
   role: string;
 }
 
+export interface UserAccount {
+  id: string;
+  memberId?: string;
+  systemRole: SystemRole;
+  orgPosition?: OrgPosition;
+  displayName: string;
+  email?: string;
+  phone?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface OrgEvent {
   id: string;
   title: string;
