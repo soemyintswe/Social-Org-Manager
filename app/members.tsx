@@ -20,6 +20,7 @@ import { useData } from "@/lib/DataContext";
 import type { Member } from "@/lib/types";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
+import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
 
 type SortOption = "id" | "name" | "joinDate" | "dob" | "age";
 type MemberListItem = Member & { profileImage?: string };
@@ -43,55 +44,38 @@ export default function MembersScreen() {
   const [maxAge, setMaxAge] = useState("");
   const [showTargetDatePicker, setShowTargetDatePicker] = useState(false);
 
-  const convertToEnglishDigits = useCallback((str: string) => {
-    const myanmarNumbers = ["၀", "၁", "၂", "၃", "၄", "၅", "၆", "၇", "၈", "၉"];
-    return str.replace(/[၀-၉]/g, (s) => myanmarNumbers.indexOf(s).toString());
+  const parseDate = useCallback((dateStr?: string) => {
+    const parsed = parseGregorianDate(dateStr);
+    return parsed ? parsed.getTime() : Number.NaN;
   }, []);
 
-  // DD/MM/YYYY format ကို Timestamp ပြောင်းရန်
-  const parseDate = useCallback((dateStr?: string) => {
-    if (!dateStr) return 0;
-    const cleanStr = convertToEnglishDigits(dateStr);
-    const parts = cleanStr.split(/[\/\.\-]/);
-    if (parts.length === 3) {
-      return new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)).getTime();
-    }
-    return 0;
-  }, [convertToEnglishDigits]);
+  const compareDateValues = useCallback((left: number, right: number, order: "asc" | "desc") => {
+    const leftValid = Number.isFinite(left);
+    const rightValid = Number.isFinite(right);
+    if (!leftValid && !rightValid) return 0;
+    if (!leftValid) return 1;
+    if (!rightValid) return -1;
+    return order === "asc" ? left - right : right - left;
+  }, []);
 
   // အသက်တွက်ချက်ရန်
   const calculateAge = useCallback((dobStr?: string, refDate: Date = new Date()) => {
-    if (!dobStr) return null;
-    const cleanStr = convertToEnglishDigits(dobStr);
-    const parts = cleanStr.split(/[\/\.\-]/);
-    if (parts.length === 3) {
-      const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10);
-      const year = parseInt(parts[2], 10);
-      if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+    const birthDate = parseGregorianDate(dobStr);
+    if (!birthDate) return null;
 
-      if (year < 1900) return null; // Myanmar Era or invalid year
-
-      const birthDate = new Date(year, month - 1, day);
-      let age = refDate.getFullYear() - birthDate.getFullYear();
-      const m = refDate.getMonth() - birthDate.getMonth();
-      if (m < 0 || (m === 0 && refDate.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      return age;
+    let age = refDate.getFullYear() - birthDate.getFullYear();
+    const monthDiff = refDate.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
+      age--;
     }
-    return null;
-  }, [convertToEnglishDigits]);
+    return age;
+  }, []);
 
   const getUpcomingBirthdayDate = useCallback((dobStr?: string) => {
-    if (!dobStr) return null;
-    const cleanStr = convertToEnglishDigits(dobStr);
-    const parts = cleanStr.split(/[\/\.\-]/);
-    if (parts.length !== 3) return null;
-    
-    const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10);
-    if (isNaN(day) || isNaN(month)) return null;
+    const birthDate = parseGregorianDate(dobStr);
+    if (!birthDate) return null;
+    const day = birthDate.getDate();
+    const month = birthDate.getMonth();
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -101,21 +85,21 @@ export default function MembersScreen() {
 
     const oneMonthLater = new Date(today);
     oneMonthLater.setMonth(today.getMonth() + 1);
-    
+
     const currentYear = today.getFullYear();
     const datesToCheck = [
-        new Date(currentYear, month - 1, day),
-        new Date(currentYear + 1, month - 1, day),
-        new Date(currentYear - 1, month - 1, day)
+        new Date(currentYear, month, day),
+        new Date(currentYear + 1, month, day),
+        new Date(currentYear - 1, month, day)
     ];
-    
+
     for (const date of datesToCheck) {
         if (date >= threeDaysAgo && date <= oneMonthLater) {
             return date;
         }
     }
     return null;
-  }, [convertToEnglishDigits]);
+  }, []);
 
   const sortedMembers = useMemo(() => {
     let data: MemberListItem[] = [...(members as MemberListItem[])];
@@ -198,27 +182,27 @@ export default function MembersScreen() {
         case "joinDate": {
           const valA = parseDate(a.joinDate);
           const valB = parseDate(b.joinDate);
-          return sortOrder === "asc" ? valA - valB : valB - valA;
+          return compareDateValues(valA, valB, sortOrder);
         }
 
         case "dob": {
           const valA = parseDate(a.dob);
           const valB = parseDate(b.dob);
-          return sortOrder === "asc" ? valA - valB : valB - valA;
+          return compareDateValues(valA, valB, sortOrder);
         }
 
         case "age": {
           // Age Asc (အသက်အငယ်ဆုံးမှ အကြီးဆုံး) -> DOB Desc
           const valA = parseDate(a.dob);
           const valB = parseDate(b.dob);
-          return sortOrder === "asc" ? valB - valA : valA - valB;
+          return compareDateValues(valB, valA, sortOrder);
         }
            
         default:
           return 0;
       }
     });
-  }, [members, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, calculateAge, getUpcomingBirthdayDate]);
+  }, [members, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate]);
 
   const getAvatarLabel = (name: string) => {
     if (!name) return "?";
@@ -463,7 +447,7 @@ export default function MembersScreen() {
               <View style={styles.metaRow}>
                 {sortBy === 'joinDate' && <Text style={styles.metaText}>Joined: {item.joinDate}</Text>}
                 {sortBy === 'dob' && <Text style={styles.metaText}>DOB: {item.dob}</Text>}
-                {sortBy === 'name' && <Text style={styles.metaText}>{item.phone}</Text>}
+                {sortBy === 'name' && <Text style={styles.metaText}>{formatPhoneForDisplay(item.phone, (item as any).secondaryPhone) || item.phone}</Text>}
               </View>
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />

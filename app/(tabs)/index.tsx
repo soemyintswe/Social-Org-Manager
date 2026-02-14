@@ -19,8 +19,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { CATEGORY_LABELS, TransactionCategory, Loan } from "@/lib/types";
+import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
 import { exportData } from "@/lib/storage";
+import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -46,17 +47,6 @@ interface Transaction {
 
 // A utility function for consistent currency formatting
 const formatCurrency = (amount: number) => `${amount.toLocaleString()} KS`;
-
-interface DataContextType {
-  members: { id: string; name?: string; firstName?: string; lastName?: string }[];
-  transactions: Transaction[];
-  loans: Loan[];
-  loading: boolean;
-  getTotalBalance: () => number;
-  getLoanOutstanding: (id: string) => number;
-  refreshData?: () => Promise<void>;
-}
-
 
 function StatCard({
   icon,
@@ -110,7 +100,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, transactions, loans, loading, getTotalBalance, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, transactions, loans, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -223,37 +213,28 @@ export default function DashboardScreen() {
     return () => clearTimeout(timeout);
   }, [members, transactions, loans]);
 
-  const convertToEnglishDigits = (str: string) => {
-      const myanmarNumbers = ["၀", "၁", "၂", "၃", "၄", "၅", "၆", "၇", "၈", "၉"];
-      return str.replace(/[၀-၉]/g, (s) => myanmarNumbers.indexOf(s).toString());
-  };
-
   const getAge = (dob: string) => {
-      if (!dob) return 0;
-      const clean = convertToEnglishDigits(dob);
-      const parts = clean.split(/[\/\.\-]/);
-      if (parts.length === 3) {
-          const year = parseInt(parts[2], 10);
-          if (!isNaN(year)) {
-              return new Date().getFullYear() - year;
-          }
+      const birthDate = parseGregorianDate(dob);
+      if (!birthDate) return 0;
+      const now = new Date();
+      let age = now.getFullYear() - birthDate.getFullYear();
+      const monthDiff = now.getMonth() - birthDate.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
+        age--;
       }
-      return 0;
+      return age;
   };
 
   const getOccurrenceDate = (dob: string) => {
-      if (!dob) return null;
-      const cleanDob = convertToEnglishDigits(dob);
-      const parts = cleanDob.split(/[\/\.\-]/);
-      if (parts.length !== 3) return null;
-      
-      const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      
+      const birthDate = parseGregorianDate(dob);
+      if (!birthDate) return null;
+      const day = birthDate.getDate();
+      const month = birthDate.getMonth();
+
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const currentYear = today.getFullYear();
-      
+
       const dates = [
         new Date(currentYear, month, day),
         new Date(currentYear + 1, month, day),
@@ -334,13 +315,15 @@ export default function DashboardScreen() {
     scheduleBirthdayNotification();
   }, [upcomingBirthdays]);
 
-  const handleSendWish = (phone: string, name: string) => {
-    if (!phone) {
+  const handleSendWish = (phone: string, name: string, secondaryPhone?: string) => {
+    const { primaryPhone, secondaryPhone: fallbackPhone } = splitPhoneNumbers(phone, secondaryPhone);
+    const targetPhone = primaryPhone || fallbackPhone;
+    if (!targetPhone) {
       Alert.alert("ဖုန်းနံပါတ်မရှိပါ", "ဤအသင်းဝင်တွင် ဖုန်းနံပါတ် ထည့်သွင်းထားခြင်း မရှိပါ။");
       return;
     }
     const message = `Happy Birthday ${name}! 🎂🎁 Best wishes from our Organization.`;
-    const url = `sms:${phone}${Platform.OS === "ios" ? "&" : "?"}body=${encodeURIComponent(message)}`;
+    const url = `sms:${targetPhone}${Platform.OS === "ios" ? "&" : "?"}body=${encodeURIComponent(message)}`;
     Linking.openURL(url).catch(() => {
       Alert.alert("Error", "Message ပို့၍ မရနိုင်ပါ။");
     });
@@ -436,7 +419,10 @@ export default function DashboardScreen() {
                   </Text>
                 </View>
               </Pressable>
-              <Pressable style={[styles.wishBtn, { backgroundColor: getBirthdayColor(m.dob) + '15' }]} onPress={() => handleSendWish(m.phone, m.name)}>
+              <Pressable
+                style={[styles.wishBtn, { backgroundColor: getBirthdayColor(m.dob) + '15' }]}
+                onPress={() => handleSendWish(m.phone, m.name, (m as any).secondaryPhone)}
+              >
                 <Ionicons name="chatbubble-ellipses-outline" size={16} color={getBirthdayColor(m.dob)} />
                 <Text style={[styles.wishBtnText, { color: getBirthdayColor(m.dob) }]}>Wish</Text>
               </Pressable>

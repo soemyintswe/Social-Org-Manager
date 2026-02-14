@@ -8,6 +8,7 @@ import { useData } from "@/lib/DataContext";
 import QRCode from 'react-native-qrcode-svg';
 import * as MediaLibrary from 'expo-media-library';
 import { captureRef } from 'react-native-view-shot';
+import { formatPhoneForDisplay } from "@/lib/member-utils";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -33,6 +34,7 @@ export default function MemberCardScreen() {
   const insets = useSafeAreaInsets();
   const imageRef = useRef<View>(null);
   const [status, requestPermission] = MediaLibrary.usePermissions();
+  const phoneDisplay = formatPhoneForDisplay(member?.phone, (member as any)?.secondaryPhone);
 
   if (!member) return null;
 
@@ -120,7 +122,7 @@ export default function MemberCardScreen() {
 
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>PHONE</Text>
-                  <Text style={styles.detailValue}>{member.phone || '-'}</Text>
+                  <Text style={styles.detailValue}>{phoneDisplay || '-'}</Text>
                 </View>
               </View>
             </View>

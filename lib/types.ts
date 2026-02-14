@@ -6,6 +6,7 @@ export interface Member {
   dob?: string;
   nrc?: string;
   phone: string;
+  secondaryPhone?: string;
   email?: string;
   address?: string;
   joinDate: string;

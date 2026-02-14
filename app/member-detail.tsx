@@ -19,6 +19,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS } from "@/lib/types";
+import { formatDateDdMmYyyy, formatPhoneForDisplay, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -67,29 +68,20 @@ export default function MemberDetailScreen() {
   const [editEmail, setEditEmail] = useState(member?.email || "");
   const [editDob, setEditDob] = useState(member?.dob || "");
   const [editPhone, setEditPhone] = useState(member?.phone || "");
+  const [editSecondaryPhone, setEditSecondaryPhone] = useState((member as any)?.secondaryPhone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
   const [editResignDate, setEditResignDate] = useState(member?.resignDate || "");
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  if (!member) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text>Member not found.</Text>
-        <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
-          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  const memberGroups = groups?.filter((g: any) => g.memberIds.includes(member?.id)) || [];
+  const memberIdValue = member?.id || "";
+  const memberGroups = groups?.filter((g: any) => g.memberIds.includes(memberIdValue)) || [];
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   // Financial Calculations
-  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === member.id) || [], [transactions, member.id]);
-  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === member.id) || [], [loans, member.id]);
+  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === memberIdValue) || [], [transactions, memberIdValue]);
+  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === memberIdValue) || [], [loans, memberIdValue]);
 
   const stats = useMemo(() => {
     return {
@@ -100,28 +92,19 @@ export default function MemberDetailScreen() {
       loanOutstanding: memberLoans.reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0),
       activeLoans: memberLoans.filter((l: any) => l.status === 'active').length,
     };
-  }, [memberTxns, memberLoans]);
+  }, [memberTxns, memberLoans, getLoanOutstanding]);
 
   const handleDobChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === "android") {
       setShowDobPicker(false);
     }
     if (selectedDate) {
-      const day = String(selectedDate.getDate()).padStart(2, "0");
-      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
-      const year = selectedDate.getFullYear();
-      setEditDob(`${day}/${month}/${year}`);
+      setEditDob(formatDateDdMmYyyy(selectedDate));
     }
   };
 
   const getInitialDate = () => {
-    if (!editDob) return new Date();
-    const parts = editDob.split(/[\/\.\-]/);
-    if (parts.length === 3) {
-      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      if (!isNaN(d.getTime())) return d;
-    }
-    return new Date();
+    return parseGregorianDate(editDob) || new Date();
   };
 
   const handleUpdate = async () => {
@@ -165,14 +148,16 @@ export default function MemberDetailScreen() {
         }
       }
 
+      const { primaryPhone, secondaryPhone } = splitPhoneNumbers(editPhone, editSecondaryPhone);
       await updateMember(member.id, {
         id: editMemberId.trim(),
         name: editName.trim(),
-        dob: editDob.trim(),
+        dob: normalizeDateText(editDob),
         email: editEmail.trim(),
-        phone: editPhone.trim(),
+        phone: primaryPhone,
+        secondaryPhone: secondaryPhone || undefined,
         address: editAddress.trim(),
-        resignDate: editResignDate.trim(),
+        resignDate: normalizeDateText(editResignDate),
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
@@ -180,7 +165,7 @@ export default function MemberDetailScreen() {
       if (editMemberId.trim() !== member.id) {
         router.replace({ pathname: "/member-detail", params: { id: editMemberId.trim() } } as any);
       }
-    } catch (err) {
+    } catch {
       Alert.alert("Error", "Could not update member");
     } finally {
       setSaving(false);
@@ -202,11 +187,22 @@ export default function MemberDetailScreen() {
   };
 
   // createdAt error ကို ရှောင်ရန် helper variable
-  const createdAtValue = (member as any).createdAt;
+  const createdAtValue = (member as any)?.createdAt;
 
   // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
   const isResigned = member?.resignDate && String(member.resignDate).trim() !== "";
   const statusLabel = isResigned ? "နှုတ်ထွက်" : "ပုံမှန်";
+
+  if (!member) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <Text>Member not found.</Text>
+        <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
+          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView 
@@ -277,7 +273,7 @@ export default function MemberDetailScreen() {
                     onChange: (e: any) => {
                       if (e.target.value) {
                         const [y, m, d] = e.target.value.split('-');
-                        setEditDob(`${d}/${m}/${y}`);
+                        setEditDob(normalizeDateText(`${d}/${m}/${y}`));
                       }
                     }
                   })}
@@ -302,6 +298,8 @@ export default function MemberDetailScreen() {
 
             <Text style={styles.editLabel}>Phone Number</Text>
             <TextInput style={styles.editInput} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" />
+            <Text style={styles.editLabel}>Secondary Phone Number</Text>
+            <TextInput style={styles.editInput} value={editSecondaryPhone} onChangeText={setEditSecondaryPhone} keyboardType="phone-pad" />
 
             <Text style={styles.editLabel}>Address</Text>
             <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
@@ -330,7 +328,7 @@ export default function MemberDetailScreen() {
               <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
               {isResigned && <InfoRow icon="calendar-outline" label="နှုတ်ထွက်သည့်နေ့" value={member.resignDate} />}
               <InfoRow icon="mail-outline" label="Email" value={member.email} />
-              <InfoRow icon="call-outline" label="Phone" value={member.phone} />
+              <InfoRow icon="call-outline" label="Phone" value={formatPhoneForDisplay(member.phone, (member as any).secondaryPhone) || member.phone} />
               <InfoRow icon="location-outline" label="Address" value={member.address} />
             </View>
 

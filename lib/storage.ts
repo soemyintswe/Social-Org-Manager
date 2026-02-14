@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings } from "./types";
+import { normalizeDateText, splitPhoneNumbers } from "./member-utils";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -34,7 +35,25 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
 
 // --- Members ---
 export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
-export const saveMembers = (data: Member[]) => AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data));
+
+function normalizeMemberData(member: any): Member {
+  const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member?.phone, member?.secondaryPhone);
+  const normalized = {
+    ...member,
+    phone: primaryPhone,
+    dob: normalizeDateText(member?.dob),
+    joinDate: normalizeDateText(member?.joinDate) || new Date().toLocaleDateString("en-GB"),
+    resignDate: normalizeDateText(member?.resignDate),
+  };
+
+  if (secondaryPhone) normalized.secondaryPhone = secondaryPhone;
+  else delete normalized.secondaryPhone;
+
+  return normalized as Member;
+}
+
+export const saveMembers = (data: Member[]) =>
+  AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data.map((member) => normalizeMemberData(member))));
 
 export async function importMembers(newMembers: Member[]): Promise<void> {
   const members = await getMembers();
@@ -42,7 +61,7 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 
   for (const m of newMembers) {
     // ID တူရင် အသစ်နဲ့ အစားထိုးမယ်
-    memberMap.set(m.id, m);
+    memberMap.set(m.id, normalizeMemberData(m));
   }
 
   await saveMembers(Array.from(memberMap.values()));
@@ -50,9 +69,10 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
+  const normalizedMember = normalizeMemberData(member);
   const newMember = {
-    ...member,
-    id: member.id || generateId(),
+    ...normalizedMember,
+    id: normalizedMember.id || generateId(),
     avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
     createdAt: new Date().toISOString()
   };
@@ -64,7 +84,7 @@ export async function updateMember(id: string, updates: any) {
   const members = await getMembers();
   const idx = members.findIndex(m => m.id === id);
   if (idx !== -1) {
-    members[idx] = { ...members[idx], ...updates };
+    members[idx] = normalizeMemberData({ ...members[idx], ...updates });
     await saveMembers(members);
   }
 }

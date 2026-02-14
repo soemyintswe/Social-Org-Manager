@@ -20,6 +20,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { formatDateDdMmYyyy, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
 const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
@@ -50,6 +51,7 @@ export default function AddMemberScreen() {
   const [name, setName] = useState("");
   const [memberId, setMemberId] = useState("");
   const [phone, setPhone] = useState("");
+  const [secondaryPhone, setSecondaryPhone] = useState("");
   const [nrc, setNrc] = useState("");
   const [dob, setDob] = useState("");
   const [address, setAddress] = useState("");
@@ -69,6 +71,7 @@ export default function AddMemberScreen() {
         setName(member.name);
         setMemberId(member.id);
         setPhone(member.phone);
+        setSecondaryPhone((member as any).secondaryPhone || "");
         // @ts-ignore - nrc နှင့် dob က type ထဲမှာ မပါခဲ့ရင် error မတက်စေရန်
         setNrc(member.nrc || "");
         // @ts-ignore
@@ -98,7 +101,7 @@ export default function AddMemberScreen() {
           : result.assets[0].uri;
         setProfileImage(source);
       }
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "ပုံရွေးချယ်၍ မရပါ။");
     }
   };
@@ -142,17 +145,22 @@ export default function AddMemberScreen() {
       }
 
       const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+      const { primaryPhone, secondaryPhone: normalizedSecondaryPhone } = splitPhoneNumbers(phone, secondaryPhone);
+      const normalizedDob = normalizeDateText(dob);
+      const normalizedJoinDate = normalizeDateText(joinDate);
+      const normalizedResignDate = normalizeDateText(resignDate);
 
       // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
       const memberData: any = {
         id: memberId,
         name: name.trim(),
-        phone: phone.trim(),
+        phone: primaryPhone,
+        secondaryPhone: normalizedSecondaryPhone || undefined,
         nrc: nrc.trim(),
-        dob: dob.trim(),
+        dob: normalizedDob,
         address: address.trim(),
-        joinDate: joinDate.trim(),
-        resignDate: resignDate.trim(),
+        joinDate: normalizedJoinDate || new Date().toLocaleDateString("en-GB"),
+        resignDate: normalizedResignDate,
         status: status,
         role: "member", // Missing 'role' ကို ထည့်လိုက်ပါသည်
         avatarColor: randomColor, // Missing 'color' (သို့) 'avatarColor' အတွက်
@@ -180,10 +188,7 @@ export default function AddMemberScreen() {
       setShowDobPicker(false);
     }
     if (selectedDate) {
-      const day = String(selectedDate.getDate()).padStart(2, "0");
-      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
-      const year = selectedDate.getFullYear();
-      setDob(`${day}/${month}/${year}`);
+      setDob(formatDateDdMmYyyy(selectedDate));
     }
   };
 
@@ -192,10 +197,7 @@ export default function AddMemberScreen() {
       setShowJoinDatePicker(false);
     }
     if (selectedDate) {
-      const day = String(selectedDate.getDate()).padStart(2, "0");
-      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
-      const year = selectedDate.getFullYear();
-      setJoinDate(`${day}/${month}/${year}`);
+      setJoinDate(formatDateDdMmYyyy(selectedDate));
     }
   };
 
@@ -204,31 +206,16 @@ export default function AddMemberScreen() {
       setShowResignDatePicker(false);
     }
     if (selectedDate) {
-      const day = String(selectedDate.getDate()).padStart(2, "0");
-      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
-      const year = selectedDate.getFullYear();
-      setResignDate(`${day}/${month}/${year}`);
+      setResignDate(formatDateDdMmYyyy(selectedDate));
     }
   };
 
   const getInitialDate = () => {
-    if (!dob) return new Date();
-    const parts = dob.split('/');
-    if (parts.length === 3) {
-      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      if (!isNaN(d.getTime())) return d;
-    }
-    return new Date();
+    return parseGregorianDate(dob) || new Date();
   };
 
   const getParsedDate = (dateStr: string) => {
-    if (!dateStr) return new Date();
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      if (!isNaN(d.getTime())) return d;
-    }
-    return new Date();
+    return parseGregorianDate(dateStr) || new Date();
   };
 
   return (
@@ -290,15 +277,26 @@ export default function AddMemberScreen() {
             placeholderTextColor={Colors.light.textSecondary}
           />
 
-          <Text style={styles.label}>ဖုန်းနံပါတ်</Text>
+          <Text style={styles.label}>ဖုန်းနံပါတ် (Primary)</Text>
           <TextInput
             style={styles.input}
-            placeholder="၀၉..."
+            placeholder="09... (သို့) 09.../09..."
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
             placeholderTextColor={Colors.light.textSecondary}
           />
+
+          <Text style={styles.label}>ဖုန်းနံပါတ် (Secondary - ရှိလျှင်)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="09..."
+            value={secondaryPhone}
+            onChangeText={setSecondaryPhone}
+            keyboardType="phone-pad"
+            placeholderTextColor={Colors.light.textSecondary}
+          />
+          <Text style={styles.helperText}>Slash (`/`) ဖြင့်ထည့်ထားသော number များကို သိမ်းချိန်တွင် Primary/Secondary အဖြစ်ခွဲပေးပါမည်။</Text>
 
           <Text style={styles.label}>မှတ်ပုံတင်အမှတ်</Text>
           <TextInput
@@ -313,7 +311,7 @@ export default function AddMemberScreen() {
           <View style={{ flexDirection: "row", gap: 10 }}>
             <TextInput
               style={[styles.input, { flex: 1 }]}
-              placeholder="ရက်.လ.ခုနှစ် (သို့) မြန်မာသက္ကရာဇ်"
+              placeholder="ရက်/လ/နှစ် (သို့) မြန်မာသက္ကရာဇ်"
               value={dob}
               onChangeText={setDob}
               placeholderTextColor={Colors.light.textSecondary}
@@ -335,7 +333,7 @@ export default function AddMemberScreen() {
                   onChange: (e: any) => {
                     if (e.target.value) {
                       const [y, m, d] = e.target.value.split('-');
-                      setDob(`${d}/${m}/${y}`);
+                      setDob(normalizeDateText(`${d}/${m}/${y}`));
                     }
                   }
                 })}
@@ -401,7 +399,7 @@ export default function AddMemberScreen() {
                   onChange: (e: any) => {
                     if (e.target.value) {
                       const [y, m, d] = e.target.value.split('-');
-                      setJoinDate(`${d}/${m}/${y}`);
+                      setJoinDate(normalizeDateText(`${d}/${m}/${y}`));
                     }
                   }
                 })}
@@ -472,7 +470,7 @@ export default function AddMemberScreen() {
                   onChange: (e: any) => {
                     if (e.target.value) {
                       const [y, m, d] = e.target.value.split('-');
-                      setResignDate(`${d}/${m}/${y}`);
+                      setResignDate(normalizeDateText(`${d}/${m}/${y}`));
                     }
                   }
                 })}
@@ -532,6 +530,7 @@ const styles = StyleSheet.create({
   saveBtn: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
   form: { padding: 20, paddingBottom: 50 },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 15, marginBottom: 6, textTransform: "uppercase" },
+  helperText: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 6, fontFamily: "Inter_400Regular" },
   input: {
     backgroundColor: Colors.light.surface,
     borderRadius: 12,

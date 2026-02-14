@@ -24,6 +24,7 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import * as store from "@/lib/storage";
 import type { Member } from "@/lib/types";
+import { normalizeDateText, splitPhoneNumbers } from "@/lib/member-utils";
 
 const MEMBER_AUTO_BACKUP_FILE = "members_auto_backup.json";
 const LEGACY_AUTO_BACKUP_FILE = "auto_backup.json";
@@ -72,9 +73,21 @@ function normalizeMember(raw: unknown, index: number): Member | null {
       : `imported-${Date.now()}-${index}`;
   const name =
     typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : `Member ${index + 1}`;
-  const phone = typeof obj.phone === "string" ? obj.phone.trim() : "";
+  const primaryPhoneInput =
+    typeof obj.phone === "string"
+      ? obj.phone
+      : typeof obj.primaryPhone === "string"
+      ? obj.primaryPhone
+      : "";
+  const secondaryPhoneInput =
+    typeof obj.secondaryPhone === "string"
+      ? obj.secondaryPhone
+      : typeof obj.phone2 === "string"
+      ? obj.phone2
+      : "";
+  const { primaryPhone, secondaryPhone } = splitPhoneNumbers(primaryPhoneInput, secondaryPhoneInput);
   const joinDate =
-    typeof obj.joinDate === "string" && obj.joinDate.trim() ? obj.joinDate.trim() : today;
+    normalizeDateText(typeof obj.joinDate === "string" ? obj.joinDate : "") || today;
   const status = obj.status === "inactive" ? "inactive" : "active";
   const createdAt =
     typeof obj.createdAt === "string" && obj.createdAt.trim() ? obj.createdAt : nowIso;
@@ -88,11 +101,12 @@ function normalizeMember(raw: unknown, index: number): Member | null {
     typeof obj.avatarColor === "string" && obj.avatarColor.trim() ? obj.avatarColor : color;
   const role = typeof obj.role === "string" && obj.role.trim() ? obj.role : "member";
 
-  return {
+  const normalizedMember: Member = {
     ...(obj as Partial<Member>),
     id,
     name,
-    phone,
+    phone: primaryPhone,
+    dob: normalizeDateText(typeof obj.dob === "string" ? obj.dob : ""),
     joinDate,
     status,
     createdAt,
@@ -100,6 +114,12 @@ function normalizeMember(raw: unknown, index: number): Member | null {
     avatarColor,
     role,
   };
+
+  if (secondaryPhone) {
+    (normalizedMember as any).secondaryPhone = secondaryPhone;
+  }
+
+  return normalizedMember;
 }
 
 function parseMembersFromText(text: string): ParseResult {
