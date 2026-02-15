@@ -18,6 +18,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import {
   CATEGORY_LABELS,
   MEMBER_STATUS_LABELS,
@@ -30,6 +31,7 @@ import {
   type MemberStatus,
 } from "@/lib/types";
 import { formatDateDdMmYyyy, formatPhoneForDisplay, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
+import AccessDenied from "@/components/AccessDenied";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -71,6 +73,9 @@ export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
+  const { can, canAccessMemberRecord } = useAuth();
+  const canManageMembers = can("members.manage");
+  const canViewRecord = id ? canAccessMemberRecord(String(id)) : false;
   const member = members?.find((m: any) => m.id === id);
 
   const [editName, setEditName] = useState(member?.name || "");
@@ -122,6 +127,7 @@ export default function MemberDetailScreen() {
   };
 
   const handleUpdate = async () => {
+    if (!canManageMembers) return;
     if (!editName.trim()) {
       Alert.alert("Error", "Name is required");
       return;
@@ -198,6 +204,7 @@ export default function MemberDetailScreen() {
   };
 
   const handleDelete = () => {
+    if (!canManageMembers) return;
     Alert.alert("Delete Member", "Are you sure you want to delete this member?", [
       { text: "Cancel", style: "cancel" },
       {
@@ -220,6 +227,10 @@ export default function MemberDetailScreen() {
   const statusDateLabel = (member as any)?.statusDate || member?.resignDate || "";
   const statusReasonLabel = (member as any)?.statusReason || "";
 
+  if (!canViewRecord) {
+    return <AccessDenied />;
+  }
+
   if (!member) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -241,11 +252,15 @@ export default function MemberDetailScreen() {
           <Ionicons name={editing ? "close" : "arrow-back"} size={24} color={Colors.light.text} />
         </Pressable>
         <Text style={styles.headerTitle}>{editing ? "Edit Profile" : "Member Profile"}</Text>
-        <Pressable onPress={editing ? handleUpdate : () => setEditing(true)} disabled={saving}>
-          <Text style={[styles.editBtnText, { color: Colors.light.tint }]}>
-            {editing ? (saving ? "Saving..." : "Done") : "Edit"}
-          </Text>
-        </Pressable>
+        {canManageMembers ? (
+          <Pressable onPress={editing ? handleUpdate : () => setEditing(true)} disabled={saving}>
+            <Text style={[styles.editBtnText, { color: Colors.light.tint }]}>
+              {editing ? (saving ? "Saving..." : "Done") : "Edit"}
+            </Text>
+          </Pressable>
+        ) : (
+          <View style={{ width: 42 }} />
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>

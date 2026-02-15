@@ -17,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import {
   MEMBER_STATUS_LABELS,
   MEMBER_STATUS_VALUES,
@@ -27,6 +28,7 @@ import {
   type MemberStatus,
 } from "@/lib/types";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
+import AccessDenied from "@/components/AccessDenied";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
 
@@ -36,6 +38,7 @@ type MemberListItem = Member & { profileImage?: string };
 export default function MembersScreen() {
   const insets = useSafeAreaInsets();
   const { members, loading } = useData();
+  const { can, currentUser } = useAuth();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -51,6 +54,16 @@ export default function MembersScreen() {
   const [minAge, setMinAge] = useState("");
   const [maxAge, setMaxAge] = useState("");
   const [showTargetDatePicker, setShowTargetDatePicker] = useState(false);
+  const canViewAllMembers = can("members.view_all");
+  const canViewSelfMember = can("members.view_self");
+  const canManageMembers = can("members.manage");
+  const ownMemberId = currentUser?.memberId || "";
+
+  const sourceMembers = useMemo(() => {
+    if (canViewAllMembers) return members as MemberListItem[];
+    if (!canViewSelfMember || !ownMemberId) return [] as MemberListItem[];
+    return (members as MemberListItem[]).filter((member) => member.id === ownMemberId);
+  }, [members, canViewAllMembers, canViewSelfMember, ownMemberId]);
 
   const parseDate = useCallback((dateStr?: string) => {
     const parsed = parseGregorianDate(dateStr);
@@ -110,7 +123,7 @@ export default function MembersScreen() {
   }, []);
 
   const sortedMembers = useMemo(() => {
-    let data: MemberListItem[] = [...(members as MemberListItem[])];
+    let data: MemberListItem[] = [...sourceMembers];
 
     if (filterStatus !== "all") {
       data = data.filter((m) => normalizeMemberStatus(m.status) === filterStatus);
@@ -215,7 +228,7 @@ export default function MembersScreen() {
           return 0;
       }
     });
-  }, [members, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate]);
+  }, [sourceMembers, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate]);
 
   const getAvatarLabel = (name: string) => {
     if (!name) return "?";
@@ -266,7 +279,20 @@ export default function MembersScreen() {
 
   const formatDateDisplay = (date: Date) => date.toLocaleDateString('en-GB');
 
-  if (loading && (!members || members.length === 0)) {
+  if (!canViewAllMembers && !canViewSelfMember) {
+    return <AccessDenied showBack={false} />;
+  }
+
+  if (!canViewAllMembers && canViewSelfMember && !ownMemberId) {
+    return (
+      <AccessDenied
+        title="Member Profile မချိတ်ထားသေးပါ"
+        message="သင့် User account တွင် Member ID မချိတ်ထားသေးသောကြောင့် Member စာရင်းကို မပြနိုင်ပါ။"
+      />
+    );
+  }
+
+  if (loading && sourceMembers.length === 0) {
     return (
       <View style={[styles.container, { paddingTop: insets.top, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
@@ -277,27 +303,29 @@ export default function MembersScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-        <Text style={styles.headerTitle}>အသင်းဝင်များ ({members?.length || 0})</Text>
-        <View style={styles.headerActions}>
-          <Pressable
-            onPress={() => router.push("/member-data-management")}
-            style={styles.headerActionBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Member Data Tools"
-          >
-            <Ionicons name="cloud-download-outline" size={21} color={Colors.light.tint} />
-            <Text style={styles.headerActionText}>Data</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => router.push("/add-member" as any)}
-            style={styles.headerActionBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Add Member"
-          >
-            <Ionicons name="add-circle-outline" size={21} color={Colors.light.tint} />
-            <Text style={styles.headerActionText}>Add</Text>
-          </Pressable>
-        </View>
+        <Text style={styles.headerTitle}>အသင်းဝင်များ ({sourceMembers.length})</Text>
+        {canManageMembers ? (
+          <View style={styles.headerActions}>
+            <Pressable
+              onPress={() => router.push("/member-data-management")}
+              style={styles.headerActionBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Member Data Tools"
+            >
+              <Ionicons name="cloud-download-outline" size={21} color={Colors.light.tint} />
+              <Text style={styles.headerActionText}>Data</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => router.push("/add-member" as any)}
+              style={styles.headerActionBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Add Member"
+            >
+              <Ionicons name="add-circle-outline" size={21} color={Colors.light.tint} />
+              <Text style={styles.headerActionText}>Add</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
 

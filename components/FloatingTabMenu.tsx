@@ -1,31 +1,72 @@
-import React, { useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { useRouter, usePathname } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Colors from '@/constants/colors';
+import React, { useMemo, useState } from "react";
+import { View, Text, Pressable, StyleSheet } from "react-native";
+import { useRouter, usePathname } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Colors from "@/constants/colors";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function FloatingTabMenu() {
   const [isOpen, setIsOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const { can, signOut, isAuthenticated } = useAuth();
 
-  const menuItems = [
-    { name: 'ပင်မစာမျက်နှာ', icon: 'home-outline', route: '/' },
-    { name: 'အသင်းဝင်များ', icon: 'people-outline', route: '/members' },
-    { name: 'လှုပ်ရှားမှုများ', icon: 'calendar-outline', route: '/events' },
-    { name: 'ချေးငွေများ', icon: 'cash-outline', route: '/loans' },
-    { name: 'ငွေစာရင်း', icon: 'wallet-outline', route: '/finance' },
-    { name: 'အစီရင်ခံစာ', icon: 'bar-chart-outline', route: '/reports' },
-    { name: 'စနစ်ပိုင်းဆိုင်ရာ', icon: 'settings-outline', route: '/data-management' },
-  ];
+  const menuItems = useMemo(() => {
+    return [
+      { name: "ပင်မစာမျက်နှာ", icon: "home-outline", route: "/" },
+      {
+        name: "အသင်းဝင်များ",
+        icon: "people-outline",
+        route: "/members",
+        enabled: can("members.view_all") || can("members.view_self"),
+      },
+      {
+        name: "လှုပ်ရှားမှုများ",
+        icon: "calendar-outline",
+        route: "/events",
+        enabled: can("events.view_public"),
+      },
+      {
+        name: "ချေးငွေများ",
+        icon: "cash-outline",
+        route: "/loans",
+        enabled: can("finance.view_all") || can("finance.view_self"),
+      },
+      {
+        name: "ငွေစာရင်း",
+        icon: "wallet-outline",
+        route: "/finance",
+        enabled: can("finance.view_all") || can("finance.view_self"),
+      },
+      {
+        name: "အစီရင်ခံစာ",
+        icon: "bar-chart-outline",
+        route: "/reports",
+        enabled: can("reports.view_all"),
+      },
+      {
+        name: "စနစ်ပိုင်းဆိုင်ရာ",
+        icon: "settings-outline",
+        route: "/data-management",
+        enabled: can("system.manage"),
+      },
+    ].filter((item) => item.enabled !== false);
+  }, [can]);
 
   const handleNavigate = (route: string) => {
     setIsOpen(false);
-    // @ts-ignore
     router.push(route);
   };
+
+  const handleSignOut = async () => {
+    setIsOpen(false);
+    await signOut();
+    router.replace("/sign-in");
+  };
+
+  if (!isAuthenticated) return null;
 
   return (
     <>
@@ -57,6 +98,10 @@ export default function FloatingTabMenu() {
                 </Pressable>
               );
             })}
+            <Pressable style={styles.signOutItem} onPress={() => void handleSignOut()}>
+              <Ionicons name="log-out-outline" size={20} color="#EF4444" />
+              <Text style={styles.signOutText}>Sign Out</Text>
+            </Pressable>
           </View>
         )}
       </View>
@@ -127,5 +172,20 @@ const styles = StyleSheet.create({
   },
   menuTextActive: {
     color: Colors.light.tint,
+  },
+  signOutItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 8,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+    marginTop: 4,
+  },
+  signOutText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#EF4444",
   },
 });
