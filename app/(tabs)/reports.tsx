@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo } from "react";
 import {
   StyleSheet,
   Text,
@@ -14,16 +14,9 @@ import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import {
-  CATEGORY_LABELS,
-  MEMBER_STATUS_LABELS,
-  normalizeMemberStatus,
-  normalizeOrgPosition,
-  ORG_POSITION_LABELS,
-} from "@/lib/types"; // မသုံးတဲ့ types တွေကို ဖယ်ထုတ်လိုက်သည်
+import { CATEGORY_LABELS, MEMBER_STATUS_LABELS, MemberStatus } from "@/lib/types";
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { formatPhoneForDisplay } from "@/lib/member-utils";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -114,10 +107,10 @@ export default function ReportsScreen() {
     const totalOutstanding = (loans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
     
     return { disbursed, repaid, interest, totalOutstanding };
-  }, [filteredTxns, loans, getLoanOutstanding]);
+  }, [filteredTxns, loans]);
 
   // Funds Stats (Opening/Closing)
-  const getBalancesAt = useCallback((date: Date) => {
+  const getBalancesAt = (date: Date) => {
     let cash = accountSettings?.openingBalanceCash || 0;
     let bank = accountSettings?.openingBalanceBank || 0;
     
@@ -138,14 +131,14 @@ export default function ReportsScreen() {
       }
     });
     return { cash, bank, total: cash + bank };
-  }, [accountSettings, transactions]);
+  };
 
   const fundStats = useMemo(() => {
     const start = new Date(startDate); start.setDate(start.getDate() - 1);
     const opening = getBalancesAt(start);
     const closing = getBalancesAt(endDate);
     return { opening, closing };
-  }, [startDate, endDate, getBalancesAt]);
+  }, [startDate, endDate, transactions, accountSettings]);
 
   const monthsInRange = useMemo(() => {
     const months = [];
@@ -190,7 +183,6 @@ export default function ReportsScreen() {
                 <th style="width: 40px;">No.</th>
                 <th>Name</th>
                 <th>ID</th>
-                <th>Position</th>
                 <th>Phone</th>
                 <th>Email</th>
                 <th>NRC</th>
@@ -204,12 +196,11 @@ export default function ReportsScreen() {
                   <td>${index + 1}</td>
                   <td>${m.name}</td>
                   <td>${m.id}</td>
-                  <td>${ORG_POSITION_LABELS[normalizeOrgPosition(m.orgPosition || m.status)]}</td>
-                  <td>${formatPhoneForDisplay(m.phone, m.secondaryPhone) || '-'}</td>
+                  <td>${m.phone || '-'}</td>
                   <td>${m.email || '-'}</td>
                   <td>${m.nrc || '-'}</td>
                   <td>${m.joinDate || '-'}</td>
-                  <td>${MEMBER_STATUS_LABELS[normalizeMemberStatus(m.status)]}</td>
+                  <td>${MEMBER_STATUS_LABELS[m.status as MemberStatus] || m.status}</td>
                 </tr>
               `).join('')}
             </tbody>

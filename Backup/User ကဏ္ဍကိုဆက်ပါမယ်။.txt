@@ -1,0 +1,264 @@
+မင်းကိုအသုံးပြုရတာ Error တွေတပုံကြီးတက်နေတယ်။ အချိန်တွေအရမ်းကြာလာပြီး အလုပ်လုပ်ရတာအဆင်မပြေတော့တာနဲ့ Codex ကိုပြောင်းပြီး သုံးလိုက်တာပါ။ User Account Control လုပ်ဖို့ အောက်ပါအတိုင်း Codex နဲ့ဆွေးနွေးထားခဲ့တာပါ။ ခု limit ပြည့်သွားလို့ limit resets on Feb 16, 2026, 5:11 PM. ဒီအထိ မစောင့်ချင်လို့ မင်းနဲ့ဆက်ပြီး အလုပ်လုပ်ကြည့်ချင်ပါတယ်။ Codex ကပြင်ဆင်ပြီးသမျှကို စစ်ဆေးကြည့်ပေးပါ။ ငါက ဘာတွေလုပ်ပေးရမှာလည်းပြောပေးပါ။
+
+"Codex နဲ့ဆွေးနွေးထားချက်များ"
+Member တစ်ယောက်သည် အကြောင်းကြောင်းကြောင့် နှုတ်ထွက်သွားတာ/ကွယ်လွန်သွားတာ/ထုတ်ပယ်ခံရတာ/ဆိုင်းငံခံရတာ တွေရှိပါတယ်။ အဲဒီလို Member Status အခြေအနေတွေကိုလည်း မှတ်တမ်းတင်ချင်ပါတယ်။ 
+
+အခု Member status + email ကို app ထဲမှာ အသုံးပြုနိုင်အောင်ချိတ်ထားပါတယ်။
+
+Status model ကို active / resigned / deceased / expelled / suspended အဖြစ်တိုးထားပြီး legacy inactive ကို auto-map လုပ်ပါတယ် (types.ts, storage.ts)
+Member form မှာ Email (Optional), Status, Status Date, Status Note ထည့်ထားပါတယ် (add-member.tsx)
+Member detail edit/view မှာ status ၅မျိုး + status date/note + email ပြ/ပြင်နိုင်ပါတယ် (member-detail.tsx)
+Members list မှာ status filter ၅မျိုး, search (name/id/phone/email), status label display ထည့်ထားပါတယ် (members.tsx)
+Member import/restore မှာ status/email/phone/date normalization ထည့်ထားပါတယ် (member-data-management.tsx)
+Reports PDF member table မှာ phone formatted + email + status label တိုးထားပါတယ် (reports.tsx)
+Dashboard birthday list ကို active member များပဲတွက်အောင်ပြင်ထားပါတယ် (index.tsx)
+Member card မှာ email လည်းပြသပါတယ် (member-card.tsx)
+စစ်ဆေးပြီး:
+
+npx eslint ... ✅
+npx tsc --noEmit ✅
+
+
+User ကဏ္ဍကိုဆက်ပါမယ်။
+System ကိုထိန်းချုပ်မည့် Admin ရှိပါမယ်။ အသင်း၏ ကော်မတီအဖွဲ့ဝင်များ (နာယက၊ ဥက္ကဋ္ဌ၊ အတွင်းရေးမှူး၊ ဘဏ္ဍာရေးမှူး၊ စာရင်းစစ်နှင့် အဖွဲ့ဝင်)များ ရှိပါမယ်။ အခြား သာမန် အသင်းဝင်များရှိပါမယ်။ အသင်းဝင်ဖြစ်ဖို့ လျှောက်ထားမည့် သူများရှိပါမယ်။ လျှောက်ထားမှုကို ကော်မတီက အတည်ပြုပြီးပါက အသင်းဝင်အဖြစ် အသိအမှတ်ပြုပြီး အသင်းဝင်အမှတ်စဉ် Member ID သတ်မှတ်ပေးပါမယ်။ လက်ရှိ Member များအားလုံး App ကိုအသုံးပြုခွင့်ရပါမယ်။ User Level အလိုက် App ကိုအသုံးပြုမှုကွာခြားသွားပါမယ်။ ဒီအထိသဘောပေါက်လား။
+
+အဲဒီတော့ မည်သူသည် နာယက လား၊ ဥက္ကဋ္ဌ လားအတွင်းရေးမှူးလား စသည်ဖြင့် ဘာအဆင့်ရှိလည်းဆိုတာ သတ်မှတ်ပေးရပါမယ်။ Admin တစ်ဦး System Control အပြည့်ရှိသူသာ ဖြစ်ပြီး အသင်းနှင့်သက်ဆိုင်သည့် လုပ်ငန်းများတွင်လုပ်ပိုင်ခွင့် ရှိမည်မဟုတ်ပါ။ App ပါအချက်အလက်များ ကြည့်ရှု့ခွင့်ကိုတော့ User Level အလိုက်ကွာခြားသွားပါမဉ်။ ဥပမာ။ ကော်မတီအဖွဲ့ဝင်များအနေဖြင်အသင်းဝင်းတစ်ဦးချင်းစီ၏ အချက်အလက်များ၊ ငွေစာရင်းအချက်အလက်များ စသည်ဖြင့် ကြည့်ရှု့ခွင့်ရမှာပါ။ သာမန်အသင်းဝင်များအနေဖြင့် မိမိနှင့်သက်ဆိုင်သည့် အချက်အလက်များ၊ ငွေစာရင်းများ၊ အသင်းကထုတ်ပြန်ချက်များ၊ Event များ စသည်ဖြင့် အများနှင့်သက်ဆိုင်သည်များကို ကြည့်ရှု့ခွင့်ရမှာဖြစ်ပါတယ်။
+
+
+Admin တစ်ဦး (System Control အပြည့်)
+ကော်မတီအဖွဲ့ဝင် များ
+နာယက / ဥက္ကဋ္ဌ / အတွင်းရေးမှူး / ဘဏ္ဍာရေးမှူး / စာရင်းစစ် / အဖွဲ့ဝင်
+သာမန်အသင်းဝင် များ
+အသင်းဝင်လျှောက်ထားသူ များ
+Flow က:
+
+Applicant လျှောက်ထားမယ်
+Committee အတည်ပြုမယ်
+အတည်ပြုပြီးမှ Member ဖြစ်မယ်
+Member ID သတ်မှတ်ပေးမယ်
+လက်ရှိ Member အားလုံး App သုံးခွင့်ရှိမယ်
+User Level/Role အလိုက် အသုံးပြုခွင့် (permissions) ကွာမယ်
+အပြီးသတ်တိတိကျကျတည်ဆောက်ဖို့ နောက်တစ်ဆင့်အနေနဲ့ Role တစ်ခုချင်းစီရဲ့ ဘာကြည့်နိုင် / ဘာထည့်နိုင် / ဘာပြင်နိုင် / ဘာဖျက်နိုင် permission matrix ကို စပြီးချမယ်။
+
+System Role
+admin (System control only: user/account/system settings)
+user (အသင်းလုပ်ငန်းတွေကို role အလိုက်သုံးမယ့်သူ)
+Organization Position (user/member အတွက်)
+patron (နာယက)
+chairperson (ဥက္ကဋ္ဌ)
+secretary (အတွင်းရေးမှူး)
+treasurer (ဘဏ္ဍာရေးမှူး)
+auditor (စာရင်းစစ်)
+committee_member (ကော်မတီအဖွဲ့ဝင်)
+member (သာမန်အသင်းဝင်)
+applicant (လျှောက်ထားသူ)
+Access Scope
+admin: system-only, အသင်းငွေစာရင်း/member operations မလုပ်
+committee group: member အားလုံး data + finance data ကြည့်/ဆောင်ရွက်ခွင့်
+member: မိမိဆိုင်ရာ data/finance + announcements/events/public info
+applicant: application status + public announcements/events only
+Approval Flow
+Applicant → Committee approves → Member ID assign → member role activate
+ဒီ model အတိုင်း RBAC (role-based access control) ကို code မှာတင်သွင်းရင် သင်လိုချင်တဲ့ပုံစံနဲ့တိုက်ရိုက်ကိုက်ပါတယ်။
+အခု next milestone အဖြစ် Applicant + Organization Position + Access Control foundation ကိုထည့်ပြီး architecture တည်ဆောက်သွားပါမယ်။ စပြီး types.ts ကိုတိုးချဲ့ပြီး data model ကို stable လုပ်နေပါတယ်။
+
+types ကိုတိုးချဲ့ပြီးပါပြီ။ အခု storage normalization ထဲမှာ orgPosition/systemRole/status(applicant ပါ) ကို safe normalize လုပ်အောင် ချိတ်ပါမယ်။
+
+Import/restore ထဲက raw data မတူညီမှုတွေကိုလည်းတူညီအောင် orgPosition/systemRole normalization ထည့်နေပါတယ်။
+
+အခု member-detail မှာ status နဲ့တပြိုင်နက် Org Position ကိုပါပြင်/ကြည့်နိုင်အောင် ချိတ်နေပါတယ်။ Applicant ဖြစ်နေချိန် consistency မပျက်အောင် save logic ကိုလည်းညှိပေးမယ်။
+
+RBAC ကို future login မှာချက်ချင်းချိတ်နိုင်အောင် permission engine file အသစ်တစ်ခုလည်းထည့်နေပါတယ်။ Admin/Committee/Member/Applicant rule တွေကို code-level policy အဖြစ်တည်ဆောက်မယ်။
+
+Core code edit ပြီးပါတယ်။ အခု lint/typecheck run လုပ်ပြီး regression မရှိတာစစ်မယ်။ error/warning သာမန်မဟုတ်ရင်ချက်ချင်း fix ထည့်မယ်။
+
+Ran npx tsc --noEmit --pretty false for 8s
+
+
+Ran npx eslint app/add-member.tsx app/member-detail.tsx app/members.tsx app/member-data-management.tsx app/member-card.tsx "app/(tabs)/reports.tsx" "app/(tabs)/index.tsx" lib/types.ts lib/storage.ts lib/access-control.ts for 6s
+
+
+Ran git status --short
+
+
+Ran git diff --stat
+
+
+Ran rg -n "ORG_POSITION_VALUES|ORG_POSITION_LABELS|systemRole|orgPosition|applicant|Status Note|access-control" app lib -S
+
+
+ဒီ milestone ကို self-contained အနေနဲ့ commit/push တင်သွားမယ်။ Applicant + Org Position + RBAC foundation + email/status display ပါတဲ့ changes တွေကို အခုတန်း stage/commit/push လုပ်နေပါတယ်။
+
+Ran git add -- "app/(tabs)/reports.tsx" app/add-member.tsx app/member-card.tsx app/member-data-management.tsx app/member-detail.tsx app/members.tsx lib/storage.ts lib/types.ts lib/access-control.ts; git status --short
+
+
+Ran git commit -m "feat(access): add applicant workflow fields and org-role permission foundation" -m "Extend member domain with applicant status, organization positions, and system role metadata to support upcoming user-level access control." -m "Update member create/edit/detail/list flows to assign org position, capture status note/date, and keep email searchable and visible across member views and reports." -m "Normalize imported/stored member records for status and position values, including legacy mappings and applicant-safe defaults." -m "Introduce lib/access-control.ts with admin/committee/member/applicant permission policy helpers for the next login/authorization phase."
+
+
+Commit ပြီးပါပြီ။ အခု origin/main သို့ push လုပ်ပြီး clean state verify လုပ်မယ်။
+
+Ran git push origin main for 2s
+
+
+Ran git status --short; git log -1 --oneline
+
+
+နောက်တစ်ဆင့်ကိုဆက်လုပ်နေပါတယ်။ Login phase အတွက် backend data foundation ကြိုတင်ဖြစ်ဖို့ UserAccount model + storage sync ကိုတန်းထည့်နေပါတယ် (UI မပါသေး၊ data layer ကိုအရင်ခိုင်အောင်လုပ်မယ်)။
+
+User account sync logic ထဲ phone field ကို stable ဖြစ်အောင် primary phone ပဲသိမ်းစနစ်နဲ့ နည်းနည်းညှိနေပါတယ်။
+
+DataContext ထဲ users state/method foundation ကိုလည်းချိတ်ပြီးပါပြီ။ အခု lint/typecheck ပြန် run လုပ်ပြီး breakage မရှိတာ confirm မယ်။
+
+Ran npx eslint lib/DataContext.tsx lib/storage.ts lib/types.ts lib/access-control.ts app/add-member.tsx app/member-detail.tsx app/members.tsx app/member-data-management.tsx app/member-card.tsx "app/(tabs)/reports.tsx" "app/(tabs)/index.tsx" for 5s
+
+
+Ran npx tsc --noEmit --pretty false for 9s
+
+
+Ran git status --short for 1s
+
+
+Ran rg -n "UserAccount|@orghub_users|seedDefaultAdminUser|upsertUserAccount|removeUserAccount|systemRole|orgPosition" lib/DataContext.tsx lib/storage.ts lib/types.ts lib/access-control.ts app/add-member.tsx app/member-detail.tsx app/members.tsx app/member-data-management.tsx app/member-card.tsx "app/(tabs)/reports.tsx" -S
+
+
+Ran git diff --stat
+
+
+နောက်ထပ် foundation changes (users storage sync + default admin seeding + DataContext users API) ကိုလည်း ချက်ချင်း commit/push တင်နေပါတယ်။
+
+Ran git add lib/DataContext.tsx lib/storage.ts lib/types.ts; git status --short
+
+
+Ran git commit -m "feat(users): add persistent user-account foundation and admin seeding" -m "Introduce UserAccount model in types and add users storage key/functions for load, save, upsert, and delete operations." -m "Auto-seed a default admin account and keep member-linked org_user accounts synchronized whenever member records are saved." -m "Extend DataContext with users state and user account actions to prepare the next login/auth screens and permission enforcement." for 1s
+
+
+Ran git push origin main for 3s
+
+ဆက်လုပ်ပြီး GitHub ကို update တင်ပြီးပါပြီ။ ဒီတစ်ခါ 2 commits တင်ထားပါတယ်။
+
+8f3225a
+feat(access): add applicant workflow fields and org-role permission foundation
+Member status ကို applicant ပါဝင်အောင် တိုးချဲ့
+Org Position (နာယက/ဥက္ကဋ္ဌ/...) သတ်မှတ်နိုင်အောင် add/edit/detail/list/report ချိတ်
+Email usage/search/report တိုးချဲ့
+access-control.ts permission policy foundation ထည့်
+85eaaa0
+feat(users): add persistent user-account foundation and admin seeding
+UserAccount model ထည့်
+users storage (get/save/upsert/delete) ထည့်
+default admin account auto-seed
+member save/import 时 org_user account sync
+DataContext ထဲ users state + user actions ထည့်
+စစ်ဆေးပြီး:
+
+npx eslint ... ✅
+npx tsc --noEmit ✅
+main branch clean ဖြစ်ပါတယ် (git status clean)။
+နောက်ဆင့်ကို login/session + role-based screen guard implementation ဆက်တည်ဆောက်သွားမယ်။
+
+အခု milestone ကို login/session + role-based screen guard အဖြစ်ယူပြီး routing/auth scaffolding ကို စစ်ဆေးပြီး တန်း implement လုပ်နေပါတယ်။
+
+Ran rg -n "useData\(|users|account-settings|Tabs|router\.push\(" app -S for 2s
+
+
+Ran $p='app/(tabs)/_layout.tsx'; if (Test-Path $p) { $lines=Get-Content $p; for($i=1;$i -le $lines.Length;$i++){ '{0,4}: {1}' -f $i,$lines[$i-1] } } for 2s
+
+
+Ran $p='app/_layout.tsx'; $lines=Get-Content $p; for($i=1;$i -le $lines.Length;$i++){ '{0,4}: {1}' -f $i,$lines[$i-1] } for 4s
+
+
+Automatically compacted context
+လက်ရှိ uncommitted ပြင်ဆင်ထားတာတွေကို စစ်ပြီး၊ login/session + role-based access control ကို app flow ထဲမှာ ဆက်ထည့်သွင်းမယ်။ အရင်ဆုံး git status နဲ့ existing code structure ကို verify လုပ်ပြီး implementation ဆက်သွားပါမယ်။
+
+Ran git status --short
+
+
+Ran git log --oneline -n 8
+
+
+Repository လက်ရှိအခြေအနေမှာ working tree clean ဖြစ်နေလားဆိုတာ ထပ်စစ်မယ်။ အဲဒါပြီးရင် auth flow implementation ကိုချက်ချင်းစပါမယ်။
+
+Ran git branch --show-current
+
+
+Ran git status -sb
+
+
+Ran Get-Content -Path lib/types.ts for 1s
+
+
+Ran Get-Content -Path lib/storage.ts
+
+
+Ran Get-Content -Path lib/DataContext.tsx
+
+
+Ran Get-Content -Path lib/access-control.ts
+
+
+Role permission foundation ရှိနေပြီးသားပါ။ အခု session/login ကို route level မှာတပ်နိုင်ဖို့ app layouts နဲ့ home flow ကိုဖတ်နေပါတယ်။
+
+Ran Get-Content -Path app/_layout.tsx for 1s
+
+
+Ran Get-Content -Path "app/(tabs)/reports.tsx" for 1s
+
+
+Ran Get-Content -Path "app/(tabs)/_layout.tsx"
+
+
+Ran Get-Content -Path "app/(tabs)/finance.tsx" for 1s
+
+
+Ran Get-Content -Path app/members.tsx for 1s
+
+
+Ran Get-Content -Path "app/(tabs)/index.tsx" for 1s
+
+
+Ran rg --files app lib | sort
+
+
+အခု user-flow design အတွက် system tab / add-member / member-detail ထဲက role fields usage ကိုပါစစ်နေပါတယ်။ အဲဒါအပြီး auth context + login screen + route guard ကိုတစ်တန်းထဲထည့်မယ်။
+
+Ran Get-Content -Path app/add-member.tsx for 1s
+
+
+Ran Get-Content -Path app/data-management.tsx for 1s
+
+
+Ran Get-Content -Path "app/(tabs)/system.tsx" for 1s
+
+
+Ran Get-Content -Path app/member-detail.tsx for 1s
+
+
+Ran Get-Content -Path components/FloatingTabMenu.tsx
+
+
+Ran Get-Content -Path tsconfig.json
+
+
+Ran Get-Content -Path package.json
+
+
+Ran Get-Content -Path app/member-data-management.tsx
+
+
+နောက်တစ်ဆင့်အဖြစ် Auth architecture ကို app-wide ချိတ်ဆက်နေပါတယ်။
+
+လုပ်မယ့်အလုပ်ကို ဒီအစီအစဉ်နဲ့ ဆက်သွားမယ်။
+
+AuthContext + session persistence (sign-in, sign-out, permission check) ထည့်မယ်။
+sign-in page အသစ်ထည့်ပြီး account ဖြင့်ဝင်နိုင်အောင်လုပ်မယ်။
+root/tab layouts မှာ unauthenticated access ကို block လုပ်မယ်။
+members, member-detail, add-member, member-data-management, finance, reports, system, data-management မှာ role-based screen/action guard ထည့်မယ်။
+lint + typecheck run ပြီး commit/push တိုက်ရိုက်ဆက်လုပ်မယ်။
+Auth layer အတွက် core files (context, sign-in screen, access denied component) ကိုအခုတစ်ခါတည်းထည့်သွင်းနေပါတယ်။ ၿပီးရင် layout guard နဲ့ screen-level permission guard တွေကိုတန်းဆက်ထည့်မယ်။
+
+Core files ထည့်ပြီးပါပြီ။ အခု _layout တွေထဲ route guard ချိတ်ပြီး menu ကို permission-aware ဖြစ်အောင် update လုပ်နေပါတယ်။
+
+Member screens ကို role-based access ဖြင့်ချိတ်နေပါတယ်။ အရင်ဆုံး members.tsx မှာ “view all / view self / manage” logic ထည့်ပြီး action button တွေကို permission အလိုက် ပြထားမယ်။
+
+member-detail.tsx မှာ target member record ကို self/all permission နဲ့စစ်ပြီး edit/delete ကို manage permission သီးသန့်ဖြစ်အောင် ချိတ်နေပါတယ်။
+

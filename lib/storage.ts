@@ -1,17 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {
-  Member,
-  OrgEvent,
-  Group,
-  AttendanceRecord,
-  Transaction,
-  Loan,
-  AccountSettings,
-  UserAccount,
-  normalizeMemberStatus,
-  normalizeOrgPosition,
-} from "./types";
-import { normalizeDateText, splitPhoneNumbers } from "./member-utils";
+import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings, UserAccount } from "./types";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -47,115 +35,34 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
 
 // --- Members ---
 export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
-export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
 
-const DEFAULT_ADMIN_USER_ID = "admin-root";
-
-function normalizeMemberData(member: any): Member {
-  const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member?.phone, member?.secondaryPhone);
-  const normalizedStatus = normalizeMemberStatus(member?.status);
-  const normalizedOrgPosition = normalizeOrgPosition(
-    member?.orgPosition || (normalizedStatus === "applicant" ? "applicant" : "member")
-  );
-  const normalizedStatusDate = normalizeDateText(member?.statusDate || member?.resignDate);
-  const normalizedReason =
-    typeof member?.statusReason === "string"
-      ? member.statusReason.trim()
-      : typeof member?.resignReason === "string"
-      ? member.resignReason.trim()
-      : "";
-  const normalizedEmail = typeof member?.email === "string" ? member.email.trim() : "";
-  const normalized = {
-    ...member,
-    phone: primaryPhone,
-    email: normalizedEmail,
-    systemRole: member?.systemRole === "admin" ? "admin" : "org_user",
-    orgPosition: normalizedOrgPosition,
-    dob: normalizeDateText(member?.dob),
-    joinDate: normalizeDateText(member?.joinDate) || new Date().toLocaleDateString("en-GB"),
-    status: normalizedStatus,
-    statusDate: normalizedStatusDate,
-    resignDate: normalizedStatusDate,
-    statusReason: normalizedReason,
-  };
-
-  if (secondaryPhone) normalized.secondaryPhone = secondaryPhone;
-  else delete normalized.secondaryPhone;
-  if (!normalizedEmail) delete normalized.email;
-  if (!normalizedStatusDate) {
-    delete normalized.statusDate;
-    delete normalized.resignDate;
-  }
-  if (!normalizedReason) delete normalized.statusReason;
-
-  return normalized as Member;
+export async function syncUsersWithMembers(members: Member[]) {
+  try {
+    const users = await getUsers();
+    const admins = users.filter(u => u.systemRole === 'admin');
+    
+    const memberUsers: UserAccount[] = members.map(m => {
+      const existing = users.find(u => u.memberId === m.id);
+      const mAny = m as any;
+      const position = mAny.orgPosition || (m.status === 'applicant' ? 'applicant' : 'member');
+      return {
+        id: existing ? existing.id : `user-${m.id}`,
+        displayName: m.name,
+        systemRole: 'org_user',
+        memberId: m.id,
+        orgPosition: position,
+        isActive: m.status === 'active' || m.status === 'applicant',
+        createdAt: existing ? existing.createdAt : new Date().toISOString()
+      };
+    });
+    await saveUsers([...admins, ...memberUsers]);
+  } catch (e) { console.error(e); }
 }
 
-function mapMemberToUser(member: Member, existing?: UserAccount): UserAccount {
-  const now = new Date().toISOString();
-  const memberStatus = normalizeMemberStatus(member.status);
-  const displayName = member.name || existing?.displayName || member.id;
-  return {
-    id: existing?.id || `user-${member.id}`,
-    memberId: member.id,
-    systemRole: "org_user",
-    orgPosition: normalizeOrgPosition((member as any).orgPosition || member.status),
-    displayName,
-    email: member.email || existing?.email,
-    phone: member.phone || existing?.phone,
-    isActive: memberStatus !== "deceased" && memberStatus !== "expelled",
-    createdAt: existing?.createdAt || now,
-    updatedAt: now,
-  };
-}
-
-export async function saveUsers(data: UserAccount[]): Promise<void> {
-  await AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
-}
-
-async function syncUsersFromMembers(members: Member[]): Promise<void> {
-  const existingUsers = await getUsers();
-  const userByMemberId = new Map(existingUsers.filter((u) => u.memberId).map((u) => [u.memberId as string, u]));
-  const nonMemberUsers = existingUsers.filter((u) => !u.memberId);
-  const memberUsers = members.map((member) => mapMemberToUser(member, userByMemberId.get(member.id)));
-  await saveUsers([...nonMemberUsers, ...memberUsers]);
-}
-
-export async function seedDefaultAdminUser(): Promise<void> {
-  const users = await getUsers();
-  if (users.some((u) => u.systemRole === "admin")) return;
-  const now = new Date().toISOString();
-  const adminUser: UserAccount = {
-    id: DEFAULT_ADMIN_USER_ID,
-    systemRole: "admin",
-    displayName: "System Admin",
-    isActive: true,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await saveUsers([adminUser, ...users]);
-}
-
-export async function upsertUserAccount(account: UserAccount): Promise<void> {
-  const users = await getUsers();
-  const idx = users.findIndex((u) => u.id === account.id);
-  const now = new Date().toISOString();
-  const next = { ...account, updatedAt: now, createdAt: account.createdAt || now };
-  if (idx >= 0) users[idx] = next;
-  else users.unshift(next);
-  await saveUsers(users);
-}
-
-export async function deleteUserAccount(id: string): Promise<void> {
-  const users = await getUsers();
-  await saveUsers(users.filter((user) => user.id !== id));
-}
-
-export async function saveMembers(data: Member[]): Promise<void> {
-  const normalizedMembers = data.map((member) => normalizeMemberData(member));
-  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalizedMembers));
-  await syncUsersFromMembers(normalizedMembers);
-}
+export const saveMembers = async (data: Member[]) => {
+  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data));
+  await syncUsersWithMembers(data);
+};
 
 export async function importMembers(newMembers: Member[]): Promise<void> {
   const members = await getMembers();
@@ -163,7 +70,7 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 
   for (const m of newMembers) {
     // ID တူရင် အသစ်နဲ့ အစားထိုးမယ်
-    memberMap.set(m.id, normalizeMemberData(m));
+    memberMap.set(m.id, m);
   }
 
   await saveMembers(Array.from(memberMap.values()));
@@ -171,10 +78,9 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
-  const normalizedMember = normalizeMemberData(member);
   const newMember = {
-    ...normalizedMember,
-    id: normalizedMember.id || generateId(),
+    ...member,
+    id: member.id || generateId(),
     avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
     createdAt: new Date().toISOString()
   };
@@ -186,7 +92,7 @@ export async function updateMember(id: string, updates: any) {
   const members = await getMembers();
   const idx = members.findIndex(m => m.id === id);
   if (idx !== -1) {
-    members[idx] = normalizeMemberData({ ...members[idx], ...updates });
+    members[idx] = { ...members[idx], ...updates };
     await saveMembers(members);
   }
 }
@@ -269,39 +175,17 @@ export async function saveAttendance(eventId: string, memberId: string, status: 
 
 // --- Transactions ---
 export const getTransactions = () => safeGet<Transaction[]>(KEYS.TRANSACTIONS, []);
-export const saveTransactions = (data: any[]) => AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(data));
-
-export async function importTransactions(newTransactions: any[]): Promise<void> {
-  const existing = await getTransactions();
-  const transactionMap = new Map(existing.map((t: any) => [t.id, t]));
-
-  for (const txn of newTransactions) {
-    const id = txn?.id || generateId();
-    transactionMap.set(id, { ...txn, id });
-  }
-
-  await saveTransactions(Array.from(transactionMap.values()));
-}
 
 export async function addTransaction(txn: any) {
   const txns = await getTransactions();
   const newTxn = { ...txn, id: generateId() };
-  await saveTransactions([newTxn, ...txns]);
+  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTxn, ...txns]));
   return newTxn;
-}
-
-export async function updateTransaction(id: string, updates: any) {
-  const txns = await getTransactions();
-  const idx = txns.findIndex((t: any) => t.id === id);
-  if (idx !== -1) {
-    txns[idx] = { ...txns[idx], ...updates };
-    await saveTransactions(txns);
-  }
 }
 
 export async function deleteTransaction(id: string) {
   const txns = await getTransactions();
-  await saveTransactions(txns.filter((t: any) => t.id !== id));
+  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns.filter(t => t.id !== id)));
 }
 
 // --- Loans ---
@@ -341,6 +225,45 @@ export async function getAccountSettings(): Promise<AccountSettings> {
 
 export async function saveAccountSettings(settings: AccountSettings) {
   await AsyncStorage.setItem(KEYS.ACCOUNT_SETTINGS, JSON.stringify(settings));
+}
+
+// --- Users ---
+export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
+export const saveUsers = (data: UserAccount[]) => AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
+
+export async function seedDefaultAdminUser() {
+  const users = await getUsers();
+  const adminExists = users.some(u => u.systemRole === "admin");
+  if (!adminExists) {
+    const admin: UserAccount = {
+      id: "admin-001",
+      displayName: "System Admin",
+      systemRole: "admin",
+      isActive: true,
+      createdAt: new Date().toISOString()
+    };
+    await saveUsers([admin, ...users]);
+  }
+
+  // Sync existing members to user accounts
+  const members = await getMembers();
+  await syncUsersWithMembers(members);
+}
+
+export async function upsertUserAccount(user: UserAccount) {
+  const users = await getUsers();
+  const idx = users.findIndex(u => u.id === user.id);
+  if (idx !== -1) {
+    users[idx] = user;
+  } else {
+    users.push(user);
+  }
+  await saveUsers(users);
+}
+
+export async function deleteUserAccount(id: string) {
+  const users = await getUsers();
+  await saveUsers(users.filter(u => u.id !== id));
 }
 
 // Backup Data (Export All)

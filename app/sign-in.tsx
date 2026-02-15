@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { seedDefaultAdminUser } from "@/lib/storage";
 import { normalizeOrgPosition, ORG_POSITION_LABELS } from "@/lib/types";
 
 export default function SignInScreen() {
@@ -64,6 +65,11 @@ export default function SignInScreen() {
     }
   };
 
+  const handleRefresh = async () => {
+    await seedDefaultAdminUser();
+    await refreshData();
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -78,7 +84,7 @@ export default function SignInScreen() {
               <Text style={styles.emptyText}>
                 Member data နှင့် user account synchronization ပြန်လုပ်ရန် Refresh ကိုနှိပ်ပါ။
               </Text>
-              <Pressable style={styles.refreshBtn} onPress={() => void refreshData()}>
+              <Pressable style={styles.refreshBtn} onPress={handleRefresh}>
                 <Ionicons name="refresh-outline" size={18} color="#fff" />
                 <Text style={styles.refreshText}>Refresh</Text>
               </Pressable>

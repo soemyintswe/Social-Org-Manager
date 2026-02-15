@@ -11,6 +11,7 @@ import {
   Image,
   KeyboardAvoidingView,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -20,17 +21,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { formatDateDdMmYyyy, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
-import {
-  MEMBER_STATUS_LABELS,
-  MEMBER_STATUS_VALUES,
-  normalizeMemberStatus,
-  ORG_POSITION_LABELS,
-  ORG_POSITION_VALUES,
-  type MemberStatus,
-  type OrgPosition,
-} from "@/lib/types";
-
+import { ORG_POSITION_LABELS, OrgPosition, MemberStatus, MEMBER_STATUS_VALUES, MEMBER_STATUS_LABELS } from "@/lib/types";
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
 const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
 
@@ -60,20 +51,20 @@ export default function AddMemberScreen() {
   const [name, setName] = useState("");
   const [memberId, setMemberId] = useState("");
   const [phone, setPhone] = useState("");
-  const [secondaryPhone, setSecondaryPhone] = useState("");
-  const [email, setEmail] = useState("");
   const [nrc, setNrc] = useState("");
   const [dob, setDob] = useState("");
   const [address, setAddress] = useState("");
   const [joinDate, setJoinDate] = useState(new Date().toLocaleDateString("en-GB"));
-  const [statusDate, setStatusDate] = useState("");
-  const [statusReason, setStatusReason] = useState("");
+  const [email, setEmail] = useState("");
   const [status, setStatus] = useState<MemberStatus>("active");
+  const [statusDate, setStatusDate] = useState("");
+  const [statusNote, setStatusNote] = useState("");
   const [orgPosition, setOrgPosition] = useState<OrgPosition>("member");
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [showJoinDatePicker, setShowJoinDatePicker] = useState(false);
-  const [showResignDatePicker, setShowResignDatePicker] = useState(false);
+  const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
+  const [showPositionPicker, setShowPositionPicker] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -83,18 +74,17 @@ export default function AddMemberScreen() {
         setName(member.name);
         setMemberId(member.id);
         setPhone(member.phone);
-        setSecondaryPhone((member as any).secondaryPhone || "");
-        setEmail(member.email || "");
         // @ts-ignore - nrc နှင့် dob က type ထဲမှာ မပါခဲ့ရင် error မတက်စေရန်
         setNrc(member.nrc || "");
         // @ts-ignore
         setDob(member.dob || "");
         setAddress(member.address || "");
         setJoinDate(member.joinDate || "");
-        setStatusDate((member as any).statusDate || (member as any).resignDate || "");
-        setStatusReason((member as any).statusReason || "");
-        setStatus(normalizeMemberStatus(member.status));
-        setOrgPosition((member as any).orgPosition || (normalizeMemberStatus(member.status) === "applicant" ? "applicant" : "member"));
+        setEmail(member.email || "");
+        setStatus(member.status);
+        setStatusDate(member.statusDate || member.resignDate || "");
+        setStatusNote(member.statusNote || "");
+        setOrgPosition(member.orgPosition || "member");
         setProfileImage(member.profileImage || null);
       }
     }
@@ -116,7 +106,7 @@ export default function AddMemberScreen() {
           : result.assets[0].uri;
         setProfileImage(source);
       }
-    } catch {
+    } catch (e) {
       Alert.alert("Error", "ပုံရွေးချယ်၍ မရပါ။");
     }
   };
@@ -160,33 +150,22 @@ export default function AddMemberScreen() {
       }
 
       const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
-      const { primaryPhone, secondaryPhone: normalizedSecondaryPhone } = splitPhoneNumbers(phone, secondaryPhone);
-      const normalizedDob = normalizeDateText(dob);
-      const normalizedJoinDate = normalizeDateText(joinDate);
-      const normalizedStatusDate = normalizeDateText(statusDate);
-      const normalizedStatus = normalizeMemberStatus(status);
-      const normalizedPosition =
-        orgPosition === "applicant" || normalizedStatus === "applicant" ? "applicant" : orgPosition;
-      const finalStatus = normalizedPosition === "applicant" ? "applicant" : normalizedStatus;
 
       // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
       const memberData: any = {
         id: memberId,
         name: name.trim(),
-        phone: primaryPhone,
-        secondaryPhone: normalizedSecondaryPhone || undefined,
-        email: email.trim() || undefined,
+        phone: phone.trim(),
         nrc: nrc.trim(),
-        dob: normalizedDob,
+        dob: dob.trim(),
         address: address.trim(),
-        joinDate: normalizedJoinDate || new Date().toLocaleDateString("en-GB"),
-        status: finalStatus,
-        orgPosition: normalizedPosition,
-        systemRole: "org_user",
-        statusDate: normalizedStatusDate || undefined,
-        resignDate: normalizedStatusDate || undefined,
-        statusReason: statusReason.trim() || undefined,
+        joinDate: joinDate.trim(),
+        email: email.trim(),
+        status: status,
+        statusDate: statusDate.trim(),
+        statusNote: statusNote.trim(),
         role: "member", // Missing 'role' ကို ထည့်လိုက်ပါသည်
+        orgPosition: orgPosition,
         avatarColor: randomColor, // Missing 'color' (သို့) 'avatarColor' အတွက်
         color: randomColor, 
         profileImage: profileImage || undefined,
@@ -212,7 +191,10 @@ export default function AddMemberScreen() {
       setShowDobPicker(false);
     }
     if (selectedDate) {
-      setDob(formatDateDdMmYyyy(selectedDate));
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setDob(`${day}/${month}/${year}`);
     }
   };
 
@@ -221,25 +203,43 @@ export default function AddMemberScreen() {
       setShowJoinDatePicker(false);
     }
     if (selectedDate) {
-      setJoinDate(formatDateDdMmYyyy(selectedDate));
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setJoinDate(`${day}/${month}/${year}`);
     }
   };
 
-  const handleResignDateChange = (event: any, selectedDate?: Date) => {
+  const handleStatusDateChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === "android") {
-      setShowResignDatePicker(false);
+      setShowStatusDatePicker(false);
     }
     if (selectedDate) {
-      setStatusDate(formatDateDdMmYyyy(selectedDate));
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setStatusDate(`${day}/${month}/${year}`);
     }
   };
 
   const getInitialDate = () => {
-    return parseGregorianDate(dob) || new Date();
+    if (!dob) return new Date();
+    const parts = dob.split('/');
+    if (parts.length === 3) {
+      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
   };
 
   const getParsedDate = (dateStr: string) => {
-    return parseGregorianDate(dateStr) || new Date();
+    if (!dateStr) return new Date();
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
   };
 
   return (
@@ -301,36 +301,13 @@ export default function AddMemberScreen() {
             placeholderTextColor={Colors.light.textSecondary}
           />
 
-          <Text style={styles.label}>ဖုန်းနံပါတ် (Primary)</Text>
+          <Text style={styles.label}>ဖုန်းနံပါတ်</Text>
           <TextInput
             style={styles.input}
-            placeholder="09... (သို့) 09.../09..."
+            placeholder="၀၉..."
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
-            placeholderTextColor={Colors.light.textSecondary}
-          />
-
-          <Text style={styles.label}>ဖုန်းနံပါတ် (Secondary - ရှိလျှင်)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="09..."
-            value={secondaryPhone}
-            onChangeText={setSecondaryPhone}
-            keyboardType="phone-pad"
-            placeholderTextColor={Colors.light.textSecondary}
-          />
-          <Text style={styles.helperText}>Slash (`/`) ဖြင့်ထည့်ထားသော number များကို သိမ်းချိန်တွင် Primary/Secondary အဖြစ်ခွဲပေးပါမည်။</Text>
-
-          <Text style={styles.label}>Email (Optional)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="example@email.com"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
             placeholderTextColor={Colors.light.textSecondary}
           />
 
@@ -347,7 +324,7 @@ export default function AddMemberScreen() {
           <View style={{ flexDirection: "row", gap: 10 }}>
             <TextInput
               style={[styles.input, { flex: 1 }]}
-              placeholder="ရက်/လ/နှစ် (သို့) မြန်မာသက္ကရာဇ်"
+              placeholder="ရက်.လ.ခုနှစ် (သို့) မြန်မာသက္ကရာဇ်"
               value={dob}
               onChangeText={setDob}
               placeholderTextColor={Colors.light.textSecondary}
@@ -369,7 +346,7 @@ export default function AddMemberScreen() {
                   onChange: (e: any) => {
                     if (e.target.value) {
                       const [y, m, d] = e.target.value.split('-');
-                      setDob(normalizeDateText(`${d}/${m}/${y}`));
+                      setDob(`${d}/${m}/${y}`);
                     }
                   }
                 })}
@@ -435,7 +412,7 @@ export default function AddMemberScreen() {
                   onChange: (e: any) => {
                     if (e.target.value) {
                       const [y, m, d] = e.target.value.split('-');
-                      setJoinDate(normalizeDateText(`${d}/${m}/${y}`));
+                      setJoinDate(`${d}/${m}/${y}`);
                     }
                   }
                 })}
@@ -473,37 +450,30 @@ export default function AddMemberScreen() {
             )
           )}
 
+          <Text style={styles.label}>အသင်းဝင် အဆင့်အတန်း (Position)</Text>
+          <Pressable style={styles.dropdown} onPress={() => setShowPositionPicker(true)}>
+            <Text style={styles.dropdownText}>{ORG_POSITION_LABELS[orgPosition]}</Text>
+            <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
+          </Pressable>
+
           <Text style={styles.label}>အခြေအနေ (Status)</Text>
           <View style={styles.statusRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
             {MEMBER_STATUS_VALUES.map((s) => (
               <Pressable
                 key={s}
                 style={[styles.statusChip, status === s ? styles.statusChipActive : undefined]}
-                onPress={() => setStatus(s as MemberStatus)}
+                onPress={() => setStatus(s)}
               >
                 <Text style={[styles.statusChipText, status === s ? styles.statusChipTextActive : undefined]}>
                   {MEMBER_STATUS_LABELS[s]}
                 </Text>
               </Pressable>
             ))}
+            </ScrollView>
           </View>
 
-          <Text style={styles.label}>အသင်းတွင်းတာဝန် (Org Position)</Text>
-          <View style={styles.statusRow}>
-            {ORG_POSITION_VALUES.map((position) => (
-              <Pressable
-                key={position}
-                style={[styles.statusChip, orgPosition === position ? styles.statusChipActive : undefined]}
-                onPress={() => setOrgPosition(position)}
-              >
-                <Text style={[styles.statusChipText, orgPosition === position ? styles.statusChipTextActive : undefined]}>
-                  {ORG_POSITION_LABELS[position]}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Text style={styles.label}>အခြေအနေပြောင်းသည့်နေ့ (Status Date)</Text>
+          <Text style={styles.label}>အခြေအနေပြောင်းလဲသည့်နေ့ (Status Date)</Text>
           <View style={{ flexDirection: "row", gap: 10 }}>
             <TextInput
               style={[styles.input, { flex: 1 }]}
@@ -521,7 +491,7 @@ export default function AddMemberScreen() {
                   onChange: (e: any) => {
                     if (e.target.value) {
                       const [y, m, d] = e.target.value.split('-');
-                      setStatusDate(normalizeDateText(`${d}/${m}/${y}`));
+                      setStatusDate(`${d}/${m}/${y}`);
                     }
                   }
                 })}
@@ -529,23 +499,23 @@ export default function AddMemberScreen() {
             ) : (
               <Pressable
                 style={styles.datePickerBtn}
-                onPress={() => setShowResignDatePicker(true)}
+                onPress={() => setShowStatusDatePicker(true)}
               >
                 <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
               </Pressable>
             )}
           </View>
-          {showResignDatePicker && Platform.OS !== 'web' && (
+          {showStatusDatePicker && Platform.OS !== 'web' && (
             Platform.OS === 'ios' ? (
               <View style={styles.datePickerContainer}>
                 <DateTimePicker
                   value={getParsedDate(statusDate)}
                   mode="date"
                   display="spinner"
-                  onChange={handleResignDateChange}
+                  onChange={handleStatusDateChange}
                   style={{ alignSelf: "center" }}
                 />
-                <Pressable onPress={() => setShowResignDatePicker(false)} style={styles.iosDateCloseBtn}>
+                <Pressable onPress={() => setShowStatusDatePicker(false)} style={styles.iosDateCloseBtn}>
                   <Text style={styles.iosDateCloseText}>Done</Text>
                 </Pressable>
               </View>
@@ -554,21 +524,42 @@ export default function AddMemberScreen() {
                 value={getParsedDate(statusDate)}
                 mode="date"
                 display="default"
-                onChange={handleResignDateChange}
+                onChange={handleStatusDateChange}
               />
             )
           )}
 
-          <Text style={styles.label}>အခြေအနေမှတ်ချက် (Status Note)</Text>
+          <Text style={styles.label}>မှတ်ချက် (Status Note)</Text>
           <TextInput
-            style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]}
-            placeholder="ဥပမာ - စည်းကမ်းချိုးဖောက်၍ ဆိုင်းငံ့"
-            value={statusReason}
-            onChangeText={setStatusReason}
+            style={[styles.input, { height: 60, textAlignVertical: "top" }]}
+            placeholder="အကြောင်းအရင်း..."
+            value={statusNote}
+            onChangeText={setStatusNote}
             multiline
             placeholderTextColor={Colors.light.textSecondary}
           />
         </ScrollView>
+
+        <Modal
+          visible={showPositionPicker}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowPositionPicker(false)}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setShowPositionPicker(false)}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>ရာထူး ရွေးချယ်ပါ</Text>
+              <ScrollView style={{ maxHeight: 400 }}>
+                {Object.entries(ORG_POSITION_LABELS).map(([key, label]) => (
+                  <Pressable key={key} style={styles.modalOption} onPress={() => { setOrgPosition(key as OrgPosition); setShowPositionPicker(false); }}>
+                    <Text style={[styles.modalOptionText, orgPosition === key && { color: Colors.light.tint, fontWeight: '600' }]}>{label}</Text>
+                    {orgPosition === key && <Ionicons name="checkmark" size={20} color={Colors.light.tint} />}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          </Pressable>
+        </Modal>
       </KeyboardAvoidingView>
     </View>
   );
@@ -591,7 +582,6 @@ const styles = StyleSheet.create({
   saveBtn: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
   form: { padding: 20, paddingBottom: 50 },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 15, marginBottom: 6, textTransform: "uppercase" },
-  helperText: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 6, fontFamily: "Inter_400Regular" },
   input: {
     backgroundColor: Colors.light.surface,
     borderRadius: 12,
@@ -602,8 +592,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
-  statusRow: { flexDirection: "row", gap: 8, marginTop: 5, flexWrap: "wrap" },
-  statusChip: { minWidth: "31%", paddingVertical: 10, paddingHorizontal: 10, borderRadius: 12, alignItems: "center", backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
+  dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, borderWidth: 1, borderColor: Colors.light.border },
+  dropdownText: { fontSize: 16, color: Colors.light.text },
+  
+  statusRow: { marginTop: 5 },
+  statusChip: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, alignItems: "center", backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
   statusChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   statusChipText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   statusChipTextActive: { color: "#fff" },
@@ -619,4 +612,9 @@ const styles = StyleSheet.create({
   datePickerContainer: { backgroundColor: Colors.light.surface, marginTop: 8, borderRadius: 12, padding: 10, borderWidth: 1, borderColor: Colors.light.border },
   iosDateCloseBtn: { alignItems: "center", padding: 10, backgroundColor: Colors.light.tint + "15", borderRadius: 8, marginTop: 8 },
   iosDateCloseText: { color: Colors.light.tint, fontWeight: "600" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
+  modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
+  modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },
+  modalOption: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  modalOptionText: { fontSize: 16, color: Colors.light.text },
 });

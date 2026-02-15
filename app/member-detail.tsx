@@ -10,6 +10,7 @@ import {
   Image,
   TextInput,
   KeyboardAvoidingView,
+  Modal,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,19 +20,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import {
-  CATEGORY_LABELS,
-  MEMBER_STATUS_LABELS,
-  MEMBER_STATUS_VALUES,
-  ORG_POSITION_LABELS,
-  ORG_POSITION_VALUES,
-  normalizeMemberStatus,
-  normalizeOrgPosition,
-  type OrgPosition,
-  type MemberStatus,
-} from "@/lib/types";
-import { formatDateDdMmYyyy, formatPhoneForDisplay, normalizeDateText, parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
-import AccessDenied from "@/components/AccessDenied";
+import { CATEGORY_LABELS, ORG_POSITION_LABELS, OrgPosition, MEMBER_STATUS_LABELS, MemberStatus, MEMBER_STATUS_VALUES } from "@/lib/types";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -73,9 +62,7 @@ export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
-  const { can, canAccessMemberRecord } = useAuth();
-  const canManageMembers = can("members.manage");
-  const canViewRecord = id ? canAccessMemberRecord(String(id)) : false;
+  const { can } = useAuth();
   const member = members?.find((m: any) => m.id === id);
 
   const [editName, setEditName] = useState(member?.name || "");
@@ -83,24 +70,33 @@ export default function MemberDetailScreen() {
   const [editEmail, setEditEmail] = useState(member?.email || "");
   const [editDob, setEditDob] = useState(member?.dob || "");
   const [editPhone, setEditPhone] = useState(member?.phone || "");
-  const [editSecondaryPhone, setEditSecondaryPhone] = useState((member as any)?.secondaryPhone || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
-  const [editStatus, setEditStatus] = useState<MemberStatus>(normalizeMemberStatus(member?.status));
-  const [editOrgPosition, setEditOrgPosition] = useState<OrgPosition>(normalizeOrgPosition((member as any)?.orgPosition || member?.status));
-  const [editStatusDate, setEditStatusDate] = useState((member as any)?.statusDate || member?.resignDate || "");
-  const [editStatusReason, setEditStatusReason] = useState((member as any)?.statusReason || "");
+  const [editStatus, setEditStatus] = useState<MemberStatus>(member?.status || "active");
+  const [editStatusDate, setEditStatusDate] = useState(member?.statusDate || member?.resignDate || "");
+  const [editStatusNote, setEditStatusNote] = useState(member?.statusNote || "");
+  const [editOrgPosition, setEditOrgPosition] = useState<OrgPosition>(member?.orgPosition || "member");
   const [showDobPicker, setShowDobPicker] = useState(false);
-  const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
+  const [showPositionPicker, setShowPositionPicker] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const memberIdValue = member?.id || "";
-  const memberGroups = groups?.filter((g: any) => g.memberIds.includes(memberIdValue)) || [];
+  if (!member) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <Text>Member not found.</Text>
+        <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
+          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const memberGroups = groups?.filter((g: any) => g.memberIds.includes(member?.id)) || [];
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   // Financial Calculations
-  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === memberIdValue) || [], [transactions, memberIdValue]);
-  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === memberIdValue) || [], [loans, memberIdValue]);
+  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === member.id) || [], [transactions, member.id]);
+  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === member.id) || [], [loans, member.id]);
 
   const stats = useMemo(() => {
     return {
@@ -111,23 +107,31 @@ export default function MemberDetailScreen() {
       loanOutstanding: memberLoans.reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0),
       activeLoans: memberLoans.filter((l: any) => l.status === 'active').length,
     };
-  }, [memberTxns, memberLoans, getLoanOutstanding]);
+  }, [memberTxns, memberLoans]);
 
   const handleDobChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === "android") {
       setShowDobPicker(false);
     }
     if (selectedDate) {
-      setEditDob(formatDateDdMmYyyy(selectedDate));
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setEditDob(`${day}/${month}/${year}`);
     }
   };
 
   const getInitialDate = () => {
-    return parseGregorianDate(editDob) || new Date();
+    if (!editDob) return new Date();
+    const parts = editDob.split(/[\/\.\-]/);
+    if (parts.length === 3) {
+      const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
   };
 
   const handleUpdate = async () => {
-    if (!canManageMembers) return;
     if (!editName.trim()) {
       Alert.alert("Error", "Name is required");
       return;
@@ -168,27 +172,17 @@ export default function MemberDetailScreen() {
         }
       }
 
-      const { primaryPhone, secondaryPhone } = splitPhoneNumbers(editPhone, editSecondaryPhone);
-      const normalizedStatusDate = normalizeDateText(editStatusDate);
-      const normalizedStatus = normalizeMemberStatus(editStatus);
-      const normalizedPosition =
-        editOrgPosition === "applicant" || normalizedStatus === "applicant"
-          ? "applicant"
-          : normalizeOrgPosition(editOrgPosition);
-      const finalStatus = normalizedPosition === "applicant" ? "applicant" : normalizedStatus;
       await updateMember(member.id, {
         id: editMemberId.trim(),
         name: editName.trim(),
-        dob: normalizeDateText(editDob),
+        dob: editDob.trim(),
         email: editEmail.trim(),
-        phone: primaryPhone,
-        secondaryPhone: secondaryPhone || undefined,
+        phone: editPhone.trim(),
         address: editAddress.trim(),
-        status: finalStatus,
-        orgPosition: normalizedPosition,
-        statusDate: normalizedStatusDate || undefined,
-        resignDate: normalizedStatusDate || undefined,
-        statusReason: editStatusReason.trim() || undefined,
+        status: editStatus,
+        statusDate: editStatusDate.trim(),
+        statusNote: editStatusNote.trim(),
+        orgPosition: editOrgPosition,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
@@ -196,7 +190,7 @@ export default function MemberDetailScreen() {
       if (editMemberId.trim() !== member.id) {
         router.replace({ pathname: "/member-detail", params: { id: editMemberId.trim() } } as any);
       }
-    } catch {
+    } catch (err) {
       Alert.alert("Error", "Could not update member");
     } finally {
       setSaving(false);
@@ -204,7 +198,6 @@ export default function MemberDetailScreen() {
   };
 
   const handleDelete = () => {
-    if (!canManageMembers) return;
     Alert.alert("Delete Member", "Are you sure you want to delete this member?", [
       { text: "Cancel", style: "cancel" },
       {
@@ -219,28 +212,12 @@ export default function MemberDetailScreen() {
   };
 
   // createdAt error ကို ရှောင်ရန် helper variable
-  const createdAtValue = (member as any)?.createdAt;
+  const createdAtValue = (member as any).createdAt;
 
-  const currentStatus = normalizeMemberStatus(member?.status);
-  const statusLabel = MEMBER_STATUS_LABELS[currentStatus];
-  const orgPositionLabel = ORG_POSITION_LABELS[normalizeOrgPosition((member as any)?.orgPosition || currentStatus)];
-  const statusDateLabel = (member as any)?.statusDate || member?.resignDate || "";
-  const statusReasonLabel = (member as any)?.statusReason || "";
+  // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
+  const statusLabel = MEMBER_STATUS_LABELS[member.status as MemberStatus] || member.status;
 
-  if (!canViewRecord) {
-    return <AccessDenied />;
-  }
-
-  if (!member) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text>Member not found.</Text>
-        <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
-          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  const canManage = can("members.manage");
 
   return (
     <KeyboardAvoidingView 
@@ -252,14 +229,12 @@ export default function MemberDetailScreen() {
           <Ionicons name={editing ? "close" : "arrow-back"} size={24} color={Colors.light.text} />
         </Pressable>
         <Text style={styles.headerTitle}>{editing ? "Edit Profile" : "Member Profile"}</Text>
-        {canManageMembers ? (
+        {canManage && (
           <Pressable onPress={editing ? handleUpdate : () => setEditing(true)} disabled={saving}>
             <Text style={[styles.editBtnText, { color: Colors.light.tint }]}>
               {editing ? (saving ? "Saving..." : "Done") : "Edit"}
             </Text>
           </Pressable>
-        ) : (
-          <View style={{ width: 42 }} />
         )}
       </View>
 
@@ -298,6 +273,12 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Full Name</Text>
             <TextInput style={styles.editInput} value={editName} onChangeText={setEditName} />
 
+            <Text style={styles.editLabel}>Position</Text>
+            <Pressable style={styles.dropdown} onPress={() => setShowPositionPicker(true)}>
+              <Text style={styles.dropdownText}>{ORG_POSITION_LABELS[editOrgPosition]}</Text>
+              <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
+            </Pressable>
+
             <Text style={styles.editLabel}>Date of Birth</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
@@ -315,7 +296,7 @@ export default function MemberDetailScreen() {
                     onChange: (e: any) => {
                       if (e.target.value) {
                         const [y, m, d] = e.target.value.split('-');
-                        setEditDob(normalizeDateText(`${d}/${m}/${y}`));
+                        setEditDob(`${d}/${m}/${y}`);
                       }
                     }
                   })}
@@ -340,93 +321,33 @@ export default function MemberDetailScreen() {
 
             <Text style={styles.editLabel}>Phone Number</Text>
             <TextInput style={styles.editInput} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" />
-            <Text style={styles.editLabel}>Secondary Phone Number</Text>
-            <TextInput style={styles.editInput} value={editSecondaryPhone} onChangeText={setEditSecondaryPhone} keyboardType="phone-pad" />
+
+            <Text style={styles.editLabel}>Address</Text>
+            <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
 
             <Text style={styles.editLabel}>Status</Text>
-            <View style={styles.statusRow}>
-              {MEMBER_STATUS_VALUES.map((statusOption) => (
-                <Pressable
-                  key={statusOption}
-                  style={[styles.statusChip, editStatus === statusOption ? styles.statusChipActive : undefined]}
-                  onPress={() => setEditStatus(statusOption)}
+            <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>
+              {MEMBER_STATUS_VALUES.map(s => (
+                <Pressable 
+                  key={s} 
+                  style={[styles.statusChip, editStatus === s && styles.statusChipActive]}
+                  onPress={() => setEditStatus(s)}
                 >
-                  <Text style={[styles.statusChipText, editStatus === statusOption ? styles.statusChipTextActive : undefined]}>
-                    {MEMBER_STATUS_LABELS[statusOption]}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.editLabel}>Org Position</Text>
-            <View style={styles.statusRow}>
-              {ORG_POSITION_VALUES.map((positionOption) => (
-                <Pressable
-                  key={positionOption}
-                  style={[styles.statusChip, editOrgPosition === positionOption ? styles.statusChipActive : undefined]}
-                  onPress={() => setEditOrgPosition(positionOption)}
-                >
-                  <Text style={[styles.statusChipText, editOrgPosition === positionOption ? styles.statusChipTextActive : undefined]}>
-                    {ORG_POSITION_LABELS[positionOption]}
-                  </Text>
+                  <Text style={[styles.statusChipText, editStatus === s && styles.statusChipTextActive]}>{MEMBER_STATUS_LABELS[s]}</Text>
                 </Pressable>
               ))}
             </View>
 
             <Text style={styles.editLabel}>Status Date</Text>
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <TextInput
-                style={[styles.editInput, { flex: 1 }]}
-                value={editStatusDate}
-                onChangeText={setEditStatusDate}
-                placeholder="DD/MM/YYYY"
-              />
-              {Platform.OS === "web" ? (
-                <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }]}>
-                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
-                  {React.createElement("input", {
-                    type: "date",
-                    style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
-                    onChange: (e: any) => {
-                      if (e.target.value) {
-                        const [y, m, d] = e.target.value.split("-");
-                        setEditStatusDate(normalizeDateText(`${d}/${m}/${y}`));
-                      }
-                    },
-                  })}
-                </View>
-              ) : (
-                <Pressable
-                  onPress={() => setShowStatusDatePicker(true)}
-                  style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }]}
-                >
-                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
-                </Pressable>
-              )}
-            </View>
-            {showStatusDatePicker && Platform.OS !== "web" && (
-              <DateTimePicker
-                value={parseGregorianDate(editStatusDate) || new Date()}
-                mode="date"
-                display="default"
-                onChange={(_event, selectedDate) => {
-                  if (Platform.OS === "android") setShowStatusDatePicker(false);
-                  if (selectedDate) setEditStatusDate(formatDateDdMmYyyy(selectedDate));
-                }}
-              />
-            )}
-
-            <Text style={styles.editLabel}>Status Note</Text>
-            <TextInput
-              style={[styles.editInput, { minHeight: 70, textAlignVertical: "top" }]}
-              value={editStatusReason}
-              onChangeText={setEditStatusReason}
-              placeholder="အခြေအနေမှတ်ချက်"
-              multiline
+            <TextInput 
+              style={styles.editInput} 
+              value={editStatusDate} 
+              onChangeText={setEditStatusDate} 
+              placeholder="YYYY-MM-DD" 
             />
 
-            <Text style={styles.editLabel}>Address</Text>
-            <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
+            <Text style={styles.editLabel}>Status Note</Text>
+            <TextInput style={styles.editInput} value={editStatusNote} onChangeText={setEditStatusNote} multiline />
 
             <Pressable style={styles.deleteBtn} onPress={handleDelete}>
               <Ionicons name="trash-outline" size={20} color="#EF4444" />
@@ -437,16 +358,16 @@ export default function MemberDetailScreen() {
           <View>
             <View style={styles.infoCard}>
               <InfoRow 
-                icon={currentStatus === "active" ? "checkmark-circle-outline" : "alert-circle-outline"} 
+                icon={member.status === 'active' ? "checkmark-circle-outline" : "alert-circle-outline"} 
                 label="အခြေအနေ" 
                 value={statusLabel} 
               />
-              <InfoRow icon="ribbon-outline" label="တာဝန်" value={orgPositionLabel} />
+              <InfoRow icon="ribbon-outline" label="ရာထူး" value={ORG_POSITION_LABELS[(member.orgPosition || "member") as OrgPosition]} />
               <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
-              <InfoRow icon="calendar-outline" label="Status Date" value={statusDateLabel} />
-              <InfoRow icon="document-text-outline" label="Status Note" value={statusReasonLabel} />
+              {member.status !== 'active' && <InfoRow icon="calendar-outline" label="ရက်စွဲ" value={member.statusDate || member.resignDate} />}
+              {member.status !== 'active' && member.statusNote && <InfoRow icon="document-text-outline" label="မှတ်ချက်" value={member.statusNote} />}
               <InfoRow icon="mail-outline" label="Email" value={member.email} />
-              <InfoRow icon="call-outline" label="Phone" value={formatPhoneForDisplay(member.phone, (member as any).secondaryPhone) || member.phone} />
+              <InfoRow icon="call-outline" label="Phone" value={member.phone} />
               <InfoRow icon="location-outline" label="Address" value={member.address} />
             </View>
 
@@ -508,6 +429,27 @@ export default function MemberDetailScreen() {
           </View>
         )}
       </ScrollView>
+
+      <Modal
+        visible={showPositionPicker}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowPositionPicker(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowPositionPicker(false)}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>ရာထူး ရွေးချယ်ပါ</Text>
+            <ScrollView style={{ maxHeight: 400 }}>
+              {Object.entries(ORG_POSITION_LABELS).map(([key, label]) => (
+                <Pressable key={key} style={styles.modalOption} onPress={() => { setEditOrgPosition(key as OrgPosition); setShowPositionPicker(false); }}>
+                  <Text style={[styles.modalOptionText, editOrgPosition === key && { color: Colors.light.tint, fontWeight: '600' }]}>{label}</Text>
+                  {editOrgPosition === key && <Ionicons name="checkmark" size={20} color={Colors.light.tint} />}
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -540,20 +482,8 @@ const styles = StyleSheet.create({
   editForm: { gap: 4 },
   editLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 12 },
   editInput: { backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
-  statusRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 },
-  statusChip: {
-    minWidth: "31%",
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 10,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-  },
-  statusChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
-  statusChipText: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
-  statusChipTextActive: { color: "#fff", fontFamily: "Inter_600SemiBold" },
+  dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.light.border },
+  dropdownText: { fontSize: 16, color: Colors.light.text },
   deleteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, marginTop: 20 },
   deleteBtnText: { color: "#EF4444", fontWeight: "600" },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
@@ -567,4 +497,13 @@ const styles = StyleSheet.create({
   txnDate: { fontSize: 11, color: Colors.light.textSecondary },
   txnAmount: { fontSize: 14, fontWeight: "700" },
   emptyState: { padding: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, marginBottom: 20 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
+  modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
+  modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },
+  modalOption: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  modalOptionText: { fontSize: 16, color: Colors.light.text },
+  statusChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
+  statusChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  statusChipText: { fontSize: 12, color: Colors.light.textSecondary },
+  statusChipTextActive: { color: "#fff" },
 });

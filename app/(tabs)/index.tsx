@@ -11,7 +11,6 @@ import {
   Alert,
   ToastAndroid,
 } from "react-native";
-import * as Notifications from 'expo-notifications';
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,16 +21,6 @@ import { useData } from "@/lib/DataContext";
 import { CATEGORY_LABELS, normalizeMemberStatus, TransactionCategory } from "@/lib/types";
 import { exportData } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
 
 interface Transaction {
   id: string;
@@ -290,27 +279,43 @@ export default function DashboardScreen() {
   useEffect(() => {
     const scheduleBirthdayNotification = async () => {
       if (upcomingBirthdays.length > 0 && Platform.OS !== 'web') {
-        const today = new Date().toDateString();
-        const lastNotified = await AsyncStorage.getItem("@last_birthday_notification");
-        
-        if (lastNotified !== today) {
-          const { status } = await Notifications.getPermissionsAsync();
-          let finalStatus = status;
-          if (status !== 'granted') {
-            const { status: newStatus } = await Notifications.requestPermissionsAsync();
-            finalStatus = newStatus;
-          }
+        try {
+          const Notifications = require('expo-notifications');
+          
+          Notifications.setNotificationHandler({
+            handleNotification: async () => ({
+              shouldShowAlert: true,
+              shouldPlaySound: true,
+              shouldSetBadge: false,
+              shouldShowBanner: true,
+              shouldShowList: true,
+            }),
+          });
 
-          if (finalStatus === 'granted') {
-            await Notifications.scheduleNotificationAsync({
-              content: {
-                title: "🎂 မွေးနေ့ရှင်များ ရှိပါသည်",
-                body: `မွေးနေ့ကျရောက်မည့်/ကျရောက်ခဲ့သော အသင်းဝင် (${upcomingBirthdays.length}) ဦး ရှိပါသည်။`,
-              },
-              trigger: null, // Send immediately
-            });
-            await AsyncStorage.setItem("@last_birthday_notification", today);
+          const today = new Date().toDateString();
+          const lastNotified = await AsyncStorage.getItem("@last_birthday_notification");
+          
+          if (lastNotified !== today) {
+            const { status } = await Notifications.getPermissionsAsync();
+            let finalStatus = status;
+            if (status !== 'granted') {
+              const { status: newStatus } = await Notifications.requestPermissionsAsync();
+              finalStatus = newStatus;
+            }
+
+            if (finalStatus === 'granted') {
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title: "🎂 မွေးနေ့ရှင်များ ရှိပါသည်",
+                  body: `မွေးနေ့ကျရောက်မည့်/ကျရောက်ခဲ့သော အသင်းဝင် (${upcomingBirthdays.length}) ဦး ရှိပါသည်။`,
+                },
+                trigger: null, // Send immediately
+              });
+              await AsyncStorage.setItem("@last_birthday_notification", today);
+            }
           }
+        } catch (error) {
+          console.log("Notification scheduling failed:", error);
         }
       }
     };

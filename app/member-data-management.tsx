@@ -99,6 +99,8 @@ function normalizeMember(raw: unknown, index: number): Member | null {
       ? obj.statusReason.trim()
       : typeof obj.resignReason === "string"
       ? obj.resignReason.trim()
+      : typeof obj.statusNote === "string"
+      ? obj.statusNote.trim()
       : "";
   const orgPosition = normalizeOrgPosition(
     typeof obj.orgPosition === "string"
@@ -142,10 +144,8 @@ function normalizeMember(raw: unknown, index: number): Member | null {
     joinDate,
     status,
     orgPosition,
-    systemRole: obj.systemRole === "admin" ? "admin" : "org_user",
     statusDate,
-    resignDate: statusDate,
-    statusReason,
+    statusNote: statusReason,
     createdAt,
     color,
     avatarColor,

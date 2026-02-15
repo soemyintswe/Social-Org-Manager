@@ -44,7 +44,7 @@ export default function MembersScreen() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [filterStatus, setFilterStatus] = useState<"all" | MemberStatus>("all");
   const [filterGender, setFilterGender] = useState<"all" | "male" | "female">("all");
-  const [filterAge, setFilterAge] = useState<"all" | "under18" | "18-60" | "over60" | "upcoming" | "custom">("all");
+  const [filterAge, setFilterAge] = useState<"all" | "18-60" | "60-75" | "over75" | "upcoming" | "custom" | "unknown">("all");
   const [showSortModal, setShowSortModal] = useState(false);
 
   // Custom Age Filter State
@@ -135,11 +135,12 @@ export default function MembersScreen() {
         const age = calculateAge(m.dob, refDate);
         
         if (filterAge === "upcoming") return !!getUpcomingBirthdayDate(m.dob);
+        if (filterAge === "unknown") return age === null;
         if (age === null) return false;
         const ageNum = age;
-        if (filterAge === "under18") return ageNum < 18;
         if (filterAge === "18-60") return ageNum >= 18 && ageNum <= 60;
-        if (filterAge === "over60") return ageNum > 60;
+        if (filterAge === "60-75") return ageNum > 60 && ageNum <= 75;
+        if (filterAge === "over75") return ageNum > 75;
         if (filterAge === "custom") {
              const minParsed = minAge ? parseInt(minAge, 10) : 0;
              const maxParsed = maxAge ? parseInt(maxAge, 10) : 999;
@@ -218,10 +219,10 @@ export default function MembersScreen() {
         }
 
         case "age": {
-          // Age Asc (အသက်အငယ်ဆုံးမှ အကြီးဆုံး) -> DOB Desc
           const valA = parseDate(a.dob);
           const valB = parseDate(b.dob);
-          return compareDateValues(valB, valA, sortOrder);
+          // Older first (DOB Ascending)
+          return compareDateValues(valA, valB, sortOrder);
         }
            
         default:
@@ -303,7 +304,9 @@ export default function MembersScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-        <Text style={styles.headerTitle}>အသင်းဝင်များ ({sourceMembers.length})</Text>
+        <Text style={styles.headerTitle}>
+          အသင်းဝင်များ ({sortedMembers.length}{sortedMembers.length !== sourceMembers.length ? ` / ${sourceMembers.length}` : ""})
+        </Text>
         {canManageMembers ? (
           <View style={styles.headerActions}>
             <Pressable
@@ -399,23 +402,30 @@ export default function MembersScreen() {
             </Pressable>
 
            <Pressable
-              style={[styles.statusChip, filterAge === "under18" && styles.statusChipActive]}
-              onPress={() => setFilterAge("under18")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "under18" && styles.statusChipTextActive]}>18 နှစ်အောက်</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.statusChip, filterAge === "18-60" && styles.statusChipActive]}
+              style={[styles.statusChip, filterAge === "18-60" && { backgroundColor: "#10B981", borderColor: "#10B981" }]}
               onPress={() => setFilterAge("18-60")}
             >
               <Text style={[styles.statusChipText, filterAge === "18-60" && styles.statusChipTextActive]}>18-60 နှစ်</Text>
             </Pressable>
+
             <Pressable
-              style={[styles.statusChip, filterAge === "over60" && styles.statusChipActive]}
-              onPress={() => setFilterAge("over60")}
+              style={[styles.statusChip, filterAge === "60-75" && { backgroundColor: "#F59E0B", borderColor: "#F59E0B" }]}
+              onPress={() => setFilterAge("60-75")}
             >
-              <Text style={[styles.statusChipText, filterAge === "over60" && styles.statusChipTextActive]}>60 နှစ်အထက်</Text>
+              <Text style={[styles.statusChipText, filterAge === "60-75" && styles.statusChipTextActive]}>60-75 နှစ်</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.statusChip, filterAge === "over75" && { backgroundColor: "#EF4444", borderColor: "#EF4444" }]}
+              onPress={() => setFilterAge("over75")}
+            >
+              <Text style={[styles.statusChipText, filterAge === "over75" && styles.statusChipTextActive]}>75 နှစ်အထက်</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.statusChip, filterAge === "unknown" && styles.statusChipActive]}
+              onPress={() => setFilterAge("unknown")}
+            >
+              <Text style={[styles.statusChipText, filterAge === "unknown" && styles.statusChipTextActive]}>အသက်မသိသူများ</Text>
             </Pressable>
             
                 <Pressable
@@ -469,10 +479,9 @@ export default function MembersScreen() {
                 <Text style={[styles.metaText, { marginLeft: 8 }]}>
                   {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || item.status)]}
                 </Text>
-                {(() => {
+                {sortBy !== 'age' && (() => {
                   const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
-                  if (age === null) return null;
-                  return <Text style={styles.metaText}>အသက်: {age} နှစ်</Text>;
+                  return <Text style={[styles.metaText, { marginLeft: 8 }]}>အသက်: {age !== null ? `${age} နှစ်` : "မသိပါ။"}</Text>;
                 })()}
                 {(() => {
                   const upcoming = getUpcomingBirthdayDate(item.dob);
@@ -489,16 +498,33 @@ export default function MembersScreen() {
                   return null;
                 })()}
               </View>
-              <View style={styles.metaRow}>
-                {sortBy === 'joinDate' && <Text style={styles.metaText}>Joined: {item.joinDate}</Text>}
-                {sortBy === 'dob' && <Text style={styles.metaText}>DOB: {item.dob}</Text>}
-                {sortBy === 'name' && (
-                  <Text style={styles.metaText}>
-                    {formatPhoneForDisplay(item.phone, (item as any).secondaryPhone) || item.phone}
-                    {item.email ? ` • ${item.email}` : ""}
+              {sortBy === 'age' ? (
+                <View style={{ marginTop: 4 }}>
+                  {(() => {
+                    const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
+                    return (
+                      <Text style={styles.metaText}>
+                        အသက်: {age !== null ? `${age} နှစ်` : "မသိပါ။"}
+                      </Text>
+                    );
+                  })()}
+                  <Text style={[styles.metaText, { marginTop: 2 }]}>
+                    DOB: {item.dob || "မွေးနေ့မသိပါ။"}
                   </Text>
-                )}
-              </View>
+                </View>
+              ) : (
+                <View style={styles.metaRow}>
+                  {sortBy === 'joinDate' && <Text style={styles.metaText}>Joined: {item.joinDate}</Text>}
+                  {sortBy === 'name' && (
+                    <Text style={styles.metaText}>
+                      {formatPhoneForDisplay(item.phone, (item as any).secondaryPhone) || item.phone}
+                      {item.email ? ` • ${item.email}` : ""}
+                    </Text>
+                  )}
+                  {(sortBy === 'joinDate' || sortBy === 'name') && <Text style={[styles.metaText, { marginHorizontal: 4 }]}>•</Text>}
+                  <Text style={styles.metaText}>DOB: {item.dob || "မွေးနေ့မသိပါ။"}</Text>
+                </View>
+              )}
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
           </Pressable>
@@ -632,7 +658,7 @@ const styles = StyleSheet.create({
   memberInfo: { flex: 1 },
   memberName: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   memberId: { fontSize: 12, color: Colors.light.textSecondary },
-  metaRow: { marginTop: 4 },
+  metaRow: { marginTop: 4, flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
   metaText: { fontSize: 12, color: Colors.light.tint, fontFamily: "Inter_500Medium" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },

@@ -1,117 +1,24 @@
 // lib/types.ts
 
-export const MEMBER_STATUS_VALUES = ["applicant", "active", "resigned", "deceased", "expelled", "suspended"] as const;
-
-export type MemberStatus = (typeof MEMBER_STATUS_VALUES)[number];
-
-export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
-  applicant: "လျှောက်ထားသူ",
-  active: "ပုံမှန်",
-  resigned: "နှုတ်ထွက်",
-  deceased: "ကွယ်လွန်",
-  expelled: "ထုတ်ပယ်",
-  suspended: "ဆိုင်းငံ့",
-};
-
-export const ORG_POSITION_VALUES = [
-  "patron",
-  "chairperson",
-  "secretary",
-  "treasurer",
-  "auditor",
-  "committee_member",
-  "member",
-  "applicant",
-] as const;
-
-export type OrgPosition = (typeof ORG_POSITION_VALUES)[number];
-
-export const ORG_POSITION_LABELS: Record<OrgPosition, string> = {
-  patron: "နာယက",
-  chairperson: "ဥက္ကဋ္ဌ",
-  secretary: "အတွင်းရေးမှူး",
-  treasurer: "ဘဏ္ဍာရေးမှူး",
-  auditor: "စာရင်းစစ်",
-  committee_member: "ကော်မတီအဖွဲ့ဝင်",
-  member: "သာမန်အသင်းဝင်",
-  applicant: "လျှောက်ထားသူ",
-};
-
-export const SYSTEM_ROLE_VALUES = ["admin", "org_user"] as const;
-
-export type SystemRole = (typeof SYSTEM_ROLE_VALUES)[number];
-
-export function normalizeMemberStatus(value: unknown): MemberStatus {
-  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (raw === "လျှောက်ထားသူ") return "applicant";
-  if (raw === "ပုံမှန်") return "active";
-  if (raw === "နှုတ်ထွက်") return "resigned";
-  if (raw === "ကွယ်လွန်") return "deceased";
-  if (raw === "ထုတ်ပယ်") return "expelled";
-  if (raw === "ဆိုင်းငံ့") return "suspended";
-  if (raw === "pending") return "applicant";
-  if (raw === "applying") return "applicant";
-  if (raw === "applicant") return "applicant";
-  if (raw === "inactive") return "resigned";
-  if (raw === "suspend") return "suspended";
-  if (raw === "deactive") return "resigned";
-  if ((MEMBER_STATUS_VALUES as readonly string[]).includes(raw)) {
-    return raw as MemberStatus;
-  }
-  return "active";
-}
-
-export function normalizeOrgPosition(value: unknown): OrgPosition {
-  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (raw === "နာယက") return "patron";
-  if (raw === "ဥက္ကဋ္ဌ") return "chairperson";
-  if (raw === "အတွင်းရေးမှူး") return "secretary";
-  if (raw === "ဘဏ္ဍာရေးမှူး") return "treasurer";
-  if (raw === "စာရင်းစစ်") return "auditor";
-  if (raw === "ကော်မတီအဖွဲ့ဝင်") return "committee_member";
-  if (raw === "သာမန်အသင်းဝင်") return "member";
-  if (raw === "လျှောက်ထားသူ") return "applicant";
-  if (raw === "member") return "member";
-  if (raw === "committee") return "committee_member";
-  if ((ORG_POSITION_VALUES as readonly string[]).includes(raw)) {
-    return raw as OrgPosition;
-  }
-  return "member";
-}
-
 export interface Member {
   id: string;
   name: string;
   dob?: string;
   nrc?: string;
   phone: string;
-  secondaryPhone?: string;
   email?: string;
-  systemRole?: SystemRole;
-  orgPosition?: OrgPosition;
   address?: string;
   joinDate: string;
   status: MemberStatus;
-  statusDate?: string;
-  statusReason?: string;
-  resignDate?: string;
   avatarColor?: string;
   createdAt: string;
   color: string;
   role: string;
-}
-
-export interface UserAccount {
-  id: string;
-  memberId?: string;
-  systemRole: SystemRole;
   orgPosition?: OrgPosition;
-  displayName: string;
-  email?: string;
-  phone?: string;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
+  resignDate?: string;
+  statusDate?: string;
+  statusNote?: string;
+  profileImage?: string;
 }
 
 export interface OrgEvent {
@@ -218,4 +125,62 @@ export interface Loan {
   status: "active" | "paid";
   description: string;
   createdAt: string;
+}
+
+export type SystemRole = "admin" | "org_user";
+export type OrgPosition = "patron" | "chairperson" | "secretary" | "treasurer" | "auditor" | "committee_member" | "member" | "applicant";
+export type MemberStatus = "active" | "resigned" | "deceased" | "expelled" | "suspended" | "applicant";
+
+export interface UserAccount {
+  id: string;
+  displayName: string;
+  systemRole: SystemRole;
+  memberId?: string;
+  orgPosition?: OrgPosition;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export const ORG_POSITION_LABELS: Record<OrgPosition, string> = {
+  patron: "နာယက",
+  chairperson: "ဥက္ကဋ္ဌ",
+  secretary: "အတွင်းရေးမှူး",
+  treasurer: "ဘဏ္ဍာရေးမှူး",
+  auditor: "စာရင်းစစ်",
+  committee_member: "ကော်မတီအဖွဲ့ဝင်",
+  member: "အသင်းဝင်",
+  applicant: "လျှောက်ထားသူ",
+};
+
+export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
+  active: "လက်ရှိ",
+  resigned: "နုတ်ထွက်",
+  deceased: "ကွယ်လွန်",
+  expelled: "ထုတ်ပယ်",
+  suspended: "ဆိုင်းငံ့",
+  applicant: "လျှောက်ထားဆဲ",
+};
+
+export const MEMBER_STATUS_VALUES: MemberStatus[] = ["active", "resigned", "deceased", "expelled", "suspended", "applicant"];
+
+export function normalizeMemberStatus(val: any): MemberStatus {
+  const v = String(val || "").toLowerCase();
+  if (v.includes("applicant") || v.includes("လျှောက်")) return "applicant";
+  if (v.includes("resign") || v.includes("နုတ်ထွက်") || v.includes("inactive")) return "resigned";
+  if (v.includes("decease") || v.includes("die") || v.includes("ကွယ်လွန်")) return "deceased";
+  if (v.includes("expel") || v.includes("ထုတ်ပယ်")) return "expelled";
+  if (v.includes("suspend") || v.includes("ဆိုင်းငံ့")) return "suspended";
+  return "active";
+}
+
+export function normalizeOrgPosition(val: any): OrgPosition {
+  const v = String(val || "").toLowerCase();
+  if (v.includes("patron") || v.includes("နာယက")) return "patron";
+  if (v.includes("chair") || v.includes("ဥက္ကဋ္ဌ")) return "chairperson";
+  if (v.includes("sec") || v.includes("အတွင်း")) return "secretary";
+  if (v.includes("treas") || v.includes("ဘဏ္ဍာ")) return "treasurer";
+  if (v.includes("audit") || v.includes("စာရင်း")) return "auditor";
+  if (v.includes("committee") || v.includes("ကော်မတီ")) return "committee_member";
+  if (v.includes("appli") || v.includes("လျှောက်")) return "applicant";
+  return "member";
 }
