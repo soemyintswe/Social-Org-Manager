@@ -189,7 +189,7 @@ export default function MemberChangeApprovalsScreen() {
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>Member Change Approvals</Text>
+        <Text style={styles.headerTitle}>အသင်းဝင်ပြင်ဆင်ခွင့်တောင်းဆိုမှု</Text>
         <View style={{ width: 24 }} />
       </View>
 
@@ -197,11 +197,11 @@ export default function MemberChangeApprovalsScreen() {
         <View style={styles.summaryRow}>
           <View style={styles.summaryCard}>
             <Text style={styles.summaryCount}>{pendingRequests.length}</Text>
-            <Text style={styles.summaryLabel}>Pending</Text>
+            <Text style={styles.summaryLabel}>စောင့်ဆိုင်း</Text>
           </View>
           <View style={styles.summaryCard}>
             <Text style={styles.summaryCount}>{historyRequests.length}</Text>
-            <Text style={styles.summaryLabel}>History</Text>
+            <Text style={styles.summaryLabel}>မှတ်တမ်း</Text>
           </View>
         </View>
         <TextInput
@@ -213,35 +213,35 @@ export default function MemberChangeApprovalsScreen() {
         />
         <View style={styles.tabRow}>
           <Pressable style={[styles.tabBtn, tab === "pending" && styles.tabBtnActive]} onPress={() => setTab("pending")}>
-            <Text style={[styles.tabText, tab === "pending" && styles.tabTextActive]}>Pending</Text>
+            <Text style={[styles.tabText, tab === "pending" && styles.tabTextActive]}>စောင့်ဆိုင်း</Text>
           </Pressable>
           <Pressable style={[styles.tabBtn, tab === "history" && styles.tabBtnActive]} onPress={() => setTab("history")}>
-            <Text style={[styles.tabText, tab === "history" && styles.tabTextActive]}>History</Text>
+            <Text style={[styles.tabText, tab === "history" && styles.tabTextActive]}>မှတ်တမ်း</Text>
           </Pressable>
         </View>
         <View style={styles.toolRow}>
           <Pressable style={styles.toolBtn} onPress={handleExportJson}>
             <Ionicons name="download-outline" size={16} color={Colors.light.tint} />
-            <Text style={styles.toolText}>Export JSON</Text>
+            <Text style={styles.toolText}>JSON ထုတ်မည်</Text>
           </Pressable>
           <Pressable style={styles.toolBtn} onPress={handleCopyJson}>
             <Ionicons name="copy-outline" size={16} color={Colors.light.tint} />
-            <Text style={styles.toolText}>Copy JSON</Text>
+            <Text style={styles.toolText}>JSON ကူးယူ</Text>
           </Pressable>
         </View>
         {tab === "history" && (
           <View style={styles.filterRow}>
             <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => setStatusFilter("all")}>
-              <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>All</Text>
+              <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>အားလုံး</Text>
             </Pressable>
             <Pressable style={[styles.filterChip, statusFilter === "approved" && styles.filterChipActive]} onPress={() => setStatusFilter("approved")}>
-              <Text style={[styles.filterChipText, statusFilter === "approved" && styles.filterChipTextActive]}>Approved</Text>
+              <Text style={[styles.filterChipText, statusFilter === "approved" && styles.filterChipTextActive]}>အတည်ပြု</Text>
             </Pressable>
             <Pressable style={[styles.filterChip, statusFilter === "rejected" && styles.filterChipActive]} onPress={() => setStatusFilter("rejected")}>
-              <Text style={[styles.filterChipText, statusFilter === "rejected" && styles.filterChipTextActive]}>Rejected</Text>
+              <Text style={[styles.filterChipText, statusFilter === "rejected" && styles.filterChipTextActive]}>ပယ်ချ</Text>
             </Pressable>
             <Pressable style={[styles.filterChip, statusFilter === "cancelled" && styles.filterChipActive]} onPress={() => setStatusFilter("cancelled")}>
-              <Text style={[styles.filterChipText, statusFilter === "cancelled" && styles.filterChipTextActive]}>Cancelled</Text>
+              <Text style={[styles.filterChipText, statusFilter === "cancelled" && styles.filterChipTextActive]}>ရုပ်သိမ်း</Text>
             </Pressable>
           </View>
         )}
@@ -295,14 +295,14 @@ export default function MemberChangeApprovalsScreen() {
                       onPress={() => handleReject(item.id)}
                       disabled={processingId === item.id}
                     >
-                      <Text style={styles.actionText}>Reject</Text>
+                      <Text style={styles.actionText}>ပယ်ချ</Text>
                     </Pressable>
                     <Pressable
                       style={[styles.actionBtn, styles.approveBtn]}
                       onPress={() => handleApprove(item.id)}
                       disabled={processingId === item.id}
                     >
-                      <Text style={styles.actionText}>Approve</Text>
+                      <Text style={styles.actionText}>အတည်ပြု</Text>
                     </Pressable>
                   </View>
                 )}
@@ -313,7 +313,7 @@ export default function MemberChangeApprovalsScreen() {
                       onPress={() => handleWithdraw(item.id)}
                       disabled={processingId === item.id}
                     >
-                      <Text style={styles.actionText}>Withdraw</Text>
+                      <Text style={styles.actionText}>ရုပ်သိမ်း</Text>
                     </Pressable>
                   </View>
                 )}
