@@ -22,6 +22,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { CATEGORY_LABELS, MEMBER_STATUS_LABELS, MemberStatus } from "@/lib/types";
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from "expo-file-system/legacy";
 import AccessDenied from "@/components/AccessDenied";
 
 const PERIOD_OPTIONS = [
@@ -31,16 +32,25 @@ const PERIOD_OPTIONS = [
   { label: "၁ နှစ်", months: 12 },
 ];
 
-type ReportTab = "income_expense" | "loans" | "funds" | "fees";
+type ReportTab = "income_expense" | "loans" | "funds" | "fees" | "audit_flags";
 type ReportViewScope = "all" | "self" | "member";
+
+function csvEscape(value: unknown): string {
+  const text = String(value ?? "");
+  if (text.includes(",") || text.includes("\"") || text.includes("\n")) {
+    return `"${text.replace(/"/g, "\"\"")}"`;
+  }
+  return text;
+}
 
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { transactions, members, loading, accountSettings, loans, getLoanOutstanding } = useData() as any;
-  const { can, currentUser } = useAuth();
+  const { can, currentUser, profile } = useAuth();
   const canViewAllReports = can("reports.view_all");
   const canViewReports = can("reports.view_summary") || canViewAllReports;
   const canViewAllFinanceRecords = can("finance.view_detail") || can("finance.view_all");
+  const canViewAuditFlags = can("finance.audit_flag") || canViewAllFinanceRecords;
   const canChooseScope = canViewAllReports && canViewAllFinanceRecords;
   
   // Default to Current Year Jan 1 to Today
@@ -58,6 +68,8 @@ export default function ReportsScreen() {
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditOnlyFlagged, setAuditOnlyFlagged] = useState(true);
   const effectiveScope: ReportViewScope = canChooseScope ? viewScope : "self";
 
   const handlePeriodSelect = (months: number) => {
@@ -206,6 +218,148 @@ export default function ReportsScreen() {
     }
     return months;
   }, [startDate, endDate]);
+
+  const roleSummaryCards = useMemo(() => {
+    const role = profile?.orgPosition || "member";
+    const feeTxns = filteredTxns.filter((t: any) => t.category === "member_fees");
+    const donationTxns = filteredTxns.filter((t: any) => t.category === "donation");
+    const welfareTxns = filteredTxns.filter((t: any) => String(t.category || "").startsWith("welfare_"));
+    const flaggedTxns = filteredTxns.filter((t: any) => Boolean(t.auditFlagged));
+
+    if (role === "patron") {
+      return [
+        { label: "စုစုပေါင်းအဝင်", value: `${incomeExpenseStats.income.toLocaleString()} KS`, color: "#10B981" },
+        { label: "စုစုပေါင်းအထွက်", value: `${incomeExpenseStats.expense.toLocaleString()} KS`, color: "#F43F5E" },
+        { label: "လက်ကျန်ကွာဟချက်", value: `${incomeExpenseStats.net.toLocaleString()} KS`, color: "#8B5CF6" },
+      ];
+    }
+
+    if (role === "auditor") {
+      return [
+        { label: "Flagged Record", value: `${flaggedTxns.length}`, color: "#DC2626" },
+        {
+          label: "Flagged Amount",
+          value: `${flaggedTxns.reduce((s: number, t: any) => s + Number(t.amount || 0), 0).toLocaleString()} KS`,
+          color: "#B45309",
+        },
+        { label: "စစ်ဆေးရမည့် Welfare", value: `${welfareTxns.length}`, color: "#2563EB" },
+      ];
+    }
+
+    return [
+      { label: "ပေးသွင်းငွေ", value: `${incomeExpenseStats.income.toLocaleString()} KS`, color: "#10B981" },
+      { label: "ထုတ်ယူငွေ", value: `${incomeExpenseStats.expense.toLocaleString()} KS`, color: "#F43F5E" },
+      { label: "လစဉ်ကြေး/လှူဒါန်းမှု", value: `${(feeTxns.length + donationTxns.length).toLocaleString()}`, color: "#0EA5A4" },
+    ];
+  }, [profile?.orgPosition, filteredTxns, incomeExpenseStats]);
+
+  const scopedAuditRows = useMemo(() => {
+    const needle = auditSearch.trim().toLowerCase();
+    return filteredTxns.filter((t: any) => {
+      if (auditOnlyFlagged && !t.auditFlagged) return false;
+      if (!needle) return true;
+      const categoryLabel = CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || String(t.category || "");
+      return (
+        String(t.memberId || "").toLowerCase().includes(needle) ||
+        String(t.receiptNumber || "").toLowerCase().includes(needle) ||
+        String(t.auditNote || "").toLowerCase().includes(needle) ||
+        String(categoryLabel).toLowerCase().includes(needle)
+      );
+    });
+  }, [filteredTxns, auditSearch, auditOnlyFlagged]);
+
+  const exportAuditJson = async () => {
+    const payload = {
+      type: "auditor_flagged_transactions",
+      exportedAt: new Date().toISOString(),
+      scope: scopeLabel,
+      count: scopedAuditRows.length,
+      rows: scopedAuditRows,
+    };
+    const json = JSON.stringify(payload, null, 2);
+
+    try {
+      if (Platform.OS === "web") {
+        const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+        const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `auditor_flags_${timestamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      if (!directory) return;
+      const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+      const fileUri = directory + `auditor_flags_${timestamp}.json`;
+      await FileSystem.writeAsStringAsync(fileUri, json);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: "application/json",
+          dialogTitle: "Auditor Flag JSON Export",
+          UTI: "public.json",
+        });
+      }
+    } catch {
+      Alert.alert("အမှား", "Audit JSON export မအောင်မြင်ပါ။");
+    }
+  };
+
+  const exportAuditCsv = async () => {
+    const headers = ["member_id", "category", "amount", "date", "receipt", "audit_flagged", "audit_note", "flagged_by", "flagged_at"];
+    const rows = scopedAuditRows.map((t: any) =>
+      [
+        t.memberId || "",
+        CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category || "",
+        t.amount || 0,
+        t.date || "",
+        t.receiptNumber || "",
+        t.auditFlagged ? "YES" : "NO",
+        t.auditNote || "",
+        t.auditFlaggedByUserId || "",
+        t.auditFlaggedAt || "",
+      ]
+        .map(csvEscape)
+        .join(",")
+    );
+    const csv = [headers.join(","), ...rows].join("\n");
+
+    try {
+      if (Platform.OS === "web") {
+        const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `auditor_flags_${timestamp}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      if (!directory) return;
+      const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+      const fileUri = directory + `auditor_flags_${timestamp}.csv`;
+      await FileSystem.writeAsStringAsync(fileUri, csv);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: "text/csv",
+          dialogTitle: "Auditor Flag CSV Export",
+          UTI: "public.comma-separated-values-text",
+        });
+      }
+    } catch {
+      Alert.alert("အမှား", "Audit CSV export မအောင်မြင်ပါ။");
+    }
+  };
 
   const generatePdf = async () => {
     if (!canViewAllReports) {
@@ -426,6 +580,11 @@ export default function ReportsScreen() {
           <Pressable style={[styles.tab, reportTab === "fees" && styles.activeTab]} onPress={() => setReportTab("fees")}>
             <Text style={[styles.tabText, reportTab === "fees" && styles.activeTabText]}>လစဉ်ကြေး</Text>
           </Pressable>
+          {canViewAuditFlags && (
+            <Pressable style={[styles.tab, reportTab === "audit_flags" && styles.activeTab]} onPress={() => setReportTab("audit_flags")}>
+              <Text style={[styles.tabText, reportTab === "audit_flags" && styles.activeTabText]}>Audit Flag</Text>
+            </Pressable>
+          )}
         </ScrollView>
       </View>
       {!canChooseScope && (
@@ -434,6 +593,14 @@ export default function ReportsScreen() {
           <Text style={styles.summaryOnlyNoteText}>သင့်အကောင့်နှင့်သက်ဆိုင်သော Report အချက်အလက်များကိုသာ ပြသထားပါသည်။</Text>
         </View>
       )}
+      <View style={styles.summaryGrid}>
+        {roleSummaryCards.map((card) => (
+          <View key={card.label} style={[styles.statBox, { borderLeftColor: card.color }]}>
+            <Text style={styles.statLabel}>{card.label}</Text>
+            <Text style={[styles.statValue, { color: card.color }]}>{card.value}</Text>
+          </View>
+        ))}
+      </View>
 
       {reportTab === "income_expense" && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -632,6 +799,56 @@ export default function ReportsScreen() {
         </ScrollView>
       )}
 
+      {reportTab === "audit_flags" && canViewAuditFlags && (
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Auditor Flagged Transactions</Text>
+            <View style={styles.auditToolbar}>
+              <Pressable
+                style={[styles.scopeChip, auditOnlyFlagged && styles.scopeChipActive]}
+                onPress={() => setAuditOnlyFlagged((prev) => !prev)}
+              >
+                <Text style={[styles.scopeChipText, auditOnlyFlagged && styles.scopeChipTextActive]}>
+                  {auditOnlyFlagged ? "Flagged Only" : "All Rows"}
+                </Text>
+              </Pressable>
+              <Pressable style={styles.exportBtn} onPress={exportAuditJson}>
+                <Ionicons name="download-outline" size={14} color={Colors.light.tint} />
+                <Text style={styles.exportBtnText}>JSON</Text>
+              </Pressable>
+              <Pressable style={styles.exportBtn} onPress={exportAuditCsv}>
+                <Ionicons name="download-outline" size={14} color={Colors.light.tint} />
+                <Text style={styles.exportBtnText}>CSV</Text>
+              </Pressable>
+            </View>
+            <TextInput
+              style={styles.memberSearchInput}
+              value={auditSearch}
+              onChangeText={setAuditSearch}
+              placeholder="Member ID / category / note / receipt"
+            />
+            <Text style={styles.auditMetaText}>Count: {scopedAuditRows.length}</Text>
+            {scopedAuditRows.length === 0 ? (
+              <View style={{ paddingVertical: 12 }}>
+                <Text style={styles.summaryOnlyNoteText}>Audit records မရှိသေးပါ။</Text>
+              </View>
+            ) : (
+              scopedAuditRows.map((row: any) => (
+                <View key={row.id} style={styles.auditRow}>
+                  <Text style={styles.auditTitle}>
+                    {CATEGORY_LABELS[row.category as keyof typeof CATEGORY_LABELS] || row.category} - {Number(row.amount || 0).toLocaleString()} KS
+                  </Text>
+                  <Text style={styles.auditSub}>
+                    Member: {row.memberId || "-"} | Date: {row.date || "-"} | Receipt: {row.receiptNumber || "-"}
+                  </Text>
+                  <Text style={styles.auditNoteText}>Note: {row.auditNote || "-"}</Text>
+                </View>
+              ))
+            )}
+          </View>
+        </ScrollView>
+      )}
+
       <Modal
         animationType="slide"
         transparent={true}
@@ -784,6 +1001,31 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: "row", backgroundColor: "#F8FAFC", borderRadius: 8, paddingVertical: 10, paddingHorizontal: 6, marginBottom: 4, borderWidth: 1, borderColor: "#E2E8F0" },
   tableName: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   paidBadge: { backgroundColor: Colors.light.success + "15", paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  auditToolbar: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" },
+  exportBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  exportBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
+  auditMetaText: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 8, marginBottom: 8 },
+  auditRow: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#F8FAFC",
+    marginBottom: 8,
+  },
+  auditTitle: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  auditSub: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 3 },
+  auditNoteText: { fontSize: 12, color: "#B45309", marginTop: 4 },
   summaryOnlyNote: {
     marginHorizontal: 20,
     marginTop: 4,
