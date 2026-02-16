@@ -14,6 +14,7 @@ import AccessDenied from "@/components/AccessDenied";
 import type { MemberChangeRequest } from "@/lib/types";
 
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
+const PENDING_OVERDUE_DAYS = 3;
 const MEMBER_FIELD_LABELS: Record<string, string> = {
   name: "အမည်",
   phone: "ဖုန်း",
@@ -45,6 +46,20 @@ function csvEscape(value: unknown): string {
     return `"${text.replace(/"/g, "\"\"")}"`;
   }
   return text;
+}
+
+function formatYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getPendingAgeDays(createdAt?: string): number {
+  const created = new Date(createdAt || 0).getTime();
+  if (!Number.isFinite(created) || created <= 0) return 0;
+  const diffMs = Date.now() - created;
+  return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
 }
 
 function buildChangeLines(item: MemberChangeRequest, currentMember?: any, maxLines?: number): string[] {
@@ -189,6 +204,11 @@ export default function MemberChangeApprovalsScreen() {
     };
     void persistLastSeen();
   }, [currentUser?.id, memberChangeRequests.length]);
+
+  const overduePendingCount = useMemo(
+    () => pendingRequests.filter((item) => getPendingAgeDays(item.createdAt) >= PENDING_OVERDUE_DAYS).length,
+    [pendingRequests]
+  );
 
   if (!canApprove && !canPropose) {
     return <AccessDenied showBack={true} />;
@@ -393,6 +413,20 @@ export default function MemberChangeApprovalsScreen() {
   const selectedChangeLines = selectedRequest ? buildChangeLines(selectedRequest, selectedCurrentMember) : [];
   const selectedChangeRows = selectedRequest ? buildChangeRows(selectedRequest, selectedCurrentMember) : [];
 
+  const setHistoryPreset = (mode: "today" | "7d" | "30d") => {
+    const now = new Date();
+    if (mode === "today") {
+      const ymd = formatYmd(now);
+      setDateFrom(ymd);
+      setDateTo(ymd);
+      return;
+    }
+    const from = new Date(now);
+    from.setDate(now.getDate() - (mode === "7d" ? 7 : 30));
+    setDateFrom(formatYmd(from));
+    setDateTo(formatYmd(now));
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -414,6 +448,14 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={styles.summaryLabel}>မှတ်တမ်း</Text>
           </View>
         </View>
+        {overduePendingCount > 0 && (
+          <View style={styles.slaWarnBox}>
+            <Ionicons name="alert-circle-outline" size={16} color="#B45309" />
+            <Text style={styles.slaWarnText}>
+              SLA သတ်မှတ်ချက် ({PENDING_OVERDUE_DAYS} ရက်) ကျော်နေသော Pending = {overduePendingCount}
+            </Text>
+          </View>
+        )}
         <TextInput
           value={searchText}
           onChangeText={setSearchText}
@@ -447,6 +489,17 @@ export default function MemberChangeApprovalsScreen() {
         </View>
         {tab === "history" && (
           <View style={styles.historyFiltersWrap}>
+            <View style={styles.presetRow}>
+              <Pressable style={styles.presetChip} onPress={() => setHistoryPreset("today")}>
+                <Text style={styles.presetChipText}>Today</Text>
+              </Pressable>
+              <Pressable style={styles.presetChip} onPress={() => setHistoryPreset("7d")}>
+                <Text style={styles.presetChipText}>Last 7d</Text>
+              </Pressable>
+              <Pressable style={styles.presetChip} onPress={() => setHistoryPreset("30d")}>
+                <Text style={styles.presetChipText}>Last 30d</Text>
+              </Pressable>
+            </View>
             <View style={styles.filterRow}>
               <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => setStatusFilter("all")}>
                 <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>အားလုံး</Text>
@@ -508,6 +561,12 @@ export default function MemberChangeApprovalsScreen() {
                 </Text>
                 <Text style={styles.meta}>By: {item.createdByUserId}</Text>
                 <Text style={styles.meta}>At: {new Date(item.createdAt).toLocaleString()}</Text>
+                {item.status === "pending" && (
+                  <Text style={[styles.meta, getPendingAgeDays(item.createdAt) >= PENDING_OVERDUE_DAYS ? styles.overdueText : undefined]}>
+                    Pending Days: {getPendingAgeDays(item.createdAt)}
+                    {getPendingAgeDays(item.createdAt) >= PENDING_OVERDUE_DAYS ? " (Overdue)" : ""}
+                  </Text>
+                )}
                 <Text style={styles.meta}>Status: {item.status.toUpperCase()}</Text>
                 {!!item.reviewedByUserId && <Text style={styles.meta}>Reviewed By: {item.reviewedByUserId}</Text>}
                 {!!item.reviewedAt && <Text style={styles.meta}>Reviewed At: {new Date(item.reviewedAt).toLocaleString()}</Text>}
@@ -660,6 +719,24 @@ const styles = StyleSheet.create({
   },
   summaryCount: { fontSize: 18, color: Colors.light.text, fontFamily: "Inter_700Bold" },
   summaryLabel: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  slaWarnBox: {
+    marginTop: 2,
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+    backgroundColor: "#FEF3C7",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  slaWarnText: {
+    flex: 1,
+    color: "#92400E",
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
   tabRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   tabBtn: {
     flex: 1,
@@ -707,6 +784,20 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
   },
   historyFiltersWrap: { gap: 6, marginTop: 2 },
+  presetRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  presetChip: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    backgroundColor: Colors.light.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  presetChipText: {
+    color: Colors.light.tint,
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 12,
+  },
   dateRow: { flexDirection: "row", gap: 8 },
   dateInput: { flex: 1 },
   historyHint: {
@@ -757,6 +848,7 @@ const styles = StyleSheet.create({
   },
   title: { color: Colors.light.text, fontFamily: "Inter_600SemiBold", fontSize: 14 },
   meta: { color: Colors.light.textSecondary, fontSize: 12 },
+  overdueText: { color: "#B45309", fontFamily: "Inter_600SemiBold" },
   changePreview: {
     borderWidth: 1,
     borderColor: Colors.light.border,
