@@ -15,10 +15,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { CATEGORY_LABELS, MEMBER_STATUS_LABELS, MemberStatus } from "@/lib/types";
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import AccessDenied from "@/components/AccessDenied";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -32,6 +34,8 @@ type ReportTab = "income_expense" | "loans" | "funds" | "fees";
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { transactions, members, loading, accountSettings, loans, getLoanOutstanding } = useData() as any;
+  const { can } = useAuth();
+  const canViewReports = can("reports.view_summary") || can("reports.view_all");
   
   // Default to Current Year Jan 1 to Today
   const [pickerStartDate, setPickerStartDate] = useState(new Date(new Date().getFullYear(), 0, 1));
@@ -220,6 +224,10 @@ export default function ReportsScreen() {
         <ActivityIndicator size="large" color={Colors.light.tint} />
       </View>
     );
+  }
+
+  if (!canViewReports) {
+    return <AccessDenied showBack={false} />;
   }
 
   return (

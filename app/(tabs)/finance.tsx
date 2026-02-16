@@ -43,12 +43,14 @@ function BalanceCard({ label, amount, icon, color }: {
   );
 }
 
-function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete = false }: {
+function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete = false, canAuditFlag = false, onAuditPress }: {
   txn: Transaction;
   memberName?: string;
   onDelete: (id: string) => void;
   canEdit?: boolean;
   canDelete?: boolean;
+  canAuditFlag?: boolean;
+  onAuditPress?: (txn: Transaction) => void;
 }) {
   const isIncome = txn.type === "income";
   const isTransfer = (txn.type as string) === "transfer";
@@ -94,6 +96,14 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
         <Text style={styles.txnDesc} numberOfLines={1}>
           {memberName ? memberName + " - " : ""}{(txn as any).notes || (txn as any).description || txn.receiptNumber}
         </Text>
+        {txn.auditFlagged ? (
+          <View style={styles.auditBadge}>
+            <Ionicons name="flag" size={11} color="#B91C1C" />
+            <Text style={styles.auditBadgeText} numberOfLines={1}>
+              စစ်ဆေးရန်: {txn.auditNote || "မှားယွင်းမှုမှတ်သားထားသည်"}
+            </Text>
+          </View>
+        ) : null}
         <Text style={styles.txnDate}>
           {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           {" "}
@@ -101,6 +111,11 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
         </Text>
       </View>
       <View style={styles.txnRight}>
+        {canAuditFlag && onAuditPress ? (
+          <Pressable style={styles.auditFlagBtn} onPress={() => onAuditPress(txn)}>
+            <Ionicons name={txn.auditFlagged ? "flag" : "flag-outline"} size={16} color={txn.auditFlagged ? "#B91C1C" : Colors.light.textSecondary} />
+          </Pressable>
+        ) : null}
         <Text style={[styles.txnAmount, { color: isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E") }]}>
           {isTransfer ? "" : (isIncome ? "+" : "-")}{txn.amount.toLocaleString()}
         </Text>
@@ -169,6 +184,7 @@ export default function FinanceScreen() {
     loans,
     members,
     removeTransaction,
+    updateTransaction,
     getLoanOutstanding,
     loading,
     accountSettings,
@@ -186,6 +202,9 @@ export default function FinanceScreen() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [tempCash, setTempCash] = useState("");
   const [tempBank, setTempBank] = useState("");
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [auditTxn, setAuditTxn] = useState<Transaction | null>(null);
+  const [auditNote, setAuditNote] = useState("");
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -194,6 +213,7 @@ export default function FinanceScreen() {
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canEditFinance = can("finance.edit") || can("finance.manage");
   const canDeleteFinance = can("finance.delete") || can("finance.manage");
+  const canAuditFlagFinance = can("finance.audit_flag");
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
 
   const handleOpenSettings = () => {
@@ -211,6 +231,46 @@ export default function FinanceScreen() {
       });
     }
     setShowSettingsModal(false);
+  };
+
+  const openAuditModal = (txn: Transaction) => {
+    if (!canAuditFlagFinance) return;
+    setAuditTxn(txn);
+    setAuditNote(txn.auditNote || "");
+    setShowAuditModal(true);
+  };
+
+  const handleSaveAuditFlag = async () => {
+    if (!auditTxn) return;
+    const note = auditNote.trim();
+    if (!note) {
+      Alert.alert("လိုအပ်ချက်", "မှားယွင်းမှုအကြောင်းပြချက် Note ကိုဖြည့်ပါ။");
+      return;
+    }
+    await updateTransaction(auditTxn.id, {
+      auditFlagged: true,
+      auditNote: note,
+      auditFlaggedByUserId: currentUser?.id || "",
+      auditFlaggedAt: new Date().toISOString(),
+    } as Partial<Transaction>);
+    setShowAuditModal(false);
+    setAuditTxn(null);
+    setAuditNote("");
+    Alert.alert("မှတ်သားပြီးပါပြီ", "စာရင်းစစ် မှတ်ချက်ကိုသိမ်းပြီးပါပြီ။");
+  };
+
+  const handleClearAuditFlag = async () => {
+    if (!auditTxn) return;
+    await updateTransaction(auditTxn.id, {
+      auditFlagged: false,
+      auditNote: "",
+      auditFlaggedByUserId: "",
+      auditFlaggedAt: "",
+    } as Partial<Transaction>);
+    setShowAuditModal(false);
+    setAuditTxn(null);
+    setAuditNote("");
+    Alert.alert("ဖြုတ်ပြီးပါပြီ", "Audit Flag ကိုဖြုတ်ပြီးပါပြီ။");
   };
 
   const getMemberName = (id?: string) => {
@@ -482,6 +542,8 @@ export default function FinanceScreen() {
                 onDelete={removeTransaction}
                 canEdit={canEditFinance}
                 canDelete={canDeleteFinance}
+                canAuditFlag={canAuditFlagFinance}
+                onAuditPress={openAuditModal}
               />
             );
           } else {
@@ -527,6 +589,40 @@ export default function FinanceScreen() {
               <Text style={styles.saveBtnText}>Save Changes</Text>
             </Pressable>
             <Pressable style={styles.cancelBtn} onPress={() => setShowSettingsModal(false)}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showAuditModal}
+        onRequestClose={() => setShowAuditModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowAuditModal(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Audit Flag (စာရင်းစစ် မှတ်ချက်)</Text>
+            <Text style={styles.label}>မှတ်ချက်</Text>
+            <TextInput
+              style={[styles.input, styles.auditNoteInput]}
+              value={auditNote}
+              onChangeText={setAuditNote}
+              multiline
+              numberOfLines={4}
+              placeholder="ဥပမာ - Receipt number မကိုက်ညီ / ပမာဏမှား"
+            />
+            <Pressable style={styles.saveBtn} onPress={handleSaveAuditFlag}>
+              <Text style={styles.saveBtnText}>Flag သိမ်းမည်</Text>
+            </Pressable>
+            {auditTxn?.auditFlagged ? (
+              <Pressable style={styles.clearFlagBtn} onPress={handleClearAuditFlag}>
+                <Text style={styles.clearFlagBtnText}>Flag ဖြုတ်မည်</Text>
+              </Pressable>
+            ) : null}
+            <Pressable style={styles.cancelBtn} onPress={() => setShowAuditModal(false)}>
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </Pressable>
           </View>
@@ -612,9 +708,34 @@ const styles = StyleSheet.create({
   txnTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   txnCategory: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   txnDesc: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  auditBadge: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#FEE2E2",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    alignSelf: "flex-start",
+    maxWidth: "95%",
+  },
+  auditBadgeText: {
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
+    color: "#B91C1C",
+    maxWidth: 220,
+  },
   txnMethod: { fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
   txnSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
   txnRight: { alignItems: "flex-end", gap: 4 },
+  auditFlagBtn: {
+    padding: 4,
+    borderRadius: 8,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
   txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
   txnDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary },
   loanRow: {
@@ -647,8 +768,11 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 6, marginTop: 10 },
   input: { backgroundColor: "#F8FAFC", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: Colors.light.border },
+  auditNoteInput: { minHeight: 96, textAlignVertical: "top" },
   saveBtn: { backgroundColor: Colors.light.tint, paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 20 },
   saveBtnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  clearFlagBtn: { backgroundColor: "#EF4444", paddingVertical: 12, borderRadius: 12, alignItems: "center", marginTop: 8 },
+  clearFlagBtnText: { color: "#fff", fontSize: 15, fontFamily: "Inter_600SemiBold" },
   cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
   cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });

@@ -21,7 +21,8 @@ import { useAuth } from "@/lib/AuthContext";
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { accountSettings, updateAccountSettings } = useData();
-  const { currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
+  const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
+  const canManageSystem = can("system.manage");
   
   const [saving, setSaving] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -186,14 +187,16 @@ export default function AccountSettingsScreen() {
           </View>
         </View>
 
-        <Pressable
-          style={styles.dataManagementBtn}
-          onPress={() => router.push("/data-management")}
-        >
-          <Ionicons name="server-outline" size={20} color={Colors.light.text} />
-          <Text style={styles.dataManagementText}>System & Data Management (Backup/Restore)</Text>
-          <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
-        </Pressable>
+        {canManageSystem && (
+          <Pressable
+            style={styles.dataManagementBtn}
+            onPress={() => router.push("/data-management")}
+          >
+            <Ionicons name="server-outline" size={20} color={Colors.light.text} />
+            <Text style={styles.dataManagementText}>System & Data Management (Backup/Restore)</Text>
+            <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+          </Pressable>
+        )}
 
         <View style={styles.securityCard}>
           <Text style={styles.sectionTitle}>Security</Text>

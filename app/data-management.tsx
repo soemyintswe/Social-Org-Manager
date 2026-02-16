@@ -26,11 +26,15 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
 import { clearAllData, exportData, mergeData, restoreData } from "@/lib/storage";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
+import AccessDenied from "@/components/AccessDenied";
 
 export default function DataManagementScreen() {
   const insets = useSafeAreaInsets();
   const { refreshData } = useData() as any;
+  const { can } = useAuth();
+  const canManageSystem = can("system.manage");
   const [importing, setImporting] = useState(false);
   const [backupText, setBackupText] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -351,6 +355,10 @@ export default function DataManagementScreen() {
       ]);
     }
   };
+
+  if (!canManageSystem) {
+    return <AccessDenied showBack={true} />;
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>

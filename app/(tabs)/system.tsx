@@ -5,11 +5,19 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import { clearAllData } from "@/lib/storage";
+import AccessDenied from "@/components/AccessDenied";
 
 export default function SystemScreen() {
   const insets = useSafeAreaInsets();
   const { refreshData } = useData() as any;
+  const { can } = useAuth();
+  const canManageSystem = can("system.manage");
+
+  if (!canManageSystem) {
+    return <AccessDenied showBack={false} />;
+  }
 
   const handleSystemReset = () => {
     if (Platform.OS === "web") {

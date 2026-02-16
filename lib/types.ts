@@ -113,6 +113,10 @@ export interface Transaction {
   paymentMethod: PaymentMethod;
   receiptNumber: string;
   loanId?: string;
+  auditFlagged?: boolean;
+  auditNote?: string;
+  auditFlaggedByUserId?: string;
+  auditFlaggedAt?: string;
   createdAt: string;
 }
 
