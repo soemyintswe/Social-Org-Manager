@@ -15,7 +15,9 @@ export default function MemberChangeApprovalsScreen() {
   const insets = useSafeAreaInsets();
   const { can, currentUser } = useAuth();
   const { memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest, withdrawMemberChangeRequest } = useData();
-  const [reviewNote, setReviewNote] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "rejected" | "cancelled">("all");
+  const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [tab, setTab] = useState<"pending" | "history">("pending");
 
@@ -30,10 +32,44 @@ export default function MemberChangeApprovalsScreen() {
     () => visibleRequests.filter((item) => item.status === "pending"),
     [visibleRequests]
   );
-  const historyRequests = useMemo(
-    () => visibleRequests.filter((item) => item.status !== "pending"),
-    [visibleRequests]
-  );
+  const historyRequests = useMemo(() => {
+    const base = visibleRequests.filter((item) => item.status !== "pending");
+    if (statusFilter === "all") return base;
+    return base.filter((item) => item.status === statusFilter);
+  }, [visibleRequests, statusFilter]);
+
+  const filteredPendingRequests = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
+    if (!needle) return pendingRequests;
+    return pendingRequests.filter((item) => {
+      const member = item.payload.member || {};
+      return (
+        String(item.id).toLowerCase().includes(needle) ||
+        String(item.targetMemberId || "").toLowerCase().includes(needle) ||
+        String(item.createdByUserId || "").toLowerCase().includes(needle) ||
+        String(member.id || "").toLowerCase().includes(needle) ||
+        String(member.name || "").toLowerCase().includes(needle) ||
+        String(member.phone || "").toLowerCase().includes(needle)
+      );
+    });
+  }, [pendingRequests, searchText]);
+
+  const filteredHistoryRequests = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
+    if (!needle) return historyRequests;
+    return historyRequests.filter((item) => {
+      const member = item.payload.member || {};
+      return (
+        String(item.id).toLowerCase().includes(needle) ||
+        String(item.targetMemberId || "").toLowerCase().includes(needle) ||
+        String(item.createdByUserId || "").toLowerCase().includes(needle) ||
+        String(item.reviewedByUserId || "").toLowerCase().includes(needle) ||
+        String(member.id || "").toLowerCase().includes(needle) ||
+        String(member.name || "").toLowerCase().includes(needle) ||
+        String(member.phone || "").toLowerCase().includes(needle)
+      );
+    });
+  }, [historyRequests, searchText]);
 
   const exportPayload = useMemo(
     () => ({
@@ -51,10 +87,11 @@ export default function MemberChangeApprovalsScreen() {
 
   const handleApprove = async (requestId: string) => {
     if (!currentUser?.id) return;
+    const reviewNote = (draftNotes[requestId] || "").trim();
     try {
       setProcessingId(requestId);
       await approveMemberChangeRequest(requestId, currentUser.id, reviewNote);
-      setReviewNote("");
+      setDraftNotes((prev) => ({ ...prev, [requestId]: "" }));
       Alert.alert("အောင်မြင်ပါသည်", "Request ကို အတည်ပြုပြီးပါပြီ။");
     } catch (error: any) {
       Alert.alert("အမှား", error?.message || "Approve မလုပ်နိုင်ပါ။");
@@ -65,10 +102,15 @@ export default function MemberChangeApprovalsScreen() {
 
   const handleReject = async (requestId: string) => {
     if (!currentUser?.id) return;
+    const reviewNote = (draftNotes[requestId] || "").trim();
+    if (!reviewNote) {
+      Alert.alert("လိုအပ်ချက်", "Reject လုပ်ရန် အကြောင်းပြချက် (Review Note) ထည့်ပါ။");
+      return;
+    }
     try {
       setProcessingId(requestId);
       await rejectMemberChangeRequest(requestId, currentUser.id, reviewNote);
-      setReviewNote("");
+      setDraftNotes((prev) => ({ ...prev, [requestId]: "" }));
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ပယ်ချပြီးပါပြီ။");
     } catch (error: any) {
       Alert.alert("အမှား", error?.message || "Reject မလုပ်နိုင်ပါ။");
@@ -79,10 +121,11 @@ export default function MemberChangeApprovalsScreen() {
 
   const handleWithdraw = async (requestId: string) => {
     if (!currentUser?.id) return;
+    const reviewNote = (draftNotes[requestId] || "").trim();
     try {
       setProcessingId(requestId);
       await withdrawMemberChangeRequest(requestId, currentUser.id, reviewNote);
-      setReviewNote("");
+      setDraftNotes((prev) => ({ ...prev, [requestId]: "" }));
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ရုပ်သိမ်းပြီးပါပြီ။");
     } catch (error: any) {
       Alert.alert("အမှား", error?.message || "Withdraw မလုပ်နိုင်ပါ။");
@@ -161,6 +204,13 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={styles.summaryLabel}>History</Text>
           </View>
         </View>
+        <TextInput
+          value={searchText}
+          onChangeText={setSearchText}
+          placeholder="ရှာရန်: request id / member id / name / phone"
+          style={styles.searchInput}
+          placeholderTextColor={Colors.light.textSecondary}
+        />
         <View style={styles.tabRow}>
           <Pressable style={[styles.tabBtn, tab === "pending" && styles.tabBtnActive]} onPress={() => setTab("pending")}>
             <Text style={[styles.tabText, tab === "pending" && styles.tabTextActive]}>Pending</Text>
@@ -179,29 +229,33 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={styles.toolText}>Copy JSON</Text>
           </Pressable>
         </View>
-        {canApprove && tab === "pending" && (
-          <>
-            <Text style={styles.noteLabel}>Review Note (optional)</Text>
-            <TextInput
-              value={reviewNote}
-              onChangeText={setReviewNote}
-              placeholder="မှတ်ချက်..."
-              style={styles.noteInput}
-              placeholderTextColor={Colors.light.textSecondary}
-            />
-          </>
+        {tab === "history" && (
+          <View style={styles.filterRow}>
+            <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => setStatusFilter("all")}>
+              <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>All</Text>
+            </Pressable>
+            <Pressable style={[styles.filterChip, statusFilter === "approved" && styles.filterChipActive]} onPress={() => setStatusFilter("approved")}>
+              <Text style={[styles.filterChipText, statusFilter === "approved" && styles.filterChipTextActive]}>Approved</Text>
+            </Pressable>
+            <Pressable style={[styles.filterChip, statusFilter === "rejected" && styles.filterChipActive]} onPress={() => setStatusFilter("rejected")}>
+              <Text style={[styles.filterChipText, statusFilter === "rejected" && styles.filterChipTextActive]}>Rejected</Text>
+            </Pressable>
+            <Pressable style={[styles.filterChip, statusFilter === "cancelled" && styles.filterChipActive]} onPress={() => setStatusFilter("cancelled")}>
+              <Text style={[styles.filterChipText, statusFilter === "cancelled" && styles.filterChipTextActive]}>Cancelled</Text>
+            </Pressable>
+          </View>
         )}
       </View>
 
       <ScrollView contentContainerStyle={styles.list}>
-        {(tab === "pending" ? pendingRequests : historyRequests).length === 0 ? (
+        {(tab === "pending" ? filteredPendingRequests : filteredHistoryRequests).length === 0 ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>
               {tab === "pending" ? "Pending request မရှိသေးပါ။" : "History မရှိသေးပါ။"}
             </Text>
           </View>
         ) : (
-          (tab === "pending" ? pendingRequests : historyRequests).map((item) => {
+          (tab === "pending" ? filteredPendingRequests : filteredHistoryRequests).map((item) => {
             const member = item.payload.member || {};
             return (
               <View key={item.id} style={styles.card}>
@@ -219,6 +273,20 @@ export default function MemberChangeApprovalsScreen() {
                   <Text style={styles.meta}>
                     Name: {String(member.name || "-")} | Phone: {String(member.phone || "-")}
                   </Text>
+                )}
+                {tab === "pending" && (
+                  <>
+                    <Text style={styles.noteLabel}>
+                      {canApprove ? "Review Note" : "Withdraw Note"} {canApprove ? "(reject အတွက်လိုအပ်)" : "(optional)"}
+                    </Text>
+                    <TextInput
+                      value={draftNotes[item.id] || ""}
+                      onChangeText={(text) => setDraftNotes((prev) => ({ ...prev, [item.id]: text }))}
+                      placeholder={canApprove ? "Approve/Reject မှတ်ချက်..." : "ရုပ်သိမ်းရတဲ့အကြောင်း..."}
+                      style={styles.noteInput}
+                      placeholderTextColor={Colors.light.textSecondary}
+                    />
+                  </>
                 )}
                 {canApprove && tab === "pending" && (
                   <View style={styles.actions}>
@@ -298,6 +366,39 @@ const styles = StyleSheet.create({
   tabBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   tabText: { color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   tabTextActive: { color: "#fff" },
+  searchInput: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: Colors.light.surface,
+    color: Colors.light.text,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+  },
+  filterRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 16,
+    backgroundColor: Colors.light.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  filterChipActive: {
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.tint + "15",
+  },
+  filterChipText: {
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+  },
+  filterChipTextActive: {
+    color: Colors.light.tint,
+    fontFamily: "Inter_600SemiBold",
+  },
   toolRow: { flexDirection: "row", gap: 8, marginTop: 2 },
   toolBtn: {
     flex: 1,
