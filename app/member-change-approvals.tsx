@@ -1,8 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Clipboard from "expo-clipboard";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
@@ -29,6 +32,16 @@ export default function MemberChangeApprovalsScreen() {
   );
   const historyRequests = useMemo(
     () => visibleRequests.filter((item) => item.status !== "pending"),
+    [visibleRequests]
+  );
+
+  const exportPayload = useMemo(
+    () => ({
+      type: "member_change_requests",
+      exportedAt: new Date().toISOString(),
+      count: visibleRequests.length,
+      requests: visibleRequests,
+    }),
     [visibleRequests]
   );
 
@@ -78,6 +91,55 @@ export default function MemberChangeApprovalsScreen() {
     }
   };
 
+  const handleCopyJson = async () => {
+    try {
+      await Clipboard.setStringAsync(JSON.stringify(exportPayload, null, 2));
+      Alert.alert("အောင်မြင်ပါသည်", "Request log JSON ကို clipboard ထဲကူးပြီးပါပြီ။");
+    } catch {
+      Alert.alert("အမှား", "Copy မအောင်မြင်ပါ။");
+    }
+  };
+
+  const handleExportJson = async () => {
+    try {
+      const json = JSON.stringify(exportPayload, null, 2);
+      if (Platform.OS === "web") {
+        const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+        const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `member_change_requests_${timestamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        Alert.alert("အောင်မြင်ပါသည်", "Request log ဖိုင် download ပြီးပါပြီ။");
+        return;
+      }
+
+      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      if (!directory) {
+        Alert.alert("အမှား", "File directory မတွေ့ပါ။");
+        return;
+      }
+      const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+      const fileUri = directory + `member_change_requests_${timestamp}.json`;
+      await FileSystem.writeAsStringAsync(fileUri, json);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: "application/json",
+          dialogTitle: "Request log ဖိုင်သိမ်းမည့်နေရာရွေးပါ",
+          UTI: "public.json",
+        });
+      } else {
+        Alert.alert("သိမ်းပြီးပါပြီ", "ဖိုင်ကို local storage ထဲသိမ်းပြီးပါပြီ။");
+      }
+    } catch {
+      Alert.alert("အမှား", "Export မအောင်မြင်ပါ။");
+    }
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -105,6 +167,16 @@ export default function MemberChangeApprovalsScreen() {
           </Pressable>
           <Pressable style={[styles.tabBtn, tab === "history" && styles.tabBtnActive]} onPress={() => setTab("history")}>
             <Text style={[styles.tabText, tab === "history" && styles.tabTextActive]}>History</Text>
+          </Pressable>
+        </View>
+        <View style={styles.toolRow}>
+          <Pressable style={styles.toolBtn} onPress={handleExportJson}>
+            <Ionicons name="download-outline" size={16} color={Colors.light.tint} />
+            <Text style={styles.toolText}>Export JSON</Text>
+          </Pressable>
+          <Pressable style={styles.toolBtn} onPress={handleCopyJson}>
+            <Ionicons name="copy-outline" size={16} color={Colors.light.tint} />
+            <Text style={styles.toolText}>Copy JSON</Text>
           </Pressable>
         </View>
         {canApprove && tab === "pending" && (
@@ -226,6 +298,20 @@ const styles = StyleSheet.create({
   tabBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   tabText: { color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   tabTextActive: { color: "#fff" },
+  toolRow: { flexDirection: "row", gap: 8, marginTop: 2 },
+  toolBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    backgroundColor: Colors.light.surface,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    gap: 6,
+  },
+  toolText: { color: Colors.light.tint, fontFamily: "Inter_600SemiBold", fontSize: 12 },
   noteLabel: { color: Colors.light.textSecondary, fontSize: 12, fontFamily: "Inter_500Medium" },
   noteInput: {
     borderWidth: 1,

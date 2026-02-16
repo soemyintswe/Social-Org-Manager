@@ -23,6 +23,12 @@ export default function FloatingTabMenu() {
         enabled: can("members.view_all") || can("members.view_self"),
       },
       {
+        name: "ပြောင်းလဲမှုတောင်းဆိုမှု",
+        icon: "checkmark-done-outline",
+        route: "/member-change-approvals",
+        enabled: can("members.approve_changes") || can("members.propose_changes"),
+      },
+      {
         name: "လှုပ်ရှားမှုများ",
         icon: "calendar-outline",
         route: "/events",

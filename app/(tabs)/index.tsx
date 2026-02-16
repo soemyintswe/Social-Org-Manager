@@ -91,11 +91,13 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, transactions, loans, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, transactions, loans, memberChangeRequests, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const canCreateMember = can("members.create") || can("members.manage");
   const canCreateFinance = can("finance.create") || can("finance.manage");
+  const canApproveMemberChanges = can("members.approve_changes");
+  const canProposeMemberChanges = can("members.propose_changes");
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -281,6 +283,24 @@ export default function DashboardScreen() {
     });
   }, [members]);
 
+  const requestInbox = useMemo(() => {
+    const all = memberChangeRequests || [];
+    const visible = canApproveMemberChanges
+      ? all
+      : all.filter((item: any) => item.createdByUserId === currentUser?.id);
+    const pending = visible.filter((item: any) => item.status === "pending").length;
+    const approved = visible.filter((item: any) => item.status === "approved").length;
+    const rejected = visible.filter((item: any) => item.status === "rejected").length;
+    const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
+    return {
+      visibleCount: visible.length,
+      pending,
+      approved,
+      rejected,
+      cancelled,
+    };
+  }, [memberChangeRequests, canApproveMemberChanges, currentUser?.id]);
+
   // Schedule Birthday Notification
   useEffect(() => {
     const scheduleBirthdayNotification = async () => {
@@ -400,6 +420,29 @@ export default function DashboardScreen() {
         <StatCard icon="calendar" label="လှုပ်ရှားမှုများ" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
       </View>
 
+      {(canApproveMemberChanges || canProposeMemberChanges) && (
+        <Pressable style={styles.requestInboxCard} onPress={() => router.push("/member-change-approvals" as any)}>
+          <View style={styles.requestInboxHeader}>
+            <View style={styles.requestInboxIconWrap}>
+              <Ionicons name="checkmark-done-outline" size={18} color={Colors.light.tint} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.requestInboxTitle}>
+                {canApproveMemberChanges ? "Member Change Approval Inbox" : "My Change Requests"}
+              </Text>
+              <Text style={styles.requestInboxSubtitle}>Total: {requestInbox.visibleCount}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
+          </View>
+          <View style={styles.requestInboxStats}>
+            <Text style={styles.requestStatText}>Pending: {requestInbox.pending}</Text>
+            <Text style={styles.requestStatText}>Approved: {requestInbox.approved}</Text>
+            <Text style={styles.requestStatText}>Rejected: {requestInbox.rejected}</Text>
+            <Text style={styles.requestStatText}>Cancelled: {requestInbox.cancelled}</Text>
+          </View>
+        </Pressable>
+      )}
+
       {/* Birthday Alert Section */}
       {upcomingBirthdays.length > 0 && (
         <View style={[styles.birthdayCard, { backgroundColor: 'white', borderColor: Colors.light.border }]}>
@@ -516,4 +559,51 @@ const styles = StyleSheet.create({
   birthdayDate: { fontSize: 12, color: "#991B1B", marginTop: 2, fontFamily: "Inter_500Medium" },
   wishBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#FECACA", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 4 },
   wishBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#B91C1C" },
+  requestInboxCard: {
+    backgroundColor: "white",
+    marginHorizontal: 20,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 14,
+    marginBottom: 20,
+  },
+  requestInboxHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  requestInboxIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: Colors.light.tint + "15",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  requestInboxTitle: {
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 14,
+  },
+  requestInboxSubtitle: {
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+  },
+  requestInboxStats: {
+    marginTop: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  requestStatText: {
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    backgroundColor: Colors.light.background,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
 });
