@@ -393,6 +393,18 @@ export default function FinanceScreen() {
     return { cash, bank, total: cash + bank };
   }, [balanceSourceTransactions, accountSettings]);
 
+  const scopedFinanceStats = useMemo(() => {
+    const income = visibleTxns
+      .filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
+      .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+    const expense = visibleTxns
+      .filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
+      .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+    return { income, expense, net: income - expense };
+  }, [visibleTxns]);
+
+  const isAllScope = effectiveScope === "all";
+
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   if (!canViewAnyFinance) {
@@ -558,9 +570,19 @@ export default function FinanceScreen() {
       )}
 
       <View style={styles.balanceGrid}>
-        <BalanceCard label="လက်ဝယ်ရှိငွေ" amount={balances.cash} icon="cash" color="#10B981" />
-        <BalanceCard label="ဘဏ်လက်ကျန်" amount={balances.bank} icon="card" color="#3B82F6" />
-        <BalanceCard label="စုစုပေါင်းလက်ကျန်" amount={balances.total} icon="wallet" color="#8B5CF6" />
+        {isAllScope ? (
+          <>
+            <BalanceCard label="ငွေသားလက်ကျန်" amount={balances.cash} icon="cash" color="#10B981" />
+            <BalanceCard label="ဘဏ်လက်ကျန်" amount={balances.bank} icon="card" color="#3B82F6" />
+            <BalanceCard label="စုစုပေါင်းလက်ကျန်" amount={balances.total} icon="wallet" color="#8B5CF6" />
+          </>
+        ) : (
+          <>
+            <BalanceCard label="အသင်းသို့ပေးသွင်းငွေများ" amount={scopedFinanceStats.income} icon="arrow-down" color="#10B981" />
+            <BalanceCard label="အသင်းမှထုတ်ယူငွေ" amount={scopedFinanceStats.expense} icon="arrow-up" color="#F43F5E" />
+            <BalanceCard label="စုစုပေါင်းကွာဟချက်" amount={scopedFinanceStats.net} icon="wallet" color="#8B5CF6" />
+          </>
+        )}
       </View>
 
       <View style={styles.tabBar}>
@@ -569,7 +591,7 @@ export default function FinanceScreen() {
           onPress={() => setActiveTab("transactions")}
         >
           <Text style={[styles.tabText, activeTab === "transactions" && styles.activeTabText]}>
-            အဝင်/အထွက်
+            {isAllScope ? "အဝင်/အထွက်" : "အသင်းသို့ပေးသွင်းငွေ"}
           </Text>
         </Pressable>
         <Pressable
@@ -577,7 +599,7 @@ export default function FinanceScreen() {
           onPress={() => setActiveTab("transfers")}
         >
           <Text style={[styles.tabText, activeTab === "transfers" && styles.activeTabText]}>
-            ဘဏ်သွင်း/ဘဏ်ထုတ်
+            {isAllScope ? "ဘဏ်သွင်း/ဘဏ်ထုတ်" : "အသင်းမှထုတ်ယူငွေ"}
           </Text>
         </Pressable>
         <Pressable
@@ -602,8 +624,16 @@ export default function FinanceScreen() {
           activeTab === "loans" 
             ? (visibleLoans as any[]) 
             : activeTab === "transfers"
-              ? (visibleTxns.filter(t => t.type === 'transfer') as any[])
-              : (visibleTxns.filter(t => t.type !== 'transfer') as any[])
+              ? (
+                  isAllScope
+                    ? visibleTxns.filter(t => t.type === 'transfer')
+                    : visibleTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
+                ) as any[]
+              : (
+                  isAllScope
+                    ? visibleTxns.filter(t => t.type !== 'transfer')
+                    : visibleTxns.filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
+                ) as any[]
         }
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
