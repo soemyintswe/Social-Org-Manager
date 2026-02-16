@@ -114,7 +114,7 @@ function buildChangeRows(item: MemberChangeRequest, currentMember?: any): { labe
 
 export default function MemberChangeApprovalsScreen() {
   const insets = useSafeAreaInsets();
-  const { can, currentUser } = useAuth();
+  const { can, currentUser, profile } = useAuth();
   const {
     members,
     users,
@@ -137,6 +137,11 @@ export default function MemberChangeApprovalsScreen() {
 
   const canApprove = can("members.approve_changes");
   const canPropose = can("members.propose_changes");
+  const isAdmin = currentUser?.systemRole === "admin";
+  const isChair = profile?.orgPosition === "chairperson";
+  const isViceChair = profile?.orgPosition === "vice_chairperson";
+  const canAssignQueue = canApprove && (isAdmin || isChair);
+  const mustReviewAssignedOnly = canApprove && isViceChair;
   const visibleRequests = useMemo(() => {
     if (canApprove) return memberChangeRequests;
     if (!currentUser?.id) return [];
@@ -155,6 +160,9 @@ export default function MemberChangeApprovalsScreen() {
   const filteredPendingRequests = useMemo(() => {
     const needle = searchText.trim().toLowerCase();
     return pendingRequests.filter((item) => {
+      const matchesRoleQueue = !mustReviewAssignedOnly || item.assignedReviewerUserId === currentUser?.id;
+      if (!matchesRoleQueue) return false;
+
       const matchesQueue =
         pendingQueueFilter === "all" ||
         (pendingQueueFilter === "mine" && item.assignedReviewerUserId === currentUser?.id) ||
@@ -172,7 +180,7 @@ export default function MemberChangeApprovalsScreen() {
         String(member.phone || "").toLowerCase().includes(needle)
       );
     });
-  }, [pendingRequests, searchText, pendingQueueFilter, currentUser?.id]);
+  }, [pendingRequests, searchText, pendingQueueFilter, currentUser?.id, mustReviewAssignedOnly]);
 
   const eligibleApprovers = useMemo(() => {
     return users.filter((user) => {
@@ -299,6 +307,10 @@ export default function MemberChangeApprovalsScreen() {
 
   const handleAssignReviewer = async (item: MemberChangeRequest, reviewerUserId: string | undefined) => {
     if (!currentUser?.id) return;
+    if (!canAssignQueue) {
+      Alert.alert("ခွင့်မပြုပါ", "Queue assignment ကို Chair/Admin သာလုပ်နိုင်ပါသည်။");
+      return;
+    }
     try {
       setProcessingId(item.id);
       await assignMemberChangeRequest(item.id, reviewerUserId, currentUser.id);
@@ -463,6 +475,14 @@ export default function MemberChangeApprovalsScreen() {
     setDateTo(formatYmd(now));
   };
 
+  const canReviewRequest = (item: MemberChangeRequest) => {
+    if (!canApprove || !currentUser?.id) return false;
+    if (item.createdByUserId === currentUser.id) return false;
+    if (item.assignedReviewerUserId && item.assignedReviewerUserId !== currentUser.id && !canAssignQueue) return false;
+    if (mustReviewAssignedOnly) return item.assignedReviewerUserId === currentUser.id;
+    return true;
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -484,6 +504,14 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={styles.summaryLabel}>မှတ်တမ်း</Text>
           </View>
         </View>
+        {mustReviewAssignedOnly && (
+          <View style={styles.slaWarnBox}>
+            <Ionicons name="shield-checkmark-outline" size={16} color="#1E40AF" />
+            <Text style={[styles.slaWarnText, { color: "#1E3A8A" }]}>
+              Vice Chair mode: သင့်ထံ assign ထားသည့် request များကိုသာ review လုပ်နိုင်ပါသည်။
+            </Text>
+          </View>
+        )}
         {overduePendingCount > 0 && (
           <View style={styles.slaWarnBox}>
             <Ionicons name="alert-circle-outline" size={16} color="#B45309" />
@@ -606,8 +634,10 @@ export default function MemberChangeApprovalsScreen() {
             const assignedToOther =
               !!item.assignedReviewerUserId &&
               !!currentUser?.id &&
-              item.assignedReviewerUserId !== currentUser.id;
+              item.assignedReviewerUserId !== currentUser.id &&
+              !canAssignQueue;
             const assignedUser = users.find((u) => u.id === item.assignedReviewerUserId);
+            const canReviewThisRequest = canReviewRequest(item);
             return (
               <View key={item.id} style={styles.card}>
                 <Text style={styles.title}>
@@ -652,7 +682,7 @@ export default function MemberChangeApprovalsScreen() {
                 </View>
                 {tab === "pending" && (
                   <>
-                    {canApprove && (
+                    {canAssignQueue && (
                       <View style={styles.assignRow}>
                         <Pressable
                           style={styles.assignChip}
@@ -683,9 +713,9 @@ export default function MemberChangeApprovalsScreen() {
                           ))}
                       </View>
                     )}
-                    {assignedToOther && (
+                    {(assignedToOther || !canReviewThisRequest) && (
                       <Text style={styles.assignedWarnText}>
-                        ဤ request ကို အခြား reviewer ထံ assign ထားသောကြောင့် Approve/Reject မလုပ်နိုင်ပါ။
+                        ဤ request ကို လက်ရှိ policy အရ Approve/Reject မလုပ်နိုင်ပါ။
                       </Text>
                     )}
                     <Text style={styles.noteLabel}>
@@ -705,14 +735,14 @@ export default function MemberChangeApprovalsScreen() {
                     <Pressable
                       style={[styles.actionBtn, styles.rejectBtn]}
                       onPress={() => handleReject(item)}
-                      disabled={processingId === item.id || assignedToOther}
+                      disabled={processingId === item.id || assignedToOther || !canReviewThisRequest}
                     >
                       <Text style={styles.actionText}>ပယ်ချ</Text>
                     </Pressable>
                     <Pressable
                       style={[styles.actionBtn, styles.approveBtn]}
                       onPress={() => handleApprove(item)}
-                      disabled={processingId === item.id || assignedToOther}
+                      disabled={processingId === item.id || assignedToOther || !canReviewThisRequest}
                     >
                       <Text style={styles.actionText}>အတည်ပြု</Text>
                     </Pressable>
