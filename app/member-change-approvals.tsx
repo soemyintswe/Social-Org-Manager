@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useEffect, useMemo, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -47,14 +47,14 @@ function csvEscape(value: unknown): string {
   return text;
 }
 
-function buildChangeLines(item: MemberChangeRequest, currentMember?: any): string[] {
+function buildChangeLines(item: MemberChangeRequest, currentMember?: any, maxLines?: number): string[] {
   if (item.action === "delete") return ["အသင်းဝင်ကို ဖျက်ရန် တောင်းဆိုထားသည်။"];
   const requested = item.payload.member || {};
   if (item.action === "create") {
-    return Object.entries(requested)
+    const lines = Object.entries(requested)
       .filter(([, value]) => value !== undefined && String(value).trim() !== "")
-      .slice(0, 6)
       .map(([key, value]) => `${MEMBER_FIELD_LABELS[key] || key}: ${String(value)}`);
+    return typeof maxLines === "number" ? lines.slice(0, maxLines) : lines;
   }
 
   const keys = Object.keys(requested).filter((key) => key !== "id");
@@ -66,7 +66,8 @@ function buildChangeLines(item: MemberChangeRequest, currentMember?: any): strin
       return `${MEMBER_FIELD_LABELS[key] || key}: ${String(prevVal ?? "-")} -> ${String(nextVal ?? "-")}`;
     })
     .filter(Boolean);
-  return lines.length ? lines.slice(0, 8) : ["ပြောင်းလဲမှုမတွေ့ပါ။"];
+  const output = lines.length ? lines : ["ပြောင်းလဲမှုမတွေ့ပါ။"];
+  return typeof maxLines === "number" ? output.slice(0, maxLines) : output;
 }
 
 export default function MemberChangeApprovalsScreen() {
@@ -81,6 +82,7 @@ export default function MemberChangeApprovalsScreen() {
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [tab, setTab] = useState<"pending" | "history">("pending");
+  const [selectedRequest, setSelectedRequest] = useState<MemberChangeRequest | null>(null);
 
   const canApprove = can("members.approve_changes");
   const canPropose = can("members.propose_changes");
@@ -282,6 +284,9 @@ export default function MemberChangeApprovalsScreen() {
         "target_member_id",
         "requested_name",
         "requested_phone",
+        "requested_email",
+        "requested_org_position",
+        "requested_status",
         "created_by",
         "created_at",
         "reviewed_by",
@@ -297,6 +302,9 @@ export default function MemberChangeApprovalsScreen() {
           item.targetMemberId || member.id || "",
           member.name || "",
           member.phone || "",
+          member.email || "",
+          member.orgPosition || "",
+          member.status || "",
           item.createdByUserId || "",
           item.createdAt || "",
           item.reviewedByUserId || "",
@@ -344,6 +352,11 @@ export default function MemberChangeApprovalsScreen() {
       Alert.alert("အမှား", "CSV export မအောင်မြင်ပါ။");
     }
   };
+
+  const selectedCurrentMember = selectedRequest
+    ? members.find((m) => m.id === (selectedRequest.targetMemberId || selectedRequest.payload.member?.id))
+    : undefined;
+  const selectedChangeLines = selectedRequest ? buildChangeLines(selectedRequest, selectedCurrentMember) : [];
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -452,7 +465,7 @@ export default function MemberChangeApprovalsScreen() {
           (tab === "pending" ? filteredPendingRequests : filteredHistoryRequests).map((item) => {
             const member = item.payload.member || {};
             const currentMember = members.find((m) => m.id === (item.targetMemberId || (member.id as string)));
-            const changeLines = buildChangeLines(item, currentMember);
+            const changeLines = buildChangeLines(item, currentMember, 8);
             return (
               <View key={item.id} style={styles.card}>
                 <Text style={styles.title}>
@@ -477,6 +490,9 @@ export default function MemberChangeApprovalsScreen() {
                       • {line}
                     </Text>
                   ))}
+                  <Pressable onPress={() => setSelectedRequest(item)} style={styles.viewDetailBtn}>
+                    <Text style={styles.viewDetailText}>အသေးစိတ်ကြည့်ရန်</Text>
+                  </Pressable>
                 </View>
                 {tab === "pending" && (
                   <>
@@ -526,6 +542,42 @@ export default function MemberChangeApprovalsScreen() {
           })
         )}
       </ScrollView>
+
+      <Modal visible={!!selectedRequest} transparent animationType="fade" onRequestClose={() => setSelectedRequest(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Request အသေးစိတ်</Text>
+              <Pressable onPress={() => setSelectedRequest(null)}>
+                <Ionicons name="close" size={22} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            {selectedRequest && (
+              <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: 6 }}>
+                <Text style={styles.modalMeta}>ID: {selectedRequest.id}</Text>
+                <Text style={styles.modalMeta}>Action: {selectedRequest.action.toUpperCase()}</Text>
+                <Text style={styles.modalMeta}>Status: {selectedRequest.status.toUpperCase()}</Text>
+                <Text style={styles.modalMeta}>Created By: {selectedRequest.createdByUserId}</Text>
+                <Text style={styles.modalMeta}>Created At: {new Date(selectedRequest.createdAt).toLocaleString()}</Text>
+                {!!selectedRequest.reviewedByUserId && (
+                  <Text style={styles.modalMeta}>Reviewed By: {selectedRequest.reviewedByUserId}</Text>
+                )}
+                {!!selectedRequest.reviewedAt && (
+                  <Text style={styles.modalMeta}>Reviewed At: {new Date(selectedRequest.reviewedAt).toLocaleString()}</Text>
+                )}
+                {!!selectedRequest.reviewNote && <Text style={styles.modalMeta}>Review Note: {selectedRequest.reviewNote}</Text>}
+                <View style={styles.modalDivider} />
+                <Text style={styles.changePreviewTitle}>ပြင်ဆင်မည့်အချက်များ (Full)</Text>
+                {selectedChangeLines.map((line, idx) => (
+                  <Text key={`${selectedRequest.id}-full-${idx}`} style={styles.changeLine}>
+                    • {line}
+                  </Text>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -671,6 +723,58 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     fontSize: 12,
     lineHeight: 17,
+  },
+  viewDetailBtn: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 7,
+    backgroundColor: Colors.light.surface,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  viewDetailText: {
+    color: Colors.light.tint,
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 16,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 480,
+    backgroundColor: Colors.light.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 14,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  modalTitle: {
+    color: Colors.light.text,
+    fontFamily: "Inter_700Bold",
+    fontSize: 16,
+  },
+  modalMeta: {
+    color: Colors.light.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  modalDivider: {
+    height: 1,
+    backgroundColor: Colors.light.border,
+    marginVertical: 4,
   },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 4 },
   actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
