@@ -99,6 +99,7 @@ export default function ReportsScreen() {
     if (effectiveScope === "self") return currentUser?.memberId || "__none__";
     return selectedMemberId || "__none__";
   }, [effectiveScope, currentUser?.memberId, selectedMemberId]);
+  const isAllScope = effectiveScope === "all";
 
   const scopeLabel = useMemo(() => {
     if (effectiveScope === "all") return "အားလုံး";
@@ -410,13 +411,17 @@ export default function ReportsScreen() {
       <View style={styles.tabBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 15 }}>
           <Pressable style={[styles.tab, reportTab === "income_expense" && styles.activeTab]} onPress={() => setReportTab("income_expense")}>
-            <Text style={[styles.tabText, reportTab === "income_expense" && styles.activeTabText]}>ရငွေ/အသုံးစရိတ်</Text>
+            <Text style={[styles.tabText, reportTab === "income_expense" && styles.activeTabText]}>
+              {isAllScope ? "ရငွေ/အသုံးစရိတ်" : "အသင်းသို့ပေးသွင်းငွေ"}
+            </Text>
           </Pressable>
           <Pressable style={[styles.tab, reportTab === "loans" && styles.activeTab]} onPress={() => setReportTab("loans")}>
             <Text style={[styles.tabText, reportTab === "loans" && styles.activeTabText]}>ချေးငွေ</Text>
           </Pressable>
           <Pressable style={[styles.tab, reportTab === "funds" && styles.activeTab]} onPress={() => setReportTab("funds")}>
-            <Text style={[styles.tabText, reportTab === "funds" && styles.activeTabText]}>ဘဏ်/ငွေသား</Text>
+            <Text style={[styles.tabText, reportTab === "funds" && styles.activeTabText]}>
+              {isAllScope ? "ဘဏ်/ငွေသား" : "အသင်းမှထုတ်ယူငွေ"}
+            </Text>
           </Pressable>
           <Pressable style={[styles.tab, reportTab === "fees" && styles.activeTab]} onPress={() => setReportTab("fees")}>
             <Text style={[styles.tabText, reportTab === "fees" && styles.activeTabText]}>လစဉ်ကြေး</Text>
@@ -434,18 +439,28 @@ export default function ReportsScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <View style={styles.summaryGrid}>
               <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
-                <Text style={styles.statLabel}>စုစုပေါင်းအဝင်</Text>
+                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအဝင်" : "အသင်းသို့ပေးသွင်းငွေများ"}</Text>
                 <Text style={[styles.statValue, { color: "#10B981" }]}>
                   {incomeExpenseStats.income.toLocaleString()} KS
                 </Text>
               </View>
               <View style={[styles.statBox, { borderLeftColor: "#F43F5E" }]}>
-                <Text style={styles.statLabel}>စုစုပေါင်းအထွက်</Text>
+                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအထွက်" : "အသင်းမှထုတ်ယူငွေ"}</Text>
                 <Text style={[styles.statValue, { color: "#F43F5E" }]}>
                   {incomeExpenseStats.expense.toLocaleString()} KS
                 </Text>
               </View>
             </View>
+            {!isAllScope && (
+              <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+                <View style={[styles.statBox, { borderLeftColor: "#8B5CF6" }]}>
+                  <Text style={styles.statLabel}>စုစုပေါင်းကွာဟချက်</Text>
+                  <Text style={[styles.statValue, { color: "#8B5CF6" }]}>
+                    {incomeExpenseStats.net.toLocaleString()} KS
+                  </Text>
+                </View>
+              </View>
+            )}
 
             {canViewAllReports ? (
               <View style={styles.section}>
