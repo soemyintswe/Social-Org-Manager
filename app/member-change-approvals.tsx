@@ -70,6 +70,33 @@ function buildChangeLines(item: MemberChangeRequest, currentMember?: any, maxLin
   return typeof maxLines === "number" ? output.slice(0, maxLines) : output;
 }
 
+function buildChangeRows(item: MemberChangeRequest, currentMember?: any): { label: string; before: string; after: string }[] {
+  if (item.action === "delete") {
+    return [{ label: "လုပ်ဆောင်ချက်", before: "ရှိပြီး", after: "ဖျက်မည်" }];
+  }
+  const requested = item.payload.member || {};
+  const keys = Object.keys(requested).filter((key) => key !== "id");
+
+  if (item.action === "create") {
+    return keys
+      .filter((key) => requested[key as keyof typeof requested] !== undefined)
+      .map((key) => ({
+        label: MEMBER_FIELD_LABELS[key] || key,
+        before: "-",
+        after: String(requested[key as keyof typeof requested] ?? "-"),
+      }));
+  }
+
+  return keys
+    .map((key) => {
+      const nextVal = String(requested[key as keyof typeof requested] ?? "-");
+      const prevVal = String(currentMember?.[key] ?? "-");
+      if (nextVal === prevVal) return null;
+      return { label: MEMBER_FIELD_LABELS[key] || key, before: prevVal, after: nextVal };
+    })
+    .filter((row): row is { label: string; before: string; after: string } => Boolean(row));
+}
+
 export default function MemberChangeApprovalsScreen() {
   const insets = useSafeAreaInsets();
   const { can, currentUser } = useAuth();
@@ -148,10 +175,11 @@ export default function MemberChangeApprovalsScreen() {
     () => ({
       type: "member_change_requests",
       exportedAt: new Date().toISOString(),
+      exportedByUserId: currentUser?.id || "",
       count: visibleRequests.length,
       requests: visibleRequests,
     }),
-    [visibleRequests]
+    [visibleRequests, currentUser?.id]
   );
 
   useEffect(() => {
@@ -278,6 +306,8 @@ export default function MemberChangeApprovalsScreen() {
   const handleExportCsv = async () => {
     try {
       const headers = [
+        "exported_at",
+        "exported_by",
         "request_id",
         "action",
         "status",
@@ -295,7 +325,11 @@ export default function MemberChangeApprovalsScreen() {
       ];
       const rows = filteredHistoryRequests.map((item) => {
         const member = item.payload.member || {};
+        const exportedAt = new Date().toISOString();
+        const exportedBy = currentUser?.id || "";
         return [
+          exportedAt,
+          exportedBy,
           item.id,
           item.action,
           item.status,
@@ -357,6 +391,7 @@ export default function MemberChangeApprovalsScreen() {
     ? members.find((m) => m.id === (selectedRequest.targetMemberId || selectedRequest.payload.member?.id))
     : undefined;
   const selectedChangeLines = selectedRequest ? buildChangeLines(selectedRequest, selectedCurrentMember) : [];
+  const selectedChangeRows = selectedRequest ? buildChangeRows(selectedRequest, selectedCurrentMember) : [];
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -568,6 +603,22 @@ export default function MemberChangeApprovalsScreen() {
                 {!!selectedRequest.reviewNote && <Text style={styles.modalMeta}>Review Note: {selectedRequest.reviewNote}</Text>}
                 <View style={styles.modalDivider} />
                 <Text style={styles.changePreviewTitle}>ပြင်ဆင်မည့်အချက်များ (Full)</Text>
+                {selectedChangeRows.length > 0 && (
+                  <View style={styles.diffTable}>
+                    <View style={styles.diffHeaderRow}>
+                      <Text style={[styles.diffCell, styles.diffHeaderCell]}>Field</Text>
+                      <Text style={[styles.diffCell, styles.diffHeaderCell]}>Before</Text>
+                      <Text style={[styles.diffCell, styles.diffHeaderCell]}>After</Text>
+                    </View>
+                    {selectedChangeRows.map((row, idx) => (
+                      <View key={`${selectedRequest.id}-diff-${idx}`} style={styles.diffRow}>
+                        <Text style={styles.diffCell}>{row.label}</Text>
+                        <Text style={styles.diffCell}>{row.before}</Text>
+                        <Text style={styles.diffCell}>{row.after}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
                 {selectedChangeLines.map((line, idx) => (
                   <Text key={`${selectedRequest.id}-full-${idx}`} style={styles.changeLine}>
                     • {line}
@@ -775,6 +826,35 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: Colors.light.border,
     marginVertical: 4,
+  },
+  diffTable: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    overflow: "hidden",
+    marginTop: 2,
+  },
+  diffHeaderRow: {
+    flexDirection: "row",
+    backgroundColor: Colors.light.background,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  diffRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  diffCell: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  diffHeaderCell: {
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
   },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 4 },
   actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
