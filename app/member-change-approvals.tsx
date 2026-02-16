@@ -27,6 +27,23 @@ const MEMBER_FIELD_LABELS: Record<string, string> = {
   statusNote: "မှတ်ချက်",
 };
 
+function mapRequestErrorMessage(error: unknown, fallback: string): string {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const code = raw.trim().toLowerCase();
+  const messageByCode: Record<string, string> = {
+    request_not_found: "Request မတွေ့ပါ။ Refresh လုပ်ပြီး ပြန်စမ်းပါ။",
+    request_not_pending: "ဒီ Request ကို review လုပ်ပြီးသား သို့မဟုတ် pending မဟုတ်တော့ပါ။",
+    request_assigned_to_other_reviewer: "ဤ Request ကို အခြား reviewer တစ်ဦးထံ assign လုပ်ထားသည်။",
+    not_owner: "ကိုယ်တင်ထားသော Request မဟုတ်သောကြောင့် ရုပ်သိမ်းခွင့်မရှိပါ။",
+    invalid_member_id: "Member ID မမှန်ပါ။",
+    member_exists: "တူညီသော Member ID ရှိပြီးသားဖြစ်နေပါသည်။",
+    target_missing: "Target member ID မသတ်မှတ်ထားပါ။",
+    target_not_found: "ပြင်ဆင်ရန် Target member မတွေ့ပါ။",
+    id_change_not_supported: "Member ID ပြောင်းလဲခြင်းကို မခွင့်ပြုပါ။",
+  };
+  return messageByCode[code] || raw || fallback;
+}
+
 function parseDateInputToMs(input: string, endOfDay = false): number | null {
   const text = String(input || "").trim();
   if (!text) return null;
@@ -270,8 +287,8 @@ export default function MemberChangeApprovalsScreen() {
       await approveMemberChangeRequest(requestId, currentUser.id, reviewNote);
       setDraftNotes((prev) => ({ ...prev, [requestId]: "" }));
       Alert.alert("အောင်မြင်ပါသည်", "Request ကို အတည်ပြုပြီးပါပြီ။");
-    } catch (error: any) {
-      Alert.alert("အမှား", error?.message || "Approve မလုပ်နိုင်ပါ။");
+    } catch (error) {
+      Alert.alert("အမှား", mapRequestErrorMessage(error, "Approve မလုပ်နိုင်ပါ။"));
     } finally {
       setProcessingId(null);
     }
@@ -294,8 +311,8 @@ export default function MemberChangeApprovalsScreen() {
       await rejectMemberChangeRequest(requestId, currentUser.id, reviewNote);
       setDraftNotes((prev) => ({ ...prev, [requestId]: "" }));
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ပယ်ချပြီးပါပြီ။");
-    } catch (error: any) {
-      Alert.alert("အမှား", error?.message || "Reject မလုပ်နိုင်ပါ။");
+    } catch (error) {
+      Alert.alert("အမှား", mapRequestErrorMessage(error, "Reject မလုပ်နိုင်ပါ။"));
     } finally {
       setProcessingId(null);
     }
@@ -310,8 +327,8 @@ export default function MemberChangeApprovalsScreen() {
       await withdrawMemberChangeRequest(requestId, currentUser.id, reviewNote);
       setDraftNotes((prev) => ({ ...prev, [requestId]: "" }));
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ရုပ်သိမ်းပြီးပါပြီ။");
-    } catch (error: any) {
-      Alert.alert("အမှား", error?.message || "Withdraw မလုပ်နိုင်ပါ။");
+    } catch (error) {
+      Alert.alert("အမှား", mapRequestErrorMessage(error, "Withdraw မလုပ်နိုင်ပါ။"));
     } finally {
       setProcessingId(null);
     }
@@ -327,8 +344,8 @@ export default function MemberChangeApprovalsScreen() {
       setProcessingId(item.id);
       await assignMemberChangeRequest(item.id, reviewerUserId, currentUser.id);
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", reviewerUserId ? "Reviewer ကို assign လုပ်ပြီးပါပြီ။" : "Assignment ကိုဖြုတ်ပြီးပါပြီ။");
-    } catch (error: any) {
-      Alert.alert("အမှား", error?.message || "Assign မလုပ်နိုင်ပါ။");
+    } catch (error) {
+      Alert.alert("အမှား", mapRequestErrorMessage(error, "Assign မလုပ်နိုင်ပါ။"));
     } finally {
       setProcessingId(null);
     }
