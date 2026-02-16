@@ -248,6 +248,10 @@ export default function MemberChangeApprovalsScreen() {
     () => pendingRequests.filter((item) => getPendingAgeDays(item.createdAt) >= PENDING_OVERDUE_DAYS).length,
     [pendingRequests]
   );
+  const unassignedPendingCount = useMemo(
+    () => pendingRequests.filter((item) => !item.assignedReviewerUserId).length,
+    [pendingRequests]
+  );
 
   if (!canApprove && !canPropose) {
     return <AccessDenied showBack={true} />;
@@ -497,6 +501,15 @@ export default function MemberChangeApprovalsScreen() {
     setDateTo(formatYmd(now));
   };
 
+  const resetAllFilters = () => {
+    setSearchText("");
+    setPendingQueueFilter("all");
+    setStatusFilter("all");
+    setDateFrom("");
+    setDateTo("");
+    setReviewerFilter("");
+  };
+
   const canReviewRequest = (item: MemberChangeRequest) => {
     if (!canApprove || !currentUser?.id) return false;
     if (item.createdByUserId === currentUser.id) return false;
@@ -525,6 +538,12 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={styles.summaryCount}>{historyRequests.length}</Text>
             <Text style={styles.summaryLabel}>မှတ်တမ်း</Text>
           </View>
+          {canApprove && (
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryCount}>{unassignedPendingCount}</Text>
+              <Text style={styles.summaryLabel}>Unassigned</Text>
+            </View>
+          )}
         </View>
         {mustReviewAssignedOnly && (
           <View style={styles.slaWarnBox}>
@@ -549,6 +568,10 @@ export default function MemberChangeApprovalsScreen() {
           style={styles.searchInput}
           placeholderTextColor={Colors.light.textSecondary}
         />
+        <Pressable style={styles.resetBtn} onPress={resetAllFilters}>
+          <Ionicons name="refresh-outline" size={14} color={Colors.light.tint} />
+          <Text style={styles.resetBtnText}>Filter များကို ပြန်သတ်မှတ်မည်</Text>
+        </Pressable>
         <View style={styles.tabRow}>
           <Pressable style={[styles.tabBtn, tab === "pending" && styles.tabBtnActive]} onPress={() => setTab("pending")}>
             <Text style={[styles.tabText, tab === "pending" && styles.tabTextActive]}>စောင့်ဆိုင်း</Text>
@@ -947,6 +970,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
     fontSize: 13,
+  },
+  resetBtn: {
+    marginTop: 4,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  resetBtnText: {
+    color: Colors.light.tint,
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 12,
   },
   filterRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 },
   filterChip: {
