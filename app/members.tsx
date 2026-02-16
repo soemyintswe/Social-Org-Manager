@@ -57,7 +57,9 @@ export default function MembersScreen() {
   const [showTargetDatePicker, setShowTargetDatePicker] = useState(false);
   const canViewAllMembers = can("members.view_all");
   const canViewSelfMember = can("members.view_self");
-  const canManageMembers = can("members.manage");
+  const canManageMembers = can("members.create") || can("members.edit") || can("members.delete");
+  const canProposeMemberChanges = can("members.propose_changes");
+  const canApproveMemberChanges = can("members.approve_changes");
   const ownMemberId = currentUser?.memberId || "";
 
   const sourceMembers = useMemo(() => {
@@ -323,8 +325,19 @@ export default function MembersScreen() {
               <Text style={styles.headerActionText} numberOfLines={1}>Data</Text>
             </Pressable>
           )}
+          {canApproveMemberChanges && (
+            <Pressable
+              onPress={() => router.push("/member-change-approvals" as any)}
+              style={styles.headerActionBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Approve Member Changes"
+            >
+              <Ionicons name="checkmark-done-outline" size={21} color={Colors.light.tint} />
+              <Text style={styles.headerActionText} numberOfLines={1}>Approve</Text>
+            </Pressable>
+          )}
         </View>
-        {canManageMembers ? (
+        {canManageMembers || canProposeMemberChanges ? (
           <View style={styles.headerActions}>
             <Pressable
               onPress={() => router.push("/add-member" as any)}

@@ -61,8 +61,8 @@ function InfoRow({ icon, label, value }: {
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
-  const { can } = useAuth();
+  const { members, groups, updateMember, deleteMember, createMemberChangeRequest, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
+  const { can, currentUser } = useAuth();
   const member = members?.find((m: any) => m.id === id);
   const memberId = member?.id || "";
 
@@ -148,7 +148,7 @@ export default function MemberDetailScreen() {
     setSaving(true);
     try {
       // ID ပြောင်းလဲမှုရှိမရှိ စစ်ဆေးခြင်း
-      if (editMemberId.trim() !== member.id) {
+      if ((canEditAll || canEditOwn) && editMemberId.trim() !== member.id) {
         const existing = members.find((m: any) => m.id === editMemberId.trim());
         if (existing) {
           Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
@@ -176,7 +176,7 @@ export default function MemberDetailScreen() {
         }
       }
 
-      await updateMember(member.id, {
+      const nextPayload = {
         id: editMemberId.trim(),
         name: editName.trim(),
         dob: editDob.trim(),
@@ -187,7 +187,27 @@ export default function MemberDetailScreen() {
         statusDate: editStatusDate.trim(),
         statusNote: editStatusNote.trim(),
         orgPosition: editOrgPosition,
-      });
+      };
+      if (canEditAll || canEditOwn) {
+        await updateMember(member.id, nextPayload);
+      } else if (canProposeChanges && currentUser?.id) {
+        if (editMemberId.trim() !== member.id) {
+          Alert.alert("အသိပေးချက်", "Proposal mode တွင် Member ID ပြောင်းလဲမှုကို မပံ့ပိုးသေးပါ။");
+          setSaving(false);
+          return;
+        }
+        await createMemberChangeRequest({
+          action: "update",
+          targetMemberId: member.id,
+          payload: {
+            member: nextPayload,
+            note: "Member update proposal",
+          },
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+        });
+        Alert.alert("အောင်မြင်ပါသည်", "Member update request ကို approver ထံပို့ပြီးပါပြီ။");
+      }
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
       // ID ပြောင်းသွားရင် Route ပါ ပြောင်းပေးရမယ် (သို့) Back ပြန်
@@ -208,8 +228,24 @@ export default function MemberDetailScreen() {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          await deleteMember(member.id);
-          router.back();
+          if (canDeleteAll) {
+            await deleteMember(member.id);
+            router.back();
+            return;
+          }
+          if (canProposeChanges && currentUser?.id) {
+            await createMemberChangeRequest({
+              action: "delete",
+              targetMemberId: member.id,
+              payload: {
+                note: "Member delete proposal",
+              },
+              createdByUserId: currentUser.id,
+              createdByMemberId: currentUser.memberId,
+            });
+            Alert.alert("အောင်မြင်ပါသည်", "Delete request ကို approver ထံပို့ပြီးပါပြီ။");
+            router.back();
+          }
         },
       },
     ]);
@@ -221,7 +257,14 @@ export default function MemberDetailScreen() {
   // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
   const statusLabel = MEMBER_STATUS_LABELS[member.status as MemberStatus] || member.status;
 
-  const canManage = can("members.manage");
+  const canEditAll = can("members.edit");
+  const canDeleteAll = can("members.delete");
+  const canEditOwn = can("members.edit_self") && currentUser?.memberId === member.id;
+  const canProposeChanges = can("members.propose_changes");
+  const canManage = canEditAll || canEditOwn || canProposeChanges;
+  const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
+  const canViewFinanceSelf = can("finance.view_self") && currentUser?.memberId === member.id;
+  const canViewFinanceSection = canViewFinanceDetail || canViewFinanceSelf;
 
   return (
     <KeyboardAvoidingView 
@@ -353,10 +396,12 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Status Note</Text>
             <TextInput style={styles.editInput} value={editStatusNote} onChangeText={setEditStatusNote} multiline />
 
-            <Pressable style={styles.deleteBtn} onPress={handleDelete}>
-              <Ionicons name="trash-outline" size={20} color="#EF4444" />
-              <Text style={styles.deleteBtnText}>Delete Member</Text>
-            </Pressable>
+            {(canDeleteAll || canProposeChanges) && (
+              <Pressable style={styles.deleteBtn} onPress={handleDelete}>
+                <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                <Text style={styles.deleteBtnText}>{canDeleteAll ? "Delete Member" : "Propose Delete"}</Text>
+              </Pressable>
+            )}
           </View>
         ) : (
           <View>
@@ -375,49 +420,53 @@ export default function MemberDetailScreen() {
               <InfoRow icon="location-outline" label="Address" value={member.address} />
             </View>
 
-            <Text style={styles.sectionTitle}>Financial Report</Text>
-            <View style={styles.statsGrid}>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>စုစုပေါင်း ပေးသွင်း</Text>
-                <Text style={[styles.statValue, { color: Colors.light.success }]}>{stats.totalIncome.toLocaleString()} KS</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>စုစုပေါင်း ထုတ်ယူ</Text>
-                <Text style={[styles.statValue, { color: Colors.light.accent }]}>{stats.totalExpense.toLocaleString()} KS</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>လစဉ်ကြေး ပေးသွင်း</Text>
-                <Text style={[styles.statValue, { color: Colors.light.tint }]}>{stats.feesPaid.toLocaleString()} KS</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>ချေးငွေ လက်ကျန်</Text>
-                <Text style={[styles.statValue, { color: "#F59E0B" }]}>{stats.loanOutstanding.toLocaleString()} KS</Text>
-                <Text style={styles.statSub}>{stats.activeLoans} active loans</Text>
-              </View>
-            </View>
-
-            <Text style={styles.sectionTitle}>Recent Transactions</Text>
-            {memberTxns.length > 0 ? (
-              memberTxns.slice(0, 5).map((t: any) => (
-                <View key={t.id} style={styles.txnRow}>
-                  <View style={[styles.txnIcon, { backgroundColor: t.type === 'income' ? Colors.light.success + "15" : Colors.light.accent + "15" }]}>
-                    <Ionicons name={t.type === 'income' ? "arrow-down" : "arrow-up"} size={16} color={t.type === 'income' ? Colors.light.success : Colors.light.accent} />
+            {canViewFinanceSection && (
+              <>
+                <Text style={styles.sectionTitle}>Financial Report</Text>
+                <View style={styles.statsGrid}>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>စုစုပေါင်း ပေးသွင်း</Text>
+                    <Text style={[styles.statValue, { color: Colors.light.success }]}>{stats.totalIncome.toLocaleString()} KS</Text>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.txnCat}>{t.categoryLabel || CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
-                    <Text style={styles.txnDate}>{new Date(t.date).toLocaleDateString()}</Text>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>စုစုပေါင်း ထုတ်ယူ</Text>
+                    <Text style={[styles.statValue, { color: Colors.light.accent }]}>{stats.totalExpense.toLocaleString()} KS</Text>
                   </View>
-                  <Text style={[styles.txnAmount, { color: t.type === 'income' ? Colors.light.success : Colors.light.accent }]}>
-                    {t.type === 'income' ? "+" : "-"}{t.amount.toLocaleString()}
-                  </Text>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>လစဉ်ကြေး ပေးသွင်း</Text>
+                    <Text style={[styles.statValue, { color: Colors.light.tint }]}>{stats.feesPaid.toLocaleString()} KS</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>ချေးငွေ လက်ကျန်</Text>
+                    <Text style={[styles.statValue, { color: "#F59E0B" }]}>{stats.loanOutstanding.toLocaleString()} KS</Text>
+                    <Text style={styles.statSub}>{stats.activeLoans} active loans</Text>
+                  </View>
                 </View>
-              ))
-            ) : (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>No transactions found</Text>
-              </View>
+
+                <Text style={styles.sectionTitle}>Recent Transactions</Text>
+                {memberTxns.length > 0 ? (
+                  memberTxns.slice(0, 5).map((t: any) => (
+                    <View key={t.id} style={styles.txnRow}>
+                      <View style={[styles.txnIcon, { backgroundColor: t.type === 'income' ? Colors.light.success + "15" : Colors.light.accent + "15" }]}>
+                        <Ionicons name={t.type === 'income' ? "arrow-down" : "arrow-up"} size={16} color={t.type === 'income' ? Colors.light.success : Colors.light.accent} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.txnCat}>{t.categoryLabel || CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
+                        <Text style={styles.txnDate}>{new Date(t.date).toLocaleDateString()}</Text>
+                      </View>
+                      <Text style={[styles.txnAmount, { color: t.type === 'income' ? Colors.light.success : Colors.light.accent }]}>
+                        {t.type === 'income' ? "+" : "-"}{t.amount.toLocaleString()}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>No transactions found</Text>
+                  </View>
+                )}
+                <View style={{ height: 20 }} />
+              </>
             )}
-            <View style={{ height: 20 }} />
 
             <Text style={styles.sectionTitle}>Groups</Text>
             {memberGroups.length > 0 ? (

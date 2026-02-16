@@ -20,6 +20,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
+import AccessDenied from "@/components/AccessDenied";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
 
 if (Platform.OS === 'web') {
@@ -84,6 +86,9 @@ export default function AddTransactionScreen() {
   const insets = useSafeAreaInsets();
   const { editId } = useLocalSearchParams<{ editId: string }>();
   const { members = [], transactions = [], addTransaction, updateTransaction } = useData() as any;
+  const { can } = useAuth();
+  const canCreateFinance = can("finance.create") || can("finance.manage");
+  const canEditFinance = can("finance.edit") || can("finance.manage");
 
   const [type, setType] = useState<"expense" | "income" | "transfer">("expense");
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "bank">("cash");
@@ -278,6 +283,10 @@ export default function AddTransactionScreen() {
       setSaving(false);
     }
   };
+
+  if ((editId && !canEditFinance) || (!editId && !canCreateFinance)) {
+    return <AccessDenied showBack={true} />;
+  }
 
   return (
     <KeyboardAvoidingView 

@@ -15,6 +15,7 @@ import type {
   Loan,
   AccountSettings,
   UserAccount,
+  MemberChangeRequest,
 } from "./types";
 import * as store from "./storage";
 
@@ -26,6 +27,7 @@ interface DataContextValue {
   transactions: Transaction[];
   loans: Loan[];
   users: UserAccount[];
+  memberChangeRequests: MemberChangeRequest[];
   accountSettings: AccountSettings;
   loading: boolean;
   refreshData: () => Promise<void>;
@@ -47,6 +49,18 @@ interface DataContextValue {
   upsertUserAccount: (u: UserAccount) => Promise<void>;
   removeUserAccount: (id: string) => Promise<void>;
   updateAccountSettings: (s: AccountSettings) => Promise<void>;
+  createMemberChangeRequest: (input: {
+    action: "create" | "update" | "delete";
+    targetMemberId?: string;
+    payload: {
+      member?: Partial<Member>;
+      note?: string;
+    };
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => Promise<MemberChangeRequest>;
+  approveMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
+  rejectMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -66,6 +80,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [users, setUsers] = useState<UserAccount[]>([]);
+  const [memberChangeRequests, setMemberChangeRequests] = useState<MemberChangeRequest[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
     orgName: "My Organization",
     currency: "MMK",
@@ -78,7 +93,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const refreshData = useCallback(async () => {
     try {
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -86,6 +101,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getTransactions(),
         store.getLoans(),
         store.getUsers(),
+        store.getMemberChangeRequests(),
         store.getAccountSettings(),
       ]);
       setMembers(m);
@@ -95,6 +111,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setTransactions(t);
       setLoans(l);
       setUsers(u);
+      setMemberChangeRequests(r);
       if (s) setAccountSettings(s);
     } catch (error) {
       console.error("Refresh Error:", error);
@@ -203,6 +220,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData();
   };
 
+  const createMemberChangeRequest = async (input: {
+    action: "create" | "update" | "delete";
+    targetMemberId?: string;
+    payload: {
+      member?: Partial<Member>;
+      note?: string;
+    };
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => {
+    const request = await store.createMemberChangeRequest(input);
+    await refreshData();
+    return request;
+  };
+
+  const approveMemberChangeRequest = async (requestId: string, reviewerUserId: string, reviewNote?: string) => {
+    await store.approveMemberChangeRequest(requestId, reviewerUserId, reviewNote);
+    await refreshData();
+  };
+
+  const rejectMemberChangeRequest = async (requestId: string, reviewerUserId: string, reviewNote?: string) => {
+    await store.rejectMemberChangeRequest(requestId, reviewerUserId, reviewNote);
+    await refreshData();
+  };
+
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
@@ -240,7 +282,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -248,6 +290,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addLoan, editLoan, removeLoan,
     upsertUserAccount, removeUserAccount,
     updateAccountSettings,
+    createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

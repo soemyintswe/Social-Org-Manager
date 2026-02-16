@@ -19,6 +19,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from "expo-image-picker";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
+import AccessDenied from "@/components/AccessDenied";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 
 interface OrgEvent {
@@ -28,12 +30,23 @@ interface OrgEvent {
   date: string;
   type: "activity" | "news" | "announcement";
   image?: string;
+  createdByUserId?: string;
+  createdByMemberId?: string;
 }
 
 export default function EventsScreen() {
   const insets = useSafeAreaInsets();
-  const { events, addEvent, updateEvent, deleteEvent } = useData() as any;
+  const { events, addEvent, editEvent, removeEvent } = useData() as any;
+  const { can, currentUser } = useAuth();
   const [modalVisible, setModalVisible] = useState(false);
+  const canViewEvents = can("events.view_public");
+  const canCreateOwnEvent = can("events.create_own");
+  const canCreateAllEvent = can("events.create_all");
+  const canEditOwnEvent = can("events.edit_own");
+  const canEditAllEvent = can("events.edit_all");
+  const canDeleteOwnEvent = can("events.delete_own");
+  const canDeleteAllEvent = can("events.delete_all");
+  const canCreateEvent = canCreateAllEvent || canCreateOwnEvent;
   
   // Form State
   const [title, setTitle] = useState("");
@@ -41,6 +54,16 @@ export default function EventsScreen() {
   const [type, setType] = useState<"activity" | "news" | "announcement">("activity");
   const [image, setImage] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  const isOwnEvent = (item: OrgEvent) => {
+    if (!currentUser) return false;
+    if (item.createdByUserId && item.createdByUserId === currentUser.id) return true;
+    if (item.createdByMemberId && currentUser.memberId && item.createdByMemberId === currentUser.memberId) return true;
+    return false;
+  };
+
+  const canEditItem = (item: OrgEvent) => canEditAllEvent || (canEditOwnEvent && isOwnEvent(item));
+  const canDeleteItem = (item: OrgEvent) => canDeleteAllEvent || (canDeleteOwnEvent && isOwnEvent(item));
 
   const pickImage = async () => {
     try {
@@ -72,6 +95,10 @@ export default function EventsScreen() {
   };
 
   const handleEdit = (item: OrgEvent) => {
+    if (!canEditItem(item)) {
+      Alert.alert("Access Denied", "ဤ item ကို ပြင်ဆင်ခွင့် မရှိပါ။");
+      return;
+    }
     setTitle(item.title);
     setDescription(item.description);
     setType(item.type);
@@ -87,9 +114,17 @@ export default function EventsScreen() {
     }
 
     if (editingId) {
-      if (updateEvent) {
-        const existing = events.find((e: any) => e.id === editingId);
-        await updateEvent({
+      const existing = events.find((e: any) => e.id === editingId) as OrgEvent | undefined;
+      if (!existing) {
+        Alert.alert("Error", "Event not found.");
+        return;
+      }
+      if (!canEditItem(existing)) {
+        Alert.alert("Access Denied", "Event ပြင်ဆင်ခွင့် မရှိပါ။");
+        return;
+      }
+      if (editEvent) {
+        await editEvent(editingId, {
           ...existing,
           title: title.trim(),
           description: description.trim(),
@@ -98,6 +133,10 @@ export default function EventsScreen() {
         });
       }
     } else {
+      if (!canCreateEvent) {
+        Alert.alert("Access Denied", "Event အသစ်ထည့်ခွင့် မရှိပါ။");
+        return;
+      }
       const newEvent: OrgEvent = {
         id: Date.now().toString(),
         title: title.trim(),
@@ -105,6 +144,8 @@ export default function EventsScreen() {
         date: new Date().toISOString(),
         type,
         image: image || undefined,
+        createdByUserId: currentUser?.id,
+        createdByMemberId: currentUser?.memberId,
       };
       if (addEvent) await addEvent(newEvent);
     }
@@ -114,13 +155,18 @@ export default function EventsScreen() {
   };
 
   const handleDelete = async (id: string) => {
+    const existing = events.find((e: any) => e.id === id) as OrgEvent | undefined;
+    if (!existing || !canDeleteItem(existing)) {
+      Alert.alert("Access Denied", "Event ဖျက်ခွင့် မရှိပါ။");
+      return;
+    }
     Alert.alert("Delete", "ဖျက်ရန် သေချာပါသလား?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          if (deleteEvent) await deleteEvent(id);
+          if (removeEvent) await removeEvent(id);
         }
       }
     ]);
@@ -209,6 +255,10 @@ export default function EventsScreen() {
     }
   };
 
+  if (!canViewEvents) {
+    return <AccessDenied showBack={false} />;
+  }
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
@@ -216,10 +266,14 @@ export default function EventsScreen() {
           <Ionicons name="home" size={22} color={Colors.light.text} />
         </Pressable>
         <Text style={styles.headerTitle}>လှုပ်ရှားမှုများ</Text>
-        <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.headerActionBtn, { marginRight: 95 }]}>
-          <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
-          <Text style={styles.headerActionText} numberOfLines={1}>အသစ်</Text>
-        </Pressable>
+        {canCreateEvent ? (
+          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.headerActionBtn, { marginRight: 95 }]}>
+            <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
+            <Text style={styles.headerActionText} numberOfLines={1}>အသစ်</Text>
+          </Pressable>
+        ) : (
+          <View style={{ width: 24 }} />
+        )}
       </View>
 
       <FlatList
@@ -248,12 +302,16 @@ export default function EventsScreen() {
               <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); onShare(item); }}>
                 <Ionicons name="share-social-outline" size={20} color={Colors.light.text} {...({ title: "မျှဝေရန်" } as any)} />
               </Pressable>
-              <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); handleEdit(item); }}>
-                <Ionicons name="create-outline" size={20} color={Colors.light.tint} {...({ title: "ပြင်ဆင်ရန်" } as any)} />
-              </Pressable>
-              <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); handleDelete(item.id); }}>
-                <Ionicons name="trash-outline" size={20} color="#EF4444" {...({ title: "ဖျက်ရန်" } as any)} />
-              </Pressable>
+              {canEditItem(item) && (
+                <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); handleEdit(item); }}>
+                  <Ionicons name="create-outline" size={20} color={Colors.light.tint} {...({ title: "ပြင်ဆင်ရန်" } as any)} />
+                </Pressable>
+              )}
+              {canDeleteItem(item) && (
+                <Pressable style={styles.iconBtn} onPress={(e) => { e.stopPropagation(); handleDelete(item.id); }}>
+                  <Ionicons name="trash-outline" size={20} color="#EF4444" {...({ title: "ဖျက်ရန်" } as any)} />
+                </Pressable>
+              )}
             </View>
           </Pressable>
         )}

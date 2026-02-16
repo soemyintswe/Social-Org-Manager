@@ -21,7 +21,9 @@ import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import { ORG_POSITION_LABELS, OrgPosition, MemberStatus, MEMBER_STATUS_VALUES, MEMBER_STATUS_LABELS } from "@/lib/types";
+import AccessDenied from "@/components/AccessDenied";
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
 const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
 
@@ -44,8 +46,12 @@ const getAvatarLabel = (name: string) => {
 
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
-  const { members, addMember, updateMember, transactions, loans, groups, updateTransaction, updateLoan, updateGroup } = useData() as any;
+  const { members, addMember, updateMember, createMemberChangeRequest, transactions, loans, groups, updateTransaction, updateLoan, updateGroup } = useData() as any;
+  const { can, currentUser } = useAuth();
   const { editId } = useLocalSearchParams<{ editId: string }>();
+  const canCreateMember = can("members.create");
+  const canEditMember = can("members.edit");
+  const canProposeMemberChanges = can("members.propose_changes");
 
   // Form States
   const [name, setName] = useState("");
@@ -121,7 +127,7 @@ export default function AddMemberScreen() {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       // ID ပြောင်းလဲမှုရှိမရှိ စစ်ဆေးခြင်း (Edit Mode တွင်သာ)
-      if (editId && memberId.trim() !== editId) {
+      if (editId && canEditMember && memberId.trim() !== editId) {
         const existing = members.find((m: any) => m.id === memberId.trim());
         if (existing) {
           Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
@@ -173,9 +179,41 @@ export default function AddMemberScreen() {
       };
 
       if (editId) {
-        await updateMember(editId, memberData);
+        if (canEditMember) {
+          await updateMember(editId, memberData);
+        } else if (canProposeMemberChanges && currentUser?.id) {
+          if (memberId.trim() !== editId) {
+            Alert.alert("အသိပေးချက်", "Proposal mode တွင် Member ID ပြောင်းလဲမှုကို မပံ့ပိုးသေးပါ။");
+            setSaving(false);
+            return;
+          }
+          await createMemberChangeRequest({
+            action: "update",
+            targetMemberId: editId,
+            payload: {
+              member: memberData,
+              note: "Member profile update proposal",
+            },
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+          });
+          Alert.alert("အောင်မြင်ပါသည်", "Member update request ကို approver ထံပို့ပြီးပါပြီ။");
+        }
       } else {
-        await addMember(memberData);
+        if (canCreateMember) {
+          await addMember(memberData);
+        } else if (canProposeMemberChanges && currentUser?.id) {
+          await createMemberChangeRequest({
+            action: "create",
+            payload: {
+              member: memberData,
+              note: "New member proposal",
+            },
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+          });
+          Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အသစ် request ကို approver ထံပို့ပြီးပါပြီ။");
+        }
       }
       router.back();
     } catch (error) {
@@ -241,6 +279,10 @@ export default function AddMemberScreen() {
     }
     return new Date();
   };
+
+  if ((!editId && !canCreateMember && !canProposeMemberChanges) || (editId && !canEditMember && !canProposeMemberChanges)) {
+    return <AccessDenied showBack={true} />;
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>

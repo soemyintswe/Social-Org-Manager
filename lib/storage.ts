@@ -1,5 +1,16 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings, UserAccount } from "./types";
+import {
+  Member,
+  OrgEvent,
+  Group,
+  AttendanceRecord,
+  Transaction,
+  Loan,
+  AccountSettings,
+  UserAccount,
+  MemberChangeRequest,
+  MemberChangeAction,
+} from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 
 const KEYS = {
@@ -12,6 +23,7 @@ const KEYS = {
   ACCOUNT_SETTINGS: "@orghub_account_settings",
   USERS: "@orghub_users",
   USER_PASSWORDS: "@orghub_user_passwords",
+  MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
 };
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
@@ -65,6 +77,123 @@ export const saveMembers = async (data: Member[]) => {
   await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data));
   await syncUsersWithMembers(data);
 };
+
+export const getMemberChangeRequests = () => safeGet<MemberChangeRequest[]>(KEYS.MEMBER_CHANGE_REQUESTS, []);
+
+export const saveMemberChangeRequests = async (data: MemberChangeRequest[]) => {
+  await AsyncStorage.setItem(KEYS.MEMBER_CHANGE_REQUESTS, JSON.stringify(data));
+};
+
+export async function createMemberChangeRequest(input: {
+  action: MemberChangeAction;
+  targetMemberId?: string;
+  payload: {
+    member?: Partial<Member>;
+    note?: string;
+  };
+  createdByUserId: string;
+  createdByMemberId?: string;
+}): Promise<MemberChangeRequest> {
+  const requests = await getMemberChangeRequests();
+  const request: MemberChangeRequest = {
+    id: generateId(),
+    action: input.action,
+    targetMemberId: input.targetMemberId,
+    payload: input.payload || {},
+    status: "pending",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: new Date().toISOString(),
+  };
+  await saveMemberChangeRequests([request, ...requests]);
+  return request;
+}
+
+export async function approveMemberChangeRequest(requestId: string, reviewerUserId: string, reviewNote?: string): Promise<void> {
+  const [requests, members] = await Promise.all([getMemberChangeRequests(), getMembers()]);
+  const index = requests.findIndex((item) => item.id === requestId);
+  if (index === -1) throw new Error("request_not_found");
+
+  const request = requests[index];
+  if (request.status !== "pending") throw new Error("request_not_pending");
+
+  let nextMembers = [...members];
+  if (request.action === "create") {
+    const incoming = request.payload.member || {};
+    const incomingId = String(incoming.id || "").trim();
+    if (!incomingId) throw new Error("invalid_member_id");
+    const exists = nextMembers.some((item) => item.id === incomingId);
+    if (exists) throw new Error("member_exists");
+
+    const member: Member = {
+      id: incomingId,
+      name: String(incoming.name || "").trim(),
+      phone: String(incoming.phone || "").trim(),
+      joinDate: String(incoming.joinDate || new Date().toISOString().split("T")[0]),
+      status: (incoming.status as any) || "active",
+      createdAt: incoming.createdAt || new Date().toISOString(),
+      color: incoming.color || randomColor(),
+      role: incoming.role || "member",
+      avatarColor: incoming.avatarColor || randomColor(),
+      dob: incoming.dob,
+      nrc: incoming.nrc,
+      email: incoming.email,
+      address: incoming.address,
+      orgPosition: incoming.orgPosition,
+      resignDate: incoming.resignDate,
+      statusDate: incoming.statusDate,
+      statusNote: incoming.statusNote,
+      profileImage: incoming.profileImage,
+    };
+    nextMembers = [...nextMembers, member];
+  } else if (request.action === "update") {
+    const targetId = String(request.targetMemberId || "").trim();
+    if (!targetId) throw new Error("target_missing");
+    const memberIndex = nextMembers.findIndex((item) => item.id === targetId);
+    if (memberIndex === -1) throw new Error("target_not_found");
+
+    const updatePayload = { ...(request.payload.member || {}) };
+    if (updatePayload.id && updatePayload.id !== targetId) {
+      throw new Error("id_change_not_supported");
+    }
+    delete (updatePayload as any).id;
+    nextMembers[memberIndex] = {
+      ...nextMembers[memberIndex],
+      ...updatePayload,
+    };
+  } else if (request.action === "delete") {
+    const targetId = String(request.targetMemberId || "").trim();
+    if (!targetId) throw new Error("target_missing");
+    nextMembers = nextMembers.filter((item) => item.id !== targetId);
+  }
+
+  await saveMembers(nextMembers);
+
+  requests[index] = {
+    ...requests[index],
+    status: "approved",
+    reviewedByUserId: reviewerUserId,
+    reviewedAt: new Date().toISOString(),
+    reviewNote: reviewNote?.trim() || undefined,
+  };
+  await saveMemberChangeRequests(requests);
+}
+
+export async function rejectMemberChangeRequest(requestId: string, reviewerUserId: string, reviewNote?: string): Promise<void> {
+  const requests = await getMemberChangeRequests();
+  const index = requests.findIndex((item) => item.id === requestId);
+  if (index === -1) throw new Error("request_not_found");
+  if (requests[index].status !== "pending") throw new Error("request_not_pending");
+
+  requests[index] = {
+    ...requests[index],
+    status: "rejected",
+    reviewedByUserId: reviewerUserId,
+    reviewedAt: new Date().toISOString(),
+    reviewNote: reviewNote?.trim() || undefined,
+  };
+  await saveMemberChangeRequests(requests);
+}
 
 export async function setUserPassword(userId: string, passwordPlaintext: string): Promise<void> {
     const passwords = await getUserPasswords();
@@ -309,6 +438,15 @@ export async function addTransaction(txn: any) {
   const newTxn = { ...txn, id: generateId() };
   await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTxn, ...txns]));
   return newTxn;
+}
+
+export async function updateTransaction(id: string, updates: any) {
+  const txns = await getTransactions();
+  const idx = txns.findIndex((item) => item.id === id);
+  if (idx !== -1) {
+    txns[idx] = { ...txns[idx], ...updates };
+    await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns));
+  }
 }
 
 export async function saveTransactions(data: Transaction[]): Promise<void> {

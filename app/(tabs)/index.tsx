@@ -92,8 +92,10 @@ function QuickAction({
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { members, transactions, loans, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
-  const { currentUser, currentMember } = useAuth();
+  const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
+  const canCreateMember = can("members.create") || can("members.manage");
+  const canCreateFinance = can("finance.create") || can("finance.manage");
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -432,9 +434,9 @@ export default function DashboardScreen() {
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
       <View style={styles.quickActions}>
-        <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />
-        <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />
-        <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />
+        {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
+        {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
+        {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
         <QuickAction icon="qr-code-outline" label="ကတ်ဖတ်မည်" onPress={() => router.push("/qr-scanner" as any)} />
       </View>
 

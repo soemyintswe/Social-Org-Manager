@@ -30,6 +30,8 @@ export interface OrgEvent {
   location: string;
   attendeeIds: string[];
   createdAt: string;
+  createdByUserId?: string;
+  createdByMemberId?: string;
 }
 
 export interface Group {
@@ -128,7 +130,17 @@ export interface Loan {
 }
 
 export type SystemRole = "admin" | "org_user";
-export type OrgPosition = "patron" | "chairperson" | "secretary" | "treasurer" | "auditor" | "committee_member" | "member" | "applicant";
+export type OrgPosition =
+  | "patron"
+  | "chairperson"
+  | "vice_chairperson"
+  | "secretary"
+  | "joint_secretary"
+  | "treasurer"
+  | "auditor"
+  | "committee_member"
+  | "member"
+  | "applicant";
 export type MemberStatus = "active" | "resigned" | "deceased" | "expelled" | "suspended" | "applicant";
 
 export interface UserAccount {
@@ -141,10 +153,32 @@ export interface UserAccount {
   createdAt: string;
 }
 
+export type MemberChangeAction = "create" | "update" | "delete";
+export type MemberChangeStatus = "pending" | "approved" | "rejected";
+
+export interface MemberChangeRequest {
+  id: string;
+  action: MemberChangeAction;
+  targetMemberId?: string;
+  payload: {
+    member?: Partial<Member>;
+    note?: string;
+  };
+  status: MemberChangeStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  reviewedByUserId?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+}
+
 export const ORG_POSITION_LABELS: Record<OrgPosition, string> = {
   patron: "နာယက",
   chairperson: "ဥက္ကဋ္ဌ",
+  vice_chairperson: "ဒုတိယဥက္ကဋ္ဌ",
   secretary: "အတွင်းရေးမှူး",
+  joint_secretary: "တွဲဘက်အတွင်းရေးမှူး",
   treasurer: "ဘဏ္ဍာရေးမှူး",
   auditor: "စာရင်းစစ်",
   committee_member: "ကော်မတီအဖွဲ့ဝင်",
@@ -176,7 +210,21 @@ export function normalizeMemberStatus(val: any): MemberStatus {
 export function normalizeOrgPosition(val: any): OrgPosition {
   const v = String(val || "").toLowerCase();
   if (v.includes("patron") || v.includes("နာယက")) return "patron";
+  if (
+    v.includes("vice chair") ||
+    v.includes("vice-chair") ||
+    v.includes("vice_chair") ||
+    v.includes("deputy chair") ||
+    v.includes("ဒုတိယဥက္ကဋ္ဌ") ||
+    v.includes("ဒုဥက္ကဋ္ဌ")
+  ) return "vice_chairperson";
   if (v.includes("chair") || v.includes("ဥက္ကဋ္ဌ")) return "chairperson";
+  if (
+    v.includes("joint sec") ||
+    v.includes("joint-secretary") ||
+    v.includes("associate secretary") ||
+    v.includes("တွဲဘက်အတွင်းရေးမှူး")
+  ) return "joint_secretary";
   if (v.includes("sec") || v.includes("အတွင်း")) return "secretary";
   if (v.includes("treas") || v.includes("ဘဏ္ဍာ")) return "treasurer";
   if (v.includes("audit") || v.includes("စာရင်း")) return "auditor";

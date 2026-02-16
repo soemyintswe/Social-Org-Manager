@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { canAccess, canAccessMemberRecord as canAccessMember, type AccessPermission, type AccessProfile } from "./access-control";
+import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 import { normalizeMemberStatus, normalizeOrgPosition, type Member, type UserAccount } from "./types";
@@ -45,7 +45,7 @@ interface AuthContextValue {
   verifyCurrentPassword: (password: string) => Promise<boolean>;
   changePassword: (currentPassword: string, nextPassword: string) => Promise<boolean>;
   resetPassword: (identifier: string) => Promise<boolean>;
-  can: (permission: AccessPermission, options?: { targetMemberId?: string }) => boolean;
+  can: (permission: AccessPermission, options?: AccessOptions) => boolean;
   canAccessMemberRecord: (targetMemberId: string) => boolean;
 }
 
@@ -349,7 +349,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const can = useCallback(
-    (permission: AccessPermission, options?: { targetMemberId?: string }) => {
+    (permission: AccessPermission, options?: AccessOptions) => {
       if (!profile) return false;
       return canAccess(profile, permission, options);
     },

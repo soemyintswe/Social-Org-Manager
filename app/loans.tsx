@@ -12,11 +12,18 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
+import AccessDenied from "@/components/AccessDenied";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 
 export default function LoansScreen() {
   const insets = useSafeAreaInsets();
   const { loans, transactions, members, getLoanOutstanding } = useData() as any;
+  const { can, currentUser } = useAuth();
+  const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
+  const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
+  const canViewFinanceSelf = can("finance.view_self");
+  const canCreateFinance = can("finance.create") || can("finance.manage");
 
   // Loan Stats Calculation
   const stats = useMemo(() => {
@@ -33,10 +40,13 @@ export default function LoansScreen() {
     const totalOutstanding = (loans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
     
     return { disbursed, repaid, interest, totalOutstanding };
-  }, [transactions, loans]);
+  }, [transactions, loans, getLoanOutstanding]);
 
   const activeLoans = useMemo(() => {
-    return (loans || [])
+    const source = (canViewFinanceDetail || !canViewFinanceSelf)
+      ? (loans || [])
+      : (loans || []).filter((l: any) => l.memberId === currentUser?.memberId);
+    return source
       .filter((l: any) => l.status === 'active')
       .map((l: any) => ({
         ...l,
@@ -44,7 +54,11 @@ export default function LoansScreen() {
         outstanding: getLoanOutstanding(l.id)
       }))
       .sort((a: any, b: any) => b.outstanding - a.outstanding);
-  }, [loans, members]);
+  }, [loans, members, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId, getLoanOutstanding]);
+
+  if (!canViewFinanceSummary && !canViewFinanceDetail && !canViewFinanceSelf) {
+    return <AccessDenied showBack={false} />;
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -55,10 +69,14 @@ export default function LoansScreen() {
           </Pressable>
           <Text style={styles.headerTitle}>ချေးငွေစာရင်း</Text>
         </View>
-        <Pressable onPress={() => router.push("/add-loan" as any)} style={[styles.headerActionBtn, { marginRight: 95 }]}>
-          <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
-          <Text style={styles.headerActionText}>အသစ်</Text>
-        </Pressable>
+        {canCreateFinance ? (
+          <Pressable onPress={() => router.push("/add-loan" as any)} style={[styles.headerActionBtn, { marginRight: 95 }]}>
+            <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
+            <Text style={styles.headerActionText}>အသစ်</Text>
+          </Pressable>
+        ) : (
+          <View style={{ width: 24 }} />
+        )}
       </View>
 
       <FlatList

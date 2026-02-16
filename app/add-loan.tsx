@@ -19,6 +19,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
+import AccessDenied from "@/components/AccessDenied";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -47,6 +49,8 @@ const formatDateDisplay = (date: Date) => {
 export default function AddLoanScreen() {
   const insets = useSafeAreaInsets();
   const { members, addLoan } = useData() as any;
+  const { can } = useAuth();
+  const canCreateFinance = can("finance.create") || can("finance.manage");
 
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
@@ -100,6 +104,10 @@ export default function AddLoanScreen() {
       setSaving(false);
     }
   };
+
+  if (!canCreateFinance) {
+    return <AccessDenied showBack={true} />;
+  }
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={[styles.container, { paddingTop: insets.top }]}>

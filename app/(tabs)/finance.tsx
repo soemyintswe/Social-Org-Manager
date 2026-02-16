@@ -17,6 +17,8 @@ import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
+import AccessDenied from "@/components/AccessDenied";
 import { Transaction, Loan, CATEGORY_LABELS } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
 
@@ -41,10 +43,12 @@ function BalanceCard({ label, amount, icon, color }: {
   );
 }
 
-function TransactionRow({ txn, memberName, onDelete }: {
+function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete = false }: {
   txn: Transaction;
   memberName?: string;
   onDelete: (id: string) => void;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }) {
   const isIncome = txn.type === "income";
   const isTransfer = (txn.type as string) === "transfer";
@@ -63,14 +67,18 @@ function TransactionRow({ txn, memberName, onDelete }: {
   return (
     <Pressable
       style={styles.txnRow}
-      onPress={() => router.push({ pathname: "/add-transaction", params: { editId: txn.id } })}
-      onLongPress={() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        Alert.alert("ဖျက်ရန်", "ဤငွေစာရင်းကို ဖျက်လိုပါသလား?", [
-          { text: "မဖျက်တော့ပါ", style: "cancel" },
-          { text: "ဖျက်မည်", style: "destructive", onPress: () => onDelete(txn.id) },
-        ]);
-      }}
+      onPress={canEdit ? () => router.push({ pathname: "/add-transaction", params: { editId: txn.id } }) : undefined}
+      onLongPress={
+        canDelete
+          ? () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              Alert.alert("ဖျက်ရန်", "ဤငွေစာရင်းကို ဖျက်လိုပါသလား?", [
+                { text: "မဖျက်တော့ပါ", style: "cancel" },
+                { text: "ဖျက်မည်", style: "destructive", onPress: () => onDelete(txn.id) },
+              ]);
+            }
+          : undefined
+      }
     >
       <View style={[styles.txnIcon, { backgroundColor: (isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")) + "15" }]}>
         <Ionicons
@@ -166,6 +174,7 @@ export default function FinanceScreen() {
     accountSettings,
     updateAccountSettings
   } = useData() as any;
+  const { can, currentUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
   const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1)); // Jan 1st of current year
@@ -177,6 +186,15 @@ export default function FinanceScreen() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [tempCash, setTempCash] = useState("");
   const [tempBank, setTempBank] = useState("");
+
+  const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
+  const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
+  const canViewFinanceSelf = can("finance.view_self");
+  const canManageFinance = can("finance.create") || can("finance.edit") || can("finance.delete") || can("finance.manage");
+  const canCreateFinance = can("finance.create") || can("finance.manage");
+  const canEditFinance = can("finance.edit") || can("finance.manage");
+  const canDeleteFinance = can("finance.delete") || can("finance.manage");
+  const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
 
   const handleOpenSettings = () => {
     setTempCash(accountSettings?.openingBalanceCash?.toString() || "0");
@@ -234,6 +252,12 @@ export default function FinanceScreen() {
     [transactions, startDate, endDate]
   );
 
+  const visibleTxns = useMemo(() => {
+    if (canViewFinanceDetail) return sortedTxns;
+    if (!canViewFinanceSelf || !currentUser?.memberId) return [];
+    return sortedTxns.filter((t: any) => t.memberId === currentUser.memberId);
+  }, [sortedTxns, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
+
   const sortedLoans = useMemo(
     () => [...(loans || [])].sort((a, b) => {
       if (a.status === "active" && b.status !== "active") return -1;
@@ -242,6 +266,12 @@ export default function FinanceScreen() {
     }),
     [loans]
   );
+
+  const visibleLoans = useMemo(() => {
+    if (canViewFinanceDetail) return sortedLoans;
+    if (!canViewFinanceSelf || !currentUser?.memberId) return [];
+    return sortedLoans.filter((loan: any) => loan.memberId === currentUser.memberId);
+  }, [sortedLoans, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -271,6 +301,10 @@ export default function FinanceScreen() {
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
+  if (!canViewAnyFinance) {
+    return <AccessDenied showBack={false} />;
+  }
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -287,24 +321,30 @@ export default function FinanceScreen() {
             <Ionicons name="home" size={24} color={Colors.light.text} />
           </Pressable>
           <View style={styles.headerButtons}>
-            <Pressable
-              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-              onPress={() => router.push("/transaction-data-management")}
-            >
-              <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} />
-            </Pressable>
-            <Pressable
-              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-              onPress={handleOpenSettings}
-            >
-              <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
-            </Pressable>
-            <Pressable
-              style={styles.addButton}
-              onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
-            >
-              <Ionicons name="add" size={24} color="white" />
-            </Pressable>
+            {canManageFinance && (
+              <Pressable
+                style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+                onPress={() => router.push("/transaction-data-management")}
+              >
+                <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} />
+              </Pressable>
+            )}
+            {canManageFinance && (
+              <Pressable
+                style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+                onPress={handleOpenSettings}
+              >
+                <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
+              </Pressable>
+            )}
+            {canCreateFinance && (
+              <Pressable
+                style={styles.addButton}
+                onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
+              >
+                <Ionicons name="add" size={24} color="white" />
+              </Pressable>
+            )}
           </View>
         </View>
         <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း</Text>
@@ -413,14 +453,20 @@ export default function FinanceScreen() {
         </Pressable>
       </View>
 
+      {!canViewFinanceDetail && canViewFinanceSummary && !canViewFinanceSelf ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="shield-checkmark-outline" size={40} color={Colors.light.textSecondary} />
+          <Text style={styles.emptyText}>Summary only permission ဖြစ်သောကြောင့် အသေးစိတ်စာရင်း မပြထားပါ။</Text>
+        </View>
+      ) : (
       <FlatList
         // FlatList Error အတွက် explicit typing သုံးပေးထားပါသည်
         data={
           activeTab === "loans" 
-            ? (sortedLoans as any[]) 
+            ? (visibleLoans as any[]) 
             : activeTab === "transfers"
-              ? (sortedTxns.filter(t => t.type === 'transfer') as any[])
-              : (sortedTxns.filter(t => t.type !== 'transfer') as any[])
+              ? (visibleTxns.filter(t => t.type === 'transfer') as any[])
+              : (visibleTxns.filter(t => t.type !== 'transfer') as any[])
         }
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
@@ -434,6 +480,8 @@ export default function FinanceScreen() {
                 txn={txn}
                 memberName={displayName}
                 onDelete={removeTransaction}
+                canEdit={canEditFinance}
+                canDelete={canDeleteFinance}
               />
             );
           } else {
@@ -455,6 +503,7 @@ export default function FinanceScreen() {
           </View>
         }
       />
+      )}
 
       {/* Opening Balance Modal */}
       <Modal

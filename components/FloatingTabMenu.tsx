@@ -32,19 +32,19 @@ export default function FloatingTabMenu() {
         name: "ချေးငွေများ",
         icon: "cash-outline",
         route: "/loans",
-        enabled: can("finance.view_all") || can("finance.view_self"),
+        enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
       },
       {
         name: "ငွေစာရင်း",
         icon: "wallet-outline",
         route: "/finance",
-        enabled: can("finance.view_all") || can("finance.view_self"),
+        enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
       },
       {
         name: "အစီရင်ခံစာ",
         icon: "bar-chart-outline",
         route: "/reports",
-        enabled: can("reports.view_all"),
+        enabled: can("reports.view_all") || can("reports.view_summary"),
       },
       {
         name: "စနစ်ပိုင်းဆိုင်ရာ",
