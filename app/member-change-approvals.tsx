@@ -26,6 +26,27 @@ const MEMBER_FIELD_LABELS: Record<string, string> = {
   statusNote: "မှတ်ချက်",
 };
 
+function parseDateInputToMs(input: string, endOfDay = false): number | null {
+  const text = String(input || "").trim();
+  if (!text) return null;
+  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(y, mo, d, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+  const ms = dt.getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function csvEscape(value: unknown): string {
+  const text = String(value ?? "");
+  if (text.includes(",") || text.includes("\"") || text.includes("\n")) {
+    return `"${text.replace(/"/g, "\"\"")}"`;
+  }
+  return text;
+}
+
 function buildChangeLines(item: MemberChangeRequest, currentMember?: any): string[] {
   if (item.action === "delete") return ["အသင်းဝင်ကို ဖျက်ရန် တောင်းဆိုထားသည်။"];
   const requested = item.payload.member || {};
@@ -54,6 +75,9 @@ export default function MemberChangeApprovalsScreen() {
   const { members, memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest, withdrawMemberChangeRequest } = useData();
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "rejected" | "cancelled">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [reviewerFilter, setReviewerFilter] = useState("");
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [tab, setTab] = useState<"pending" | "history">("pending");
@@ -93,20 +117,30 @@ export default function MemberChangeApprovalsScreen() {
 
   const filteredHistoryRequests = useMemo(() => {
     const needle = searchText.trim().toLowerCase();
-    if (!needle) return historyRequests;
     return historyRequests.filter((item) => {
       const member = item.payload.member || {};
-      return (
+      const fromMs = parseDateInputToMs(dateFrom, false);
+      const toMs = parseDateInputToMs(dateTo, true);
+      const reviewerNeedle = reviewerFilter.trim().toLowerCase();
+      const reviewedAtMs = new Date(item.reviewedAt || item.createdAt || 0).getTime();
+
+      const matchesSearch =
+        !needle ||
         String(item.id).toLowerCase().includes(needle) ||
         String(item.targetMemberId || "").toLowerCase().includes(needle) ||
         String(item.createdByUserId || "").toLowerCase().includes(needle) ||
         String(item.reviewedByUserId || "").toLowerCase().includes(needle) ||
         String(member.id || "").toLowerCase().includes(needle) ||
         String(member.name || "").toLowerCase().includes(needle) ||
-        String(member.phone || "").toLowerCase().includes(needle)
-      );
+        String(member.phone || "").toLowerCase().includes(needle);
+      const matchesFrom = fromMs == null || reviewedAtMs >= fromMs;
+      const matchesTo = toMs == null || reviewedAtMs <= toMs;
+      const matchesReviewer =
+        !reviewerNeedle || String(item.reviewedByUserId || "").toLowerCase().includes(reviewerNeedle);
+
+      return matchesSearch && matchesFrom && matchesTo && matchesReviewer;
     });
-  }, [historyRequests, searchText]);
+  }, [historyRequests, searchText, dateFrom, dateTo, reviewerFilter]);
 
   const exportPayload = useMemo(
     () => ({
@@ -239,6 +273,78 @@ export default function MemberChangeApprovalsScreen() {
     }
   };
 
+  const handleExportCsv = async () => {
+    try {
+      const headers = [
+        "request_id",
+        "action",
+        "status",
+        "target_member_id",
+        "requested_name",
+        "requested_phone",
+        "created_by",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "review_note",
+      ];
+      const rows = filteredHistoryRequests.map((item) => {
+        const member = item.payload.member || {};
+        return [
+          item.id,
+          item.action,
+          item.status,
+          item.targetMemberId || member.id || "",
+          member.name || "",
+          member.phone || "",
+          item.createdByUserId || "",
+          item.createdAt || "",
+          item.reviewedByUserId || "",
+          item.reviewedAt || "",
+          item.reviewNote || "",
+        ]
+          .map(csvEscape)
+          .join(",");
+      });
+      const csv = [headers.join(","), ...rows].join("\n");
+
+      if (Platform.OS === "web") {
+        const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `member_change_audit_${timestamp}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        Alert.alert("အောင်မြင်ပါသည်", "CSV audit report download ပြီးပါပြီ။");
+        return;
+      }
+
+      const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      if (!directory) {
+        Alert.alert("အမှား", "File directory မတွေ့ပါ။");
+        return;
+      }
+      const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+      const fileUri = directory + `member_change_audit_${timestamp}.csv`;
+      await FileSystem.writeAsStringAsync(fileUri, csv);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: "text/csv",
+          dialogTitle: "CSV audit report သိမ်းမည့်နေရာရွေးပါ",
+          UTI: "public.comma-separated-values-text",
+        });
+      } else {
+        Alert.alert("သိမ်းပြီးပါပြီ", "CSV ဖိုင်ကို local storage ထဲသိမ်းပြီးပါပြီ။");
+      }
+    } catch {
+      Alert.alert("အမှား", "CSV export မအောင်မြင်ပါ။");
+    }
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -285,20 +391,52 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={styles.toolText}>JSON ကူးယူ</Text>
           </Pressable>
         </View>
+        <View style={styles.toolRow}>
+          <Pressable style={styles.toolBtn} onPress={handleExportCsv}>
+            <Ionicons name="grid-outline" size={16} color={Colors.light.tint} />
+            <Text style={styles.toolText}>CSV Audit ထုတ်မည်</Text>
+          </Pressable>
+        </View>
         {tab === "history" && (
-          <View style={styles.filterRow}>
-            <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => setStatusFilter("all")}>
-              <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>အားလုံး</Text>
-            </Pressable>
-            <Pressable style={[styles.filterChip, statusFilter === "approved" && styles.filterChipActive]} onPress={() => setStatusFilter("approved")}>
-              <Text style={[styles.filterChipText, statusFilter === "approved" && styles.filterChipTextActive]}>အတည်ပြု</Text>
-            </Pressable>
-            <Pressable style={[styles.filterChip, statusFilter === "rejected" && styles.filterChipActive]} onPress={() => setStatusFilter("rejected")}>
-              <Text style={[styles.filterChipText, statusFilter === "rejected" && styles.filterChipTextActive]}>ပယ်ချ</Text>
-            </Pressable>
-            <Pressable style={[styles.filterChip, statusFilter === "cancelled" && styles.filterChipActive]} onPress={() => setStatusFilter("cancelled")}>
-              <Text style={[styles.filterChipText, statusFilter === "cancelled" && styles.filterChipTextActive]}>ရုပ်သိမ်း</Text>
-            </Pressable>
+          <View style={styles.historyFiltersWrap}>
+            <View style={styles.filterRow}>
+              <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => setStatusFilter("all")}>
+                <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>အားလုံး</Text>
+              </Pressable>
+              <Pressable style={[styles.filterChip, statusFilter === "approved" && styles.filterChipActive]} onPress={() => setStatusFilter("approved")}>
+                <Text style={[styles.filterChipText, statusFilter === "approved" && styles.filterChipTextActive]}>အတည်ပြု</Text>
+              </Pressable>
+              <Pressable style={[styles.filterChip, statusFilter === "rejected" && styles.filterChipActive]} onPress={() => setStatusFilter("rejected")}>
+                <Text style={[styles.filterChipText, statusFilter === "rejected" && styles.filterChipTextActive]}>ပယ်ချ</Text>
+              </Pressable>
+              <Pressable style={[styles.filterChip, statusFilter === "cancelled" && styles.filterChipActive]} onPress={() => setStatusFilter("cancelled")}>
+                <Text style={[styles.filterChipText, statusFilter === "cancelled" && styles.filterChipTextActive]}>ရုပ်သိမ်း</Text>
+              </Pressable>
+            </View>
+            <TextInput
+              value={reviewerFilter}
+              onChangeText={setReviewerFilter}
+              placeholder="Reviewer user id ဖြင့် filter"
+              style={styles.searchInput}
+              placeholderTextColor={Colors.light.textSecondary}
+            />
+            <View style={styles.dateRow}>
+              <TextInput
+                value={dateFrom}
+                onChangeText={setDateFrom}
+                placeholder="From YYYY-MM-DD"
+                style={[styles.searchInput, styles.dateInput]}
+                placeholderTextColor={Colors.light.textSecondary}
+              />
+              <TextInput
+                value={dateTo}
+                onChangeText={setDateTo}
+                placeholder="To YYYY-MM-DD"
+                style={[styles.searchInput, styles.dateInput]}
+                placeholderTextColor={Colors.light.textSecondary}
+              />
+            </View>
+            <Text style={styles.historyHint}>History filters သာသက်ရောက်သည်</Text>
           </View>
         )}
       </View>
@@ -464,6 +602,14 @@ const styles = StyleSheet.create({
   filterChipTextActive: {
     color: Colors.light.tint,
     fontFamily: "Inter_600SemiBold",
+  },
+  historyFiltersWrap: { gap: 6, marginTop: 2 },
+  dateRow: { flexDirection: "row", gap: 8 },
+  dateInput: { flex: 1 },
+  historyHint: {
+    color: Colors.light.textSecondary,
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
   },
   toolRow: { flexDirection: "row", gap: 8, marginTop: 2 },
   toolBtn: {
