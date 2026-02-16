@@ -315,7 +315,11 @@ function resolveOrgAccessRole(profile: AccessProfile): OrgAccessRole {
 
 function getChecklist(profile: AccessProfile): PermissionChecklist {
   if (profile.systemRole === "admin") return ADMIN_CHECKLIST;
-  return ORG_ROLE_CHECKLIST[resolveOrgAccessRole(profile)];
+  return {
+    ...ORG_ROLE_CHECKLIST[resolveOrgAccessRole(profile)],
+    // Non-admin users can view member directory; write actions remain role-restricted.
+    "members.view_all": true,
+  };
 }
 
 function canByOwnOrAll(
