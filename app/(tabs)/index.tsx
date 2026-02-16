@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useState } from "react";
+import React, { useCallback, useMemo, useEffect, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -16,13 +16,15 @@ import { default as Constants } from 'expo-constants';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { CATEGORY_LABELS, normalizeMemberStatus, TransactionCategory } from "@/lib/types";
 import { exportData } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
+
+const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
 
 interface Transaction {
   id: string;
@@ -98,6 +100,18 @@ export default function DashboardScreen() {
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canApproveMemberChanges = can("members.approve_changes");
   const canProposeMemberChanges = can("members.propose_changes");
+  const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
+
+  const loadMemberChangeLastSeen = useCallback(async () => {
+    const seenAt = (await AsyncStorage.getItem(MEMBER_CHANGE_LAST_SEEN_KEY)) || "";
+    setMemberChangeLastSeenAt(seenAt);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadMemberChangeLastSeen();
+    }, [loadMemberChangeLastSeen])
+  );
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -292,14 +306,22 @@ export default function DashboardScreen() {
     const approved = visible.filter((item: any) => item.status === "approved").length;
     const rejected = visible.filter((item: any) => item.status === "rejected").length;
     const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
+    const newPending = visible.filter((item: any) => {
+      if (item.status !== "pending") return false;
+      if (!memberChangeLastSeenAt) return true;
+      const created = new Date(item.createdAt || 0).getTime();
+      const seen = new Date(memberChangeLastSeenAt || 0).getTime();
+      return created > seen;
+    }).length;
     return {
       visibleCount: visible.length,
       pending,
       approved,
       rejected,
       cancelled,
+      newPending,
     };
-  }, [memberChangeRequests, canApproveMemberChanges, currentUser?.id]);
+  }, [memberChangeRequests, canApproveMemberChanges, currentUser?.id, memberChangeLastSeenAt]);
 
   // Schedule Birthday Notification
   useEffect(() => {
@@ -430,7 +452,10 @@ export default function DashboardScreen() {
               <Text style={styles.requestInboxTitle}>
                 {canApproveMemberChanges ? "Member Change Approval Inbox" : "My Change Requests"}
               </Text>
-              <Text style={styles.requestInboxSubtitle}>Total: {requestInbox.visibleCount}</Text>
+              <Text style={styles.requestInboxSubtitle}>
+                Total: {requestInbox.visibleCount}
+                {requestInbox.newPending > 0 ? ` • New Pending: ${requestInbox.newPending}` : ""}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
           </View>

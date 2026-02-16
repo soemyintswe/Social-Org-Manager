@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import React, { useEffect, useMemo, useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -10,11 +11,47 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import AccessDenied from "@/components/AccessDenied";
+import type { MemberChangeRequest } from "@/lib/types";
+
+const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
+const MEMBER_FIELD_LABELS: Record<string, string> = {
+  name: "အမည်",
+  phone: "ဖုန်း",
+  email: "အီးမေးလ်",
+  dob: "မွေးသက္ကရာဇ်",
+  address: "နေရပ်လိပ်စာ",
+  orgPosition: "ရာထူး",
+  status: "အခြေအနေ",
+  statusDate: "အခြေအနေရက်စွဲ",
+  statusNote: "မှတ်ချက်",
+};
+
+function buildChangeLines(item: MemberChangeRequest, currentMember?: any): string[] {
+  if (item.action === "delete") return ["အသင်းဝင်ကို ဖျက်ရန် တောင်းဆိုထားသည်။"];
+  const requested = item.payload.member || {};
+  if (item.action === "create") {
+    return Object.entries(requested)
+      .filter(([, value]) => value !== undefined && String(value).trim() !== "")
+      .slice(0, 6)
+      .map(([key, value]) => `${MEMBER_FIELD_LABELS[key] || key}: ${String(value)}`);
+  }
+
+  const keys = Object.keys(requested).filter((key) => key !== "id");
+  const lines = keys
+    .map((key) => {
+      const nextVal = requested[key as keyof typeof requested];
+      const prevVal = currentMember?.[key];
+      if (String(prevVal ?? "") === String(nextVal ?? "")) return "";
+      return `${MEMBER_FIELD_LABELS[key] || key}: ${String(prevVal ?? "-")} -> ${String(nextVal ?? "-")}`;
+    })
+    .filter(Boolean);
+  return lines.length ? lines.slice(0, 8) : ["ပြောင်းလဲမှုမတွေ့ပါ။"];
+}
 
 export default function MemberChangeApprovalsScreen() {
   const insets = useSafeAreaInsets();
   const { can, currentUser } = useAuth();
-  const { memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest, withdrawMemberChangeRequest } = useData();
+  const { members, memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest, withdrawMemberChangeRequest } = useData();
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "rejected" | "cancelled">("all");
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
@@ -81,12 +118,25 @@ export default function MemberChangeApprovalsScreen() {
     [visibleRequests]
   );
 
+  useEffect(() => {
+    const persistLastSeen = async () => {
+      if (!currentUser?.id) return;
+      await AsyncStorage.setItem(MEMBER_CHANGE_LAST_SEEN_KEY, new Date().toISOString());
+    };
+    void persistLastSeen();
+  }, [currentUser?.id, memberChangeRequests.length]);
+
   if (!canApprove && !canPropose) {
     return <AccessDenied showBack={true} />;
   }
 
-  const handleApprove = async (requestId: string) => {
+  const handleApprove = async (item: MemberChangeRequest) => {
     if (!currentUser?.id) return;
+    if (item.createdByUserId === currentUser.id) {
+      Alert.alert("ခွင့်မပြုပါ", "ကိုယ်တင်ထားသော request ကို ကိုယ်တိုင် approve မလုပ်နိုင်ပါ။");
+      return;
+    }
+    const requestId = item.id;
     const reviewNote = (draftNotes[requestId] || "").trim();
     try {
       setProcessingId(requestId);
@@ -100,8 +150,13 @@ export default function MemberChangeApprovalsScreen() {
     }
   };
 
-  const handleReject = async (requestId: string) => {
+  const handleReject = async (item: MemberChangeRequest) => {
     if (!currentUser?.id) return;
+    if (item.createdByUserId === currentUser.id) {
+      Alert.alert("ခွင့်မပြုပါ", "ကိုယ်တင်ထားသော request ကို ကိုယ်တိုင် reject မလုပ်နိုင်ပါ။");
+      return;
+    }
+    const requestId = item.id;
     const reviewNote = (draftNotes[requestId] || "").trim();
     if (!reviewNote) {
       Alert.alert("လိုအပ်ချက်", "Reject လုပ်ရန် အကြောင်းပြချက် (Review Note) ထည့်ပါ။");
@@ -119,8 +174,9 @@ export default function MemberChangeApprovalsScreen() {
     }
   };
 
-  const handleWithdraw = async (requestId: string) => {
+  const handleWithdraw = async (item: MemberChangeRequest) => {
     if (!currentUser?.id) return;
+    const requestId = item.id;
     const reviewNote = (draftNotes[requestId] || "").trim();
     try {
       setProcessingId(requestId);
@@ -257,6 +313,8 @@ export default function MemberChangeApprovalsScreen() {
         ) : (
           (tab === "pending" ? filteredPendingRequests : filteredHistoryRequests).map((item) => {
             const member = item.payload.member || {};
+            const currentMember = members.find((m) => m.id === (item.targetMemberId || (member.id as string)));
+            const changeLines = buildChangeLines(item, currentMember);
             return (
               <View key={item.id} style={styles.card}>
                 <Text style={styles.title}>
@@ -274,6 +332,14 @@ export default function MemberChangeApprovalsScreen() {
                     Name: {String(member.name || "-")} | Phone: {String(member.phone || "-")}
                   </Text>
                 )}
+                <View style={styles.changePreview}>
+                  <Text style={styles.changePreviewTitle}>ပြင်ဆင်မည့်အချက်များ</Text>
+                  {changeLines.map((line, idx) => (
+                    <Text key={`${item.id}-change-${idx}`} style={styles.changeLine}>
+                      • {line}
+                    </Text>
+                  ))}
+                </View>
                 {tab === "pending" && (
                   <>
                     <Text style={styles.noteLabel}>
@@ -292,14 +358,14 @@ export default function MemberChangeApprovalsScreen() {
                   <View style={styles.actions}>
                     <Pressable
                       style={[styles.actionBtn, styles.rejectBtn]}
-                      onPress={() => handleReject(item.id)}
+                      onPress={() => handleReject(item)}
                       disabled={processingId === item.id}
                     >
                       <Text style={styles.actionText}>ပယ်ချ</Text>
                     </Pressable>
                     <Pressable
                       style={[styles.actionBtn, styles.approveBtn]}
-                      onPress={() => handleApprove(item.id)}
+                      onPress={() => handleApprove(item)}
                       disabled={processingId === item.id}
                     >
                       <Text style={styles.actionText}>အတည်ပြု</Text>
@@ -310,7 +376,7 @@ export default function MemberChangeApprovalsScreen() {
                   <View style={styles.actions}>
                     <Pressable
                       style={[styles.actionBtn, styles.rejectBtn]}
-                      onPress={() => handleWithdraw(item.id)}
+                      onPress={() => handleWithdraw(item)}
                       disabled={processingId === item.id}
                     >
                       <Text style={styles.actionText}>ရုပ်သိမ်း</Text>
@@ -442,6 +508,24 @@ const styles = StyleSheet.create({
   },
   title: { color: Colors.light.text, fontFamily: "Inter_600SemiBold", fontSize: 14 },
   meta: { color: Colors.light.textSecondary, fontSize: 12 },
+  changePreview: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
+  },
+  changePreviewTitle: {
+    color: Colors.light.text,
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
+  changeLine: {
+    color: Colors.light.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 4 },
   actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
   approveBtn: { backgroundColor: Colors.light.tint },
