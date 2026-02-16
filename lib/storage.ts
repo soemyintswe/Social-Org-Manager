@@ -116,6 +116,9 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
 
   const request = requests[index];
   if (request.status !== "pending") throw new Error("request_not_pending");
+  if (request.assignedReviewerUserId && request.assignedReviewerUserId !== reviewerUserId) {
+    throw new Error("request_assigned_to_other_reviewer");
+  }
 
   let nextMembers = [...members];
   if (request.action === "create") {
@@ -184,6 +187,9 @@ export async function rejectMemberChangeRequest(requestId: string, reviewerUserI
   const index = requests.findIndex((item) => item.id === requestId);
   if (index === -1) throw new Error("request_not_found");
   if (requests[index].status !== "pending") throw new Error("request_not_pending");
+  if (requests[index].assignedReviewerUserId && requests[index].assignedReviewerUserId !== reviewerUserId) {
+    throw new Error("request_assigned_to_other_reviewer");
+  }
 
   requests[index] = {
     ...requests[index],
@@ -191,6 +197,26 @@ export async function rejectMemberChangeRequest(requestId: string, reviewerUserI
     reviewedByUserId: reviewerUserId,
     reviewedAt: new Date().toISOString(),
     reviewNote: reviewNote?.trim() || undefined,
+  };
+  await saveMemberChangeRequests(requests);
+}
+
+export async function assignMemberChangeRequest(
+  requestId: string,
+  assignedReviewerUserId: string | undefined,
+  assignerUserId: string
+): Promise<void> {
+  const requests = await getMemberChangeRequests();
+  const index = requests.findIndex((item) => item.id === requestId);
+  if (index === -1) throw new Error("request_not_found");
+  if (requests[index].status !== "pending") throw new Error("request_not_pending");
+
+  const targetReviewer = String(assignedReviewerUserId || "").trim();
+  requests[index] = {
+    ...requests[index],
+    assignedReviewerUserId: targetReviewer || undefined,
+    assignedByUserId: targetReviewer ? assignerUserId : undefined,
+    assignedAt: targetReviewer ? new Date().toISOString() : undefined,
   };
   await saveMemberChangeRequests(requests);
 }

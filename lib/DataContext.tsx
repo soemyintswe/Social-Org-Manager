@@ -62,6 +62,7 @@ interface DataContextValue {
   approveMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
   rejectMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
   withdrawMemberChangeRequest: (requestId: string, requesterUserId: string, note?: string) => Promise<void>;
+  assignMemberChangeRequest: (requestId: string, assignedReviewerUserId: string | undefined, assignerUserId: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -251,6 +252,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData();
   };
 
+  const assignMemberChangeRequest = async (
+    requestId: string,
+    assignedReviewerUserId: string | undefined,
+    assignerUserId: string
+  ) => {
+    await store.assignMemberChangeRequest(requestId, assignedReviewerUserId, assignerUserId);
+    await refreshData();
+  };
+
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
@@ -297,7 +307,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     upsertUserAccount, removeUserAccount,
     updateAccountSettings,
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
-    withdrawMemberChangeRequest,
+    withdrawMemberChangeRequest, assignMemberChangeRequest,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

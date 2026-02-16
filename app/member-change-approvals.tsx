@@ -115,9 +115,18 @@ function buildChangeRows(item: MemberChangeRequest, currentMember?: any): { labe
 export default function MemberChangeApprovalsScreen() {
   const insets = useSafeAreaInsets();
   const { can, currentUser } = useAuth();
-  const { members, memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest, withdrawMemberChangeRequest } = useData();
+  const {
+    members,
+    users,
+    memberChangeRequests,
+    approveMemberChangeRequest,
+    rejectMemberChangeRequest,
+    withdrawMemberChangeRequest,
+    assignMemberChangeRequest,
+  } = useData();
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "rejected" | "cancelled">("all");
+  const [pendingQueueFilter, setPendingQueueFilter] = useState<"all" | "mine" | "unassigned">("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [reviewerFilter, setReviewerFilter] = useState("");
@@ -145,8 +154,14 @@ export default function MemberChangeApprovalsScreen() {
 
   const filteredPendingRequests = useMemo(() => {
     const needle = searchText.trim().toLowerCase();
-    if (!needle) return pendingRequests;
     return pendingRequests.filter((item) => {
+      const matchesQueue =
+        pendingQueueFilter === "all" ||
+        (pendingQueueFilter === "mine" && item.assignedReviewerUserId === currentUser?.id) ||
+        (pendingQueueFilter === "unassigned" && !item.assignedReviewerUserId);
+      if (!matchesQueue) return false;
+
+      if (!needle) return true;
       const member = item.payload.member || {};
       return (
         String(item.id).toLowerCase().includes(needle) ||
@@ -157,7 +172,15 @@ export default function MemberChangeApprovalsScreen() {
         String(member.phone || "").toLowerCase().includes(needle)
       );
     });
-  }, [pendingRequests, searchText]);
+  }, [pendingRequests, searchText, pendingQueueFilter, currentUser?.id]);
+
+  const eligibleApprovers = useMemo(() => {
+    return users.filter((user) => {
+      if (!user.isActive) return false;
+      if (user.systemRole === "admin") return true;
+      return user.orgPosition === "chairperson" || user.orgPosition === "vice_chairperson";
+    });
+  }, [users]);
 
   const filteredHistoryRequests = useMemo(() => {
     const needle = searchText.trim().toLowerCase();
@@ -269,6 +292,19 @@ export default function MemberChangeApprovalsScreen() {
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ရုပ်သိမ်းပြီးပါပြီ။");
     } catch (error: any) {
       Alert.alert("အမှား", error?.message || "Withdraw မလုပ်နိုင်ပါ။");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleAssignReviewer = async (item: MemberChangeRequest, reviewerUserId: string | undefined) => {
+    if (!currentUser?.id) return;
+    try {
+      setProcessingId(item.id);
+      await assignMemberChangeRequest(item.id, reviewerUserId, currentUser.id);
+      Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", reviewerUserId ? "Reviewer ကို assign လုပ်ပြီးပါပြီ။" : "Assignment ကိုဖြုတ်ပြီးပါပြီ။");
+    } catch (error: any) {
+      Alert.alert("အမှား", error?.message || "Assign မလုပ်နိုင်ပါ။");
     } finally {
       setProcessingId(null);
     }
@@ -471,6 +507,19 @@ export default function MemberChangeApprovalsScreen() {
             <Text style={[styles.tabText, tab === "history" && styles.tabTextActive]}>မှတ်တမ်း</Text>
           </Pressable>
         </View>
+        {tab === "pending" && canApprove && (
+          <View style={styles.filterRow}>
+            <Pressable style={[styles.filterChip, pendingQueueFilter === "all" && styles.filterChipActive]} onPress={() => setPendingQueueFilter("all")}>
+              <Text style={[styles.filterChipText, pendingQueueFilter === "all" && styles.filterChipTextActive]}>အားလုံး</Text>
+            </Pressable>
+            <Pressable style={[styles.filterChip, pendingQueueFilter === "mine" && styles.filterChipActive]} onPress={() => setPendingQueueFilter("mine")}>
+              <Text style={[styles.filterChipText, pendingQueueFilter === "mine" && styles.filterChipTextActive]}>My Queue</Text>
+            </Pressable>
+            <Pressable style={[styles.filterChip, pendingQueueFilter === "unassigned" && styles.filterChipActive]} onPress={() => setPendingQueueFilter("unassigned")}>
+              <Text style={[styles.filterChipText, pendingQueueFilter === "unassigned" && styles.filterChipTextActive]}>Unassigned</Text>
+            </Pressable>
+          </View>
+        )}
         <View style={styles.toolRow}>
           <Pressable style={styles.toolBtn} onPress={handleExportJson}>
             <Ionicons name="download-outline" size={16} color={Colors.light.tint} />
@@ -554,6 +603,11 @@ export default function MemberChangeApprovalsScreen() {
             const member = item.payload.member || {};
             const currentMember = members.find((m) => m.id === (item.targetMemberId || (member.id as string)));
             const changeLines = buildChangeLines(item, currentMember, 8);
+            const assignedToOther =
+              !!item.assignedReviewerUserId &&
+              !!currentUser?.id &&
+              item.assignedReviewerUserId !== currentUser.id;
+            const assignedUser = users.find((u) => u.id === item.assignedReviewerUserId);
             return (
               <View key={item.id} style={styles.card}>
                 <Text style={styles.title}>
@@ -568,6 +622,14 @@ export default function MemberChangeApprovalsScreen() {
                   </Text>
                 )}
                 <Text style={styles.meta}>Status: {item.status.toUpperCase()}</Text>
+                {!!item.assignedReviewerUserId && (
+                  <Text style={styles.meta}>
+                    Assigned To: {assignedUser?.displayName || item.assignedReviewerUserId}
+                  </Text>
+                )}
+                {!item.assignedReviewerUserId && tab === "pending" && (
+                  <Text style={styles.meta}>Assigned To: -</Text>
+                )}
                 {!!item.reviewedByUserId && <Text style={styles.meta}>Reviewed By: {item.reviewedByUserId}</Text>}
                 {!!item.reviewedAt && <Text style={styles.meta}>Reviewed At: {new Date(item.reviewedAt).toLocaleString()}</Text>}
                 {!!item.reviewNote && <Text style={styles.meta}>Review Note: {item.reviewNote}</Text>}
@@ -590,6 +652,42 @@ export default function MemberChangeApprovalsScreen() {
                 </View>
                 {tab === "pending" && (
                   <>
+                    {canApprove && (
+                      <View style={styles.assignRow}>
+                        <Pressable
+                          style={styles.assignChip}
+                          onPress={() => handleAssignReviewer(item, currentUser?.id)}
+                          disabled={processingId === item.id || !currentUser?.id}
+                        >
+                          <Text style={styles.assignChipText}>Assign Me</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.assignChip}
+                          onPress={() => handleAssignReviewer(item, undefined)}
+                          disabled={processingId === item.id}
+                        >
+                          <Text style={styles.assignChipText}>Unassign</Text>
+                        </Pressable>
+                        {eligibleApprovers
+                          .filter((user) => user.id !== currentUser?.id)
+                          .slice(0, 2)
+                          .map((user) => (
+                            <Pressable
+                              key={`${item.id}-assign-${user.id}`}
+                              style={styles.assignChip}
+                              onPress={() => handleAssignReviewer(item, user.id)}
+                              disabled={processingId === item.id}
+                            >
+                              <Text style={styles.assignChipText}>{user.displayName}</Text>
+                            </Pressable>
+                          ))}
+                      </View>
+                    )}
+                    {assignedToOther && (
+                      <Text style={styles.assignedWarnText}>
+                        ဤ request ကို အခြား reviewer ထံ assign ထားသောကြောင့် Approve/Reject မလုပ်နိုင်ပါ။
+                      </Text>
+                    )}
                     <Text style={styles.noteLabel}>
                       {canApprove ? "Review Note" : "Withdraw Note"} {canApprove ? "(reject အတွက်လိုအပ်)" : "(optional)"}
                     </Text>
@@ -607,14 +705,14 @@ export default function MemberChangeApprovalsScreen() {
                     <Pressable
                       style={[styles.actionBtn, styles.rejectBtn]}
                       onPress={() => handleReject(item)}
-                      disabled={processingId === item.id}
+                      disabled={processingId === item.id || assignedToOther}
                     >
                       <Text style={styles.actionText}>ပယ်ချ</Text>
                     </Pressable>
                     <Pressable
                       style={[styles.actionBtn, styles.approveBtn]}
                       onPress={() => handleApprove(item)}
-                      disabled={processingId === item.id}
+                      disabled={processingId === item.id || assignedToOther}
                     >
                       <Text style={styles.actionText}>အတည်ပြု</Text>
                     </Pressable>
@@ -820,6 +918,25 @@ const styles = StyleSheet.create({
   },
   toolText: { color: Colors.light.tint, fontFamily: "Inter_600SemiBold", fontSize: 12 },
   noteLabel: { color: Colors.light.textSecondary, fontSize: 12, fontFamily: "Inter_500Medium" },
+  assignRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  assignChip: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    backgroundColor: Colors.light.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assignChipText: {
+    color: Colors.light.tint,
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
+  assignedWarnText: {
+    color: "#B45309",
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
   noteInput: {
     borderWidth: 1,
     borderColor: Colors.light.border,

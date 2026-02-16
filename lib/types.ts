@@ -168,6 +168,9 @@ export interface MemberChangeRequest {
   createdByUserId: string;
   createdByMemberId?: string;
   createdAt: string;
+  assignedReviewerUserId?: string;
+  assignedByUserId?: string;
+  assignedAt?: string;
   reviewedByUserId?: string;
   reviewedAt?: string;
   reviewNote?: string;
