@@ -52,12 +52,17 @@ export default function FloatingTabMenu() {
         route: "/data-management",
         enabled: can("system.manage"),
       },
+    {
+        name: "ချိန်ညှိရန်",
+        icon: "options-outline",
+        route: "/settings",
+      },
     ].filter((item) => item.enabled !== false);
   }, [can]);
 
   const handleNavigate = (route: string) => {
     setIsOpen(false);
-    router.push(route);
+    router.push(route as any);
   };
 
   const handleSignOut = async () => {
@@ -66,7 +71,7 @@ export default function FloatingTabMenu() {
     router.replace("/sign-in");
   };
 
-  if (!isAuthenticated) return null;
+ if (!isAuthenticated) return null;
 
   return (
     <>
@@ -104,7 +109,7 @@ export default function FloatingTabMenu() {
             </Pressable>
           </View>
         )}
-      </View>
+     </View>
     </>
   );
 }

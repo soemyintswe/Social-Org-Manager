@@ -281,29 +281,33 @@ export default function FinanceScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <View style={{ width: 140 }} />
-        <Text style={[styles.title, { flex: 1, textAlign: 'center' }]}>ငွေစာရင်းမှတ်တမ်း</Text>
-        <View style={[styles.headerButtons, { width: 190, justifyContent: 'flex-end', paddingRight: 110 }]}>
-          <Pressable
-            style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-            onPress={() => router.push("/transaction-data-management")}
-          >
-            <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} {...({ title: "ငွေစာရင်း Data Tools" } as any)} />
+      <View style={[styles.header, { flexDirection: 'column', alignItems: 'stretch', gap: 5 }]}>
+        <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", marginHorizontal: 50 }}>
+          <Pressable onPress={() => router.replace("/")} style={{ padding: 4, position: "absolute", left: 0, zIndex: 10 }}>
+            <Ionicons name="home" size={24} color={Colors.light.text} />
           </Pressable>
-          <Pressable
-            style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-            onPress={handleOpenSettings}
-          >
-            <Ionicons name="wallet-outline" size={20} color={Colors.light.text} {...({ title: "လက်ကျန်ငွေစာရင်း" } as any)} />
-          </Pressable>
-          <Pressable
-            style={styles.addButton}
-            onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
-          >
-            <Ionicons name="add" size={24} color="white" {...({ title: "စာရင်းသစ်ထည့်ရန်" } as any)} />
-          </Pressable>
+          <View style={styles.headerButtons}>
+            <Pressable
+              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+              onPress={() => router.push("/transaction-data-management")}
+            >
+              <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} />
+            </Pressable>
+            <Pressable
+              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+              onPress={handleOpenSettings}
+            >
+              <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
+            </Pressable>
+            <Pressable
+              style={styles.addButton}
+              onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
+            >
+              <Ionicons name="add" size={24} color="white" />
+            </Pressable>
+          </View>
         </View>
+        <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း</Text>
       </View>
 
       <View style={styles.filterContainer}>
@@ -495,7 +499,7 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
   title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
-  headerButtons: { flexDirection: "row", gap: 10 },
+  headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
   addButton: {
     width: 40,
     height: 40,

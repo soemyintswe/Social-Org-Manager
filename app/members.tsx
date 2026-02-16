@@ -46,6 +46,7 @@ export default function MembersScreen() {
   const [filterGender, setFilterGender] = useState<"all" | "male" | "female">("all");
   const [filterAge, setFilterAge] = useState<"all" | "18-60" | "60-75" | "over75" | "upcoming" | "custom" | "unknown">("all");
   const [showSortModal, setShowSortModal] = useState(false);
+  const [showFilterModal, setShowFilterModal] = useState(false);
 
   // Custom Age Filter State
   const [customAgeModalVisible, setCustomAgeModalVisible] = useState(false);
@@ -304,11 +305,14 @@ export default function MembersScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-        <Text style={styles.headerTitle}>
-          အသင်းဝင်များ ({sortedMembers.length}{sortedMembers.length !== sourceMembers.length ? ` / ${sourceMembers.length}` : ""})
-        </Text>
-        {canManageMembers ? (
-          <View style={styles.headerActions}>
+        <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+          <Pressable onPress={() => router.replace("/")} style={{ marginRight: 10 }}>
+            <Ionicons name="home" size={24} color={Colors.light.text} />
+          </Pressable>
+          <Text style={[styles.headerTitle, { textAlign: "left", flex: 0, marginRight: 10 }]}>
+            အသင်းဝင်များ ({sortedMembers.length}{sortedMembers.length !== sourceMembers.length ? ` / ${sourceMembers.length}` : ""})
+          </Text>
+          {canManageMembers && (
             <Pressable
               onPress={() => router.push("/member-data-management")}
               style={styles.headerActionBtn}
@@ -316,8 +320,12 @@ export default function MembersScreen() {
               accessibilityLabel="Member Data Tools"
             >
               <Ionicons name="cloud-download-outline" size={21} color={Colors.light.tint} />
-              <Text style={styles.headerActionText}>Data</Text>
+              <Text style={styles.headerActionText} numberOfLines={1}>Data</Text>
             </Pressable>
+          )}
+        </View>
+        {canManageMembers ? (
+          <View style={styles.headerActions}>
             <Pressable
               onPress={() => router.push("/add-member" as any)}
               style={styles.headerActionBtn}
@@ -325,120 +333,30 @@ export default function MembersScreen() {
               accessibilityLabel="Add Member"
             >
               <Ionicons name="add-circle-outline" size={21} color={Colors.light.tint} />
-              <Text style={styles.headerActionText}>Add</Text>
+              <Text style={styles.headerActionText} numberOfLines={1}>Add</Text>
             </Pressable>
           </View>
-        ) : null}
+        ) : <View style={{ width: 24 }} />}
       </View>
 
 
       <View>
-        <View style={styles.searchBar}>
-          <Ionicons name="search" size={20} color={Colors.light.textSecondary} />
-          <TextInput 
-            style={styles.searchInput} 
-            placeholder="အမည် / ID / Phone / Email ရှာရန်..." 
-            value={search}
-            onChangeText={setSearch}
-          />
-        </View>
-
-        <View style={styles.statusFilterRow}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-            <Pressable
-              style={[styles.statusChip, filterStatus === "all" && styles.statusChipActive]}
-              onPress={() => setFilterStatus("all")}
-            >
-              <Text style={[styles.statusChipText, filterStatus === "all" && styles.statusChipTextActive]}>အားလုံး</Text>
-            </Pressable>
-            {MEMBER_STATUS_VALUES.map((statusOption) => (
-              <Pressable
-                key={statusOption}
-                style={[styles.statusChip, filterStatus === statusOption && styles.statusChipActive]}
-                onPress={() => setFilterStatus(statusOption)}
-              >
-                <Text style={[styles.statusChipText, filterStatus === statusOption && styles.statusChipTextActive]}>
-                  {MEMBER_STATUS_LABELS[statusOption]}
-                </Text>
-              </Pressable>
-            ))}
-            <Pressable
-                style={[styles.statusChip, filterAge === "upcoming" && styles.statusChipActive]}
-                onPress={() => setFilterAge("upcoming")}
-              >
-                <Text style={[styles.statusChipText, filterAge === "upcoming" && styles.statusChipTextActive]}>မွေးနေ့နီးသူများ</Text>
-              </Pressable>
-          </ScrollView>
-        </View>
-
-        <View style={styles.statusFilterRow}>
+        <View style={{ flexDirection: 'row', paddingHorizontal: 15, marginBottom: 10, gap: 10, alignItems: 'center' }}>
+          <View style={[styles.searchBar, { margin: 0, flex: 1 }]}>
+            <Ionicons name="search" size={20} color={Colors.light.textSecondary} />
+            <TextInput 
+              style={styles.searchInput} 
+              placeholder="အမည် / ID / Phone / Email ရှာရန်..." 
+              value={search}
+              onChangeText={setSearch}
+            />
+          </View>
           <Pressable
-            style={[styles.statusChip, filterGender === "all" && styles.statusChipActive]}
-            onPress={() => setFilterGender("all")}
+            style={[styles.filterBtn, (filterStatus !== 'all' || filterGender !== 'all' || filterAge !== 'all') && styles.filterBtnActive]}
+            onPress={() => setShowFilterModal(true)}
           >
-            <Text style={[styles.statusChipText, filterGender === "all" && styles.statusChipTextActive]}>ကျား/မ အားလုံး</Text>
+            <Ionicons name="options-outline" size={22} color={(filterStatus !== 'all' || filterGender !== 'all' || filterAge !== 'all') ? "#fff" : Colors.light.text} />
           </Pressable>
-          <Pressable
-            style={[styles.statusChip, filterGender === "male" && styles.statusChipActive]}
-            onPress={() => setFilterGender("male")}
-          >
-            <Text style={[styles.statusChipText, filterGender === "male" && styles.statusChipTextActive]}>အမျိုးသား</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.statusChip, filterGender === "female" && styles.statusChipActive]}
-            onPress={() => setFilterGender("female")}
-          >
-            <Text style={[styles.statusChipText, filterGender === "female" && styles.statusChipTextActive]}>အမျိုးသမီး</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.statusFilterRow}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3 }}>
-            <Pressable
-              style={[styles.statusChip, filterAge === "all" && styles.statusChipActive]}
-              onPress={() => setFilterAge("all")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "all" && styles.statusChipTextActive]}>အသက် အားလုံး</Text>
-            </Pressable>
-
-           <Pressable
-              style={[styles.statusChip, filterAge === "18-60" && { backgroundColor: "#10B981", borderColor: "#10B981" }]}
-              onPress={() => setFilterAge("18-60")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "18-60" && styles.statusChipTextActive]}>18-60 နှစ်</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.statusChip, filterAge === "60-75" && { backgroundColor: "#F59E0B", borderColor: "#F59E0B" }]}
-              onPress={() => setFilterAge("60-75")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "60-75" && styles.statusChipTextActive]}>60-75 နှစ်</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.statusChip, filterAge === "over75" && { backgroundColor: "#EF4444", borderColor: "#EF4444" }]}
-              onPress={() => setFilterAge("over75")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "over75" && styles.statusChipTextActive]}>75 နှစ်အထက်</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.statusChip, filterAge === "unknown" && styles.statusChipActive]}
-              onPress={() => setFilterAge("unknown")}
-            >
-              <Text style={[styles.statusChipText, filterAge === "unknown" && styles.statusChipTextActive]}>အသက်မသိသူများ</Text>
-            </Pressable>
-            
-                <Pressable
-                  style={[styles.statusChip, filterAge === "custom" && styles.statusChipActive]}
-                  onPress={() => {
-                    setFilterAge("custom");
-                    setTargetDateText(targetDate.toISOString().split("T")[0]);
-                    setCustomAgeModalVisible(true);
-                  }}
-                >
-                  <Text style={[styles.statusChipText, filterAge === "custom" && styles.statusChipTextActive]}>စိတ်ကြိုက် (Custom)</Text>
-                </Pressable>
-          </ScrollView>
         </View>
 
         <View style={styles.filterRow}>
@@ -560,6 +478,103 @@ export default function MembersScreen() {
       </Modal>
 
       <Modal
+        visible={showFilterModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowFilterModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { width: '90%', maxHeight: '80%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+              <Text style={styles.modalTitle}>Filter Options</Text>
+              <Pressable onPress={() => setShowFilterModal(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.filterSectionTitle}>Status</Text>
+              <View style={styles.chipGrid}>
+                <Pressable
+                  style={[styles.statusChip, filterStatus === "all" && styles.statusChipActive]}
+                  onPress={() => setFilterStatus("all")}
+                >
+                  <Text style={[styles.statusChipText, filterStatus === "all" && styles.statusChipTextActive]}>အားလုံး</Text>
+                </Pressable>
+                {MEMBER_STATUS_VALUES.map((statusOption) => (
+                  <Pressable
+                    key={statusOption}
+                    style={[styles.statusChip, filterStatus === statusOption && styles.statusChipActive]}
+                    onPress={() => setFilterStatus(statusOption)}
+                  >
+                    <Text style={[styles.statusChipText, filterStatus === statusOption && styles.statusChipTextActive]}>
+                      {MEMBER_STATUS_LABELS[statusOption]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.filterSectionTitle}>Gender</Text>
+              <View style={styles.chipGrid}>
+                <Pressable style={[styles.statusChip, filterGender === "all" && styles.statusChipActive]} onPress={() => setFilterGender("all")}>
+                  <Text style={[styles.statusChipText, filterGender === "all" && styles.statusChipTextActive]}>အားလုံး</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterGender === "male" && styles.statusChipActive]} onPress={() => setFilterGender("male")}>
+                  <Text style={[styles.statusChipText, filterGender === "male" && styles.statusChipTextActive]}>အမျိုးသား</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterGender === "female" && styles.statusChipActive]} onPress={() => setFilterGender("female")}>
+                  <Text style={[styles.statusChipText, filterGender === "female" && styles.statusChipTextActive]}>အမျိုးသမီး</Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.filterSectionTitle}>Age</Text>
+              <View style={styles.chipGrid}>
+                <Pressable style={[styles.statusChip, filterAge === "all" && styles.statusChipActive]} onPress={() => setFilterAge("all")}>
+                  <Text style={[styles.statusChipText, filterAge === "all" && styles.statusChipTextActive]}>အားလုံး</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterAge === "18-60" && styles.statusChipActive]} onPress={() => setFilterAge("18-60")}>
+                  <Text style={[styles.statusChipText, filterAge === "18-60" && styles.statusChipTextActive]}>18-60 နှစ်</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterAge === "60-75" && styles.statusChipActive]} onPress={() => setFilterAge("60-75")}>
+                  <Text style={[styles.statusChipText, filterAge === "60-75" && styles.statusChipTextActive]}>60-75 နှစ်</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterAge === "over75" && styles.statusChipActive]} onPress={() => setFilterAge("over75")}>
+                  <Text style={[styles.statusChipText, filterAge === "over75" && styles.statusChipTextActive]}>75 နှစ်အထက်</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterAge === "upcoming" && styles.statusChipActive]} onPress={() => setFilterAge("upcoming")}>
+                  <Text style={[styles.statusChipText, filterAge === "upcoming" && styles.statusChipTextActive]}>မွေးနေ့နီးသူများ</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterAge === "unknown" && styles.statusChipActive]} onPress={() => setFilterAge("unknown")}>
+                  <Text style={[styles.statusChipText, filterAge === "unknown" && styles.statusChipTextActive]}>အသက်မသိသူများ</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterAge === "custom" && styles.statusChipActive]} onPress={() => {
+                    setFilterAge("custom");
+                    setTargetDateText(targetDate.toISOString().split("T")[0]);
+                    setCustomAgeModalVisible(true);
+                  }}>
+                  <Text style={[styles.statusChipText, filterAge === "custom" && styles.statusChipTextActive]}>စိတ်ကြိုက်</Text>
+                </Pressable>
+              </View>
+
+              <Pressable 
+                style={{ marginTop: 20, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8 }}
+                onPress={() => {
+                  setFilterStatus('all');
+                  setFilterGender('all');
+                  setFilterAge('all');
+                }}
+              >
+                <Text style={{ color: Colors.light.textSecondary }}>Reset All Filters</Text>
+              </Pressable>
+            </ScrollView>
+            <Pressable style={[styles.saveBtn, { marginTop: 15 }]} onPress={() => setShowFilterModal(false)}>
+              <Text style={styles.saveText}>Apply</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={customAgeModalVisible}
         transparent={true}
         animationType="slide"
@@ -626,7 +641,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   backBtn: { padding: 4 },
   addBtn: { padding: 8 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 8, marginRight: 120 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   headerActionBtn: {
     minWidth: 56,
     height: 48,
@@ -645,8 +660,15 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
   },
   searchBar: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, margin: 15, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, height: 44 },
+  filterBtn: {
+    width: 44, height: 44, borderRadius: 10, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, justifyContent: 'center', alignItems: 'center'
+  },
+  filterBtnActive: {
+    backgroundColor: Colors.light.tint, borderColor: Colors.light.tint
+  },
   searchInput: { flex: 1, marginLeft: 10, fontSize: 15, color: Colors.light.text },
   filterRow: { flexDirection: "row", paddingHorizontal: 15, marginBottom: 10, gap: 10 },
+  filterScrollViewContent: { gap: 6, paddingHorizontal: 15 },
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },
   sortBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: Colors.light.surface, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   sortBtnText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_500Medium" },
@@ -666,8 +688,10 @@ const styles = StyleSheet.create({
   modalOption: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   optionText: { fontSize: 16, color: Colors.light.text },
   activeOption: { color: Colors.light.tint, fontFamily: "Inter_600SemiBold" },
-  statusFilterRow: { flexDirection: "row", paddingHorizontal: 15, marginBottom: 10, gap: 8 },
-  statusChip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
+  statusFilterRow: { marginBottom: 8 },
+  filterSectionTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginTop: 15, marginBottom: 8 },
+  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  statusChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
   statusChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   statusChipText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   statusChipTextActive: { color: "#fff" },

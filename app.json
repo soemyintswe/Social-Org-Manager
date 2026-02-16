@@ -78,7 +78,8 @@
           "savePhotosPermission": "Allow $(PRODUCT_NAME) to save member cards to your photos.",
           "isAccessMediaLocationEnabled": true
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

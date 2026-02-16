@@ -107,7 +107,7 @@ export function canAccess(
 }
 
 export function canAccessMemberRecord(profile: AccessProfile, targetMemberId: string): boolean {
-  if (canAccess(profile, "members.view_all")) return true;
+  if (canAccess(profile, "members.view_all") || isCommitteeProfile(profile)) return true;
   if (canAccess(profile, "members.view_self") && profile.memberId && profile.memberId === targetMemberId) return true;
   return false;
 }

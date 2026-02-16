@@ -10,6 +10,7 @@ const KEYS = {
   LOANS: "@orghub_loans",
   ACCOUNT_SETTINGS: "@orghub_account_settings",
   USERS: "@orghub_users",
+  USER_PASSWORDS: "@orghub_user_passwords",
 };
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
@@ -64,6 +65,30 @@ export const saveMembers = async (data: Member[]) => {
   await syncUsersWithMembers(data);
 };
 
+async function setUserPassword(userId: string, passwordPlaintext: string): Promise<void> {
+    const passwords = await getUserPasswords();
+    const updatedPasswords = { ...passwords, [userId]: passwordPlaintext };
+    await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(updatedPasswords));
+}
+
+export async function verifyPassword(userId: string, passwordPlaintext: string): Promise<boolean> {
+    const passwords = await getUserPasswords();
+    const storedPassword = passwords[userId];
+    return storedPassword === passwordPlaintext;
+}
+
+async function getUserPasswords(): Promise<Record<string, string>> {
+    try {
+        const data = await AsyncStorage.getItem(KEYS.USER_PASSWORDS);
+        return data ? JSON.parse(data) : {};
+    } catch (e) {
+        console.error(`Error reading ${KEYS.USER_PASSWORDS}:`, e);
+        return {};
+    }
+}
+
+
+
 export async function importMembers(newMembers: Member[]): Promise<void> {
   const members = await getMembers();
   const memberMap = new Map(members.map((m) => [m.id, m]));
@@ -84,7 +109,20 @@ export async function addMember(member: any): Promise<Member> {
     avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
     createdAt: new Date().toISOString()
   };
-  await saveMembers([...members, newMember]);
+
+    await saveMembers([...members, newMember]);
+
+    // Set default password based on member ID
+    let defaultPassword = "member";
+    if (newMember.id && newMember.id.length > 3) {
+        const lastThree = newMember.id.slice(-3);
+        defaultPassword = `ID${lastThree}`;
+    }
+
+    const user = await getUsers()
+    const newUser = user.find((e) => e.memberId === newMember.id)
+    await setUserPassword(newUser?.id as string, defaultPassword);
+
   return newMember;
 }
 
@@ -232,6 +270,28 @@ export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
 export const saveUsers = (data: UserAccount[]) => AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
 
 export async function seedDefaultAdminUser() {
+  // 1. Seeding: If no members exist, try to load from default-data.json
+  const existingMembers = await getMembers();
+  if (existingMembers.length === 0) {
+    try {
+      // Expo Go တွင် Data များပါလာစေရန် require ကိုအသုံးပြု၍ Bundle လုပ်ပါသည်
+      // @ts-ignore
+      const data = require("../assets/data/default-data.json");
+      const pairs: [string, string][] = [];
+
+      // default-data.json တွင် Key များနှင့် Value များသည် သိမ်းဆည်းထားသည့်အတိုင်း (Stringified JSON) ပါရှိပြီးဖြစ်သည်
+      Object.values(KEYS).forEach((key) => {
+        if (data[key]) {
+          pairs.push([key, data[key]]);
+        }
+      });
+
+      if (pairs.length > 0) await AsyncStorage.multiSet(pairs);
+    } catch (e) {
+      console.log("Seeding skipped (no default data found):", e);
+    }
+  }
+
   const users = await getUsers();
   const adminExists = users.some(u => u.systemRole === "admin");
   if (!adminExists) {
@@ -240,6 +300,8 @@ export async function seedDefaultAdminUser() {
       displayName: "System Admin",
       systemRole: "admin",
       isActive: true,
+
+
       createdAt: new Date().toISOString()
     };
     await saveUsers([admin, ...users]);
@@ -247,6 +309,11 @@ export async function seedDefaultAdminUser() {
 
   // Sync existing members to user accounts
   const members = await getMembers();
+    await setUserPassword("admin-001", "Admin");
+
+
+
+
   await syncUsersWithMembers(members);
 }
 

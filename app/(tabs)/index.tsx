@@ -12,6 +12,7 @@ import {
   ToastAndroid,
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
+import { default as Constants } from 'expo-constants';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -278,7 +279,9 @@ export default function DashboardScreen() {
   // Schedule Birthday Notification
   useEffect(() => {
     const scheduleBirthdayNotification = async () => {
-      if (upcomingBirthdays.length > 0 && Platform.OS !== 'web') {
+      // Expo Go (Android) တွင် Notification မရသဖြင့် Development Build တွင်သာ အလုပ်လုပ်စေမည်
+      const isExpoGo = Constants.appOwnership === 'expo';
+      if (upcomingBirthdays.length > 0 && Platform.OS !== 'web' && !(Platform.OS === 'android' && isExpoGo)) {
         try {
           const Notifications = require('expo-notifications');
           
@@ -350,24 +353,10 @@ export default function DashboardScreen() {
       contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
       showsVerticalScrollIndicator={false}
     >
-      <View style={[styles.header, { paddingTop: 10, paddingBottom: 10 }]}>
+      <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>မင်္ဂလာပါ</Text>
           <Text style={styles.orgName}>OrgHub Dashboard</Text>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 10, marginRight: 110 }}>
-          <Pressable 
-            style={styles.profileBtn}
-            onPress={() => router.replace("/")}
-          >
-            <Ionicons name="home-outline" size={24} color={Colors.light.text} />
-          </Pressable>
-          <Pressable 
-            style={styles.profileBtn}
-            onPress={async () => refreshData && await refreshData()}
-          >
-            <Ionicons name="refresh-outline" size={24} color={Colors.light.text} />
-          </Pressable>
         </View>
       </View>
 

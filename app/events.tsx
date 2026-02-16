@@ -211,14 +211,15 @@ export default function EventsScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <View style={{ width: 50, alignItems: 'flex-start' }}>
-         <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.addBtn, { flexDirection: 'row', alignItems: 'center', padding: 4 }]}>
-           <Ionicons name="add" size={24} color={Colors.light.tint} />
-           <Text style={{ color: Colors.light.tint, marginLeft: 5, fontSize: 16, textAlign: 'left' }}>အသစ်ထည့်ရန်</Text>
-         </Pressable>        </View>
-        <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>လှုပ်ရှားမှုနှင့် သတင်းများ</Text>
-        <View style={{ width: 50, alignItems: 'flex-end', display: 'none' }}/>
+      <View style={[styles.header, { paddingVertical: 10 }]}>
+        <Pressable onPress={() => router.replace("/")} style={{ marginRight: 5, padding: 4 }}>
+          <Ionicons name="home" size={22} color={Colors.light.text} />
+        </Pressable>
+        <Text style={styles.headerTitle}>လှုပ်ရှားမှုများ</Text>
+        <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.headerActionBtn, { marginRight: 95 }]}>
+          <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
+          <Text style={styles.headerActionText} numberOfLines={1}>အသစ်</Text>
+        </Pressable>
       </View>
 
       <FlatList
@@ -338,9 +339,23 @@ export default function EventsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
-  headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  backBtn: { padding: 1 },
-  addBtn: { padding: 15 },
+  headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },
+  headerActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
+  headerActionText: {
+    fontSize: 12,
+    color: Colors.light.tint,
+    fontFamily: "Inter_600SemiBold",
+    marginLeft: 4,
+  },
   list: { padding: 20 },
   card: { backgroundColor: "white", borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: Colors.light.border, overflow: 'hidden' },
   cardContent: { padding: 15 },

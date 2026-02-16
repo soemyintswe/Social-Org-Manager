@@ -1,252 +1,137 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Redirect, router } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import { useRouter } from "expo-router";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "@/constants/colors";
-import { useAuth } from "@/lib/AuthContext";
-import { useData } from "@/lib/DataContext";
-import { seedDefaultAdminUser } from "@/lib/storage";
-import { normalizeOrgPosition, ORG_POSITION_LABELS } from "@/lib/types";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useAuth } from "../lib/AuthContext";
+import { ORG_POSITION_LABELS } from "../lib/types";
 
 export default function SignInScreen() {
-  const insets = useSafeAreaInsets();
-  const { members, refreshData } = useData();
-  const { loading, isAuthenticated, availableUsers, signIn } = useAuth();
-  const [selectedUserId, setSelectedUserId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { availableUsers, signIn } = useAuth();
+  const router = useRouter();
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
-  const memberById = useMemo(() => {
-    return new Map(members.map((member) => [member.id, member]));
-  }, [members]);
-
-  useEffect(() => {
-    if (!availableUsers.length) {
-      setSelectedUserId("");
-      return;
-    }
-    if (!selectedUserId || !availableUsers.some((user) => user.id === selectedUserId)) {
-      setSelectedUserId(availableUsers[0].id);
-    }
-  }, [availableUsers, selectedUserId]);
-
-  if (loading) {
-    return (
-      <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color={Colors.light.tint} />
-      </View>
-    );
-  }
-
-  if (isAuthenticated) {
-    return <Redirect href="/" />;
-  }
-
-  const handleSignIn = async () => {
-    if (!selectedUserId || submitting) return;
-    setSubmitting(true);
+  const handleSignIn = async (userId: string) => {
+    if (isSigningIn) return;
+    setIsSigningIn(true);
     try {
-      const ok = await signIn(selectedUserId);
-      if (!ok) {
-        Alert.alert("Sign In Failed", "ရွေးထားသော account ဖြင့် Sign In မအောင်မြင်ပါ။");
-        return;
+      const success = await signIn(userId);
+      if (success) {
+        // Navigate to root (which redirects to tabs)
+        router.replace("/");
+      } else {
+        Alert.alert("အကောင့်ဝင်မရပါ", "အသုံးပြုသူအကောင့်ကို ရှာမတွေ့ပါ သို့မဟုတ် ပိတ်ထားပါသည်။");
       }
-      router.replace("/");
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "အကောင့်ဝင်ရာတွင် ပြဿနာရှိနေပါသည်။");
     } finally {
-      setSubmitting(false);
+      setIsSigningIn(false);
     }
-  };
-
-  const handleRefresh = async () => {
-    await seedDefaultAdminUser();
-    await refreshData();
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>OrgHub Sign In</Text>
-        <Text style={styles.subtitle}>အသုံးပြုလိုသော Account တစ်ခုရွေးပြီး ဝင်ရောက်ပါ။</Text>
-
-        <View style={styles.card}>
-          {availableUsers.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="alert-circle-outline" size={28} color={Colors.light.textSecondary} />
-              <Text style={styles.emptyTitle}>အသုံးပြုနိုင်သော Account မရှိပါ</Text>
-              <Text style={styles.emptyText}>
-                Member data နှင့် user account synchronization ပြန်လုပ်ရန် Refresh ကိုနှိပ်ပါ။
-              </Text>
-              <Pressable style={styles.refreshBtn} onPress={handleRefresh}>
-                <Ionicons name="refresh-outline" size={18} color="#fff" />
-                <Text style={styles.refreshText}>Refresh</Text>
-              </Pressable>
-            </View>
-          ) : (
-            availableUsers.map((user) => {
-              const selected = selectedUserId === user.id;
-              const member = user.memberId ? memberById.get(user.memberId) : undefined;
-              const orgPosition = normalizeOrgPosition(user.orgPosition || member?.orgPosition || member?.status || "member");
-              const roleText = user.systemRole === "admin" ? "System Admin" : ORG_POSITION_LABELS[orgPosition];
-
-              return (
-                <Pressable
-                  key={user.id}
-                  style={[styles.userRow, selected && styles.userRowActive]}
-                  onPress={() => setSelectedUserId(user.id)}
-                >
-                  <View style={styles.userInfo}>
-                    <Text style={styles.userName}>{user.displayName}</Text>
-                    <Text style={styles.userMeta}>
-                      {roleText}
-                      {user.memberId ? ` • ${user.memberId}` : ""}
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name={selected ? "radio-button-on" : "radio-button-off"}
-                    size={20}
-                    color={selected ? Colors.light.tint : Colors.light.textSecondary}
-                  />
-                </Pressable>
-              );
-            })
-          )}
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <View style={styles.logoContainer}>
+          <Ionicons name="people" size={40} color="#fff" />
         </View>
+        <Text style={styles.appName}>Social Org Manager</Text>
+        <Text style={styles.title}>အကောင့်ဝင်ရန် ရွေးချယ်ပါ</Text>
+      </View>
 
-        <Pressable
-          style={[styles.signInBtn, (!selectedUserId || submitting) && { opacity: 0.6 }]}
-          onPress={handleSignIn}
-          disabled={!selectedUserId || submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Ionicons name="log-in-outline" size={18} color="#fff" />
-              <Text style={styles.signInText}>Sign In</Text>
-            </>
-          )}
-        </Pressable>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {availableUsers.length === 0 ? (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="large" color="#3B82F6" />
+            <Text style={styles.emptyText}>အသုံးပြုသူများ ရှာဖွေနေပါသည်...</Text>
+          </View>
+        ) : (
+          availableUsers.map((user) => (
+            <TouchableOpacity
+              key={user.id}
+              style={styles.userCard}
+              onPress={() => handleSignIn(user.id)}
+              disabled={isSigningIn}
+            >
+              <View
+                style={[
+                  styles.avatar,
+                  { backgroundColor: user.systemRole === "admin" ? "#1F2937" : "#3B82F6" },
+                ]}
+              >
+                <Ionicons
+                  name={user.systemRole === "admin" ? "settings" : "person"}
+                  size={20}
+                  color="#fff"
+                />
+              </View>
+              <View style={styles.userInfo}>
+                <Text style={styles.displayName}>{user.displayName}</Text>
+                <Text style={styles.roleText}>
+                  {user.systemRole === "admin"
+                    ? "System Admin"
+                    : ORG_POSITION_LABELS[user.orgPosition || "member"] || user.orgPosition}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+          ))
+        )}
       </ScrollView>
-    </View>
+      
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>Expo Go Version</Text>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
+  container: { flex: 1, backgroundColor: "#F3F4F6" },
+  header: {
+    backgroundColor: "#3B82F6",
+    padding: 24,
+    paddingTop: 40,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
     alignItems: "center",
-    backgroundColor: Colors.light.background,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  content: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
+  logoContainer: {
+    width: 64, height: 64, backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 32, alignItems: "center", justifyContent: "center", marginBottom: 12,
   },
-  title: {
-    marginTop: 24,
-    fontSize: 24,
-    color: Colors.light.text,
-    fontFamily: "Inter_700Bold",
+  appName: { fontSize: 18, color: "#EBF8FF", fontWeight: "600", marginBottom: 4 },
+  title: { fontSize: 24, fontWeight: "bold", color: "#fff" },
+  scrollContent: { padding: 16, paddingBottom: 40 },
+  emptyState: { padding: 40, alignItems: "center" },
+  emptyText: { marginTop: 12, color: "#6B7280" },
+  userCard: {
+    flexDirection: "row", alignItems: "center", backgroundColor: "#fff",
+    padding: 16, borderRadius: 16, marginBottom: 12,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 2, elevation: 2,
   },
-  subtitle: {
-    marginTop: 6,
-    fontSize: 13,
-    color: Colors.light.textSecondary,
-    fontFamily: "Inter_400Regular",
+  avatar: {
+    width: 48, height: 48, borderRadius: 24, alignItems: "center",
+    justifyContent: "center", marginRight: 16,
   },
-  card: {
-    marginTop: 18,
-    backgroundColor: Colors.light.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    overflow: "hidden",
-  },
-  userRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  userRowActive: {
-    backgroundColor: Colors.light.tint + "12",
-  },
-  userInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  userName: {
-    fontSize: 15,
-    color: Colors.light.text,
-    fontFamily: "Inter_600SemiBold",
-  },
-  userMeta: {
-    marginTop: 2,
-    fontSize: 12,
-    color: Colors.light.textSecondary,
-    fontFamily: "Inter_400Regular",
-  },
-  signInBtn: {
-    marginTop: 18,
-    minHeight: 46,
-    borderRadius: 12,
-    backgroundColor: Colors.light.tint,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  signInText: {
-    color: "#fff",
-    fontSize: 15,
-    fontFamily: "Inter_600SemiBold",
-  },
-  emptyState: {
-    padding: 18,
-    alignItems: "center",
-    gap: 6,
-  },
-  emptyTitle: {
-    marginTop: 4,
-    fontSize: 15,
-    color: Colors.light.text,
-    fontFamily: "Inter_600SemiBold",
-  },
-  emptyText: {
-    fontSize: 12,
-    color: Colors.light.textSecondary,
-    textAlign: "center",
-    lineHeight: 18,
-    fontFamily: "Inter_400Regular",
-  },
-  refreshBtn: {
-    marginTop: 8,
-    minHeight: 38,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    backgroundColor: Colors.light.tint,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  refreshText: {
-    color: "#fff",
-    fontSize: 13,
-    fontFamily: "Inter_600SemiBold",
-  },
+  userInfo: { flex: 1 },
+  displayName: { fontSize: 16, fontWeight: "600", color: "#111827", marginBottom: 2 },
+  roleText: { fontSize: 14, color: "#6B7280" },
+  footer: { padding: 16, alignItems: "center" },
+  footerText: { color: "#9CA3AF", fontSize: 12 }
 });

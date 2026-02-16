@@ -49,12 +49,15 @@ export default function LoansScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.replace('/')} style={[styles.backBtn, { marginLeft: 130 }]}>
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>ချေးငွေစာရင်း</Text>
-        <Pressable onPress={() => router.push("/add-loan" as any)} style={styles.addBtn}>
-          <Ionicons name="add" size={24} color={Colors.light.tint} />
+        <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+          <Pressable onPress={() => router.replace('/')} style={{ marginRight: 10, padding: 4 }}>
+            <Ionicons name="home" size={24} color={Colors.light.text} />
+          </Pressable>
+          <Text style={styles.headerTitle}>ချေးငွေစာရင်း</Text>
+        </View>
+        <Pressable onPress={() => router.push("/add-loan" as any)} style={[styles.headerActionBtn, { marginRight: 95 }]}>
+          <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
+          <Text style={styles.headerActionText}>အသစ်</Text>
         </Pressable>
       </View>
 
@@ -125,7 +128,22 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, backgroundColor: Colors.light.surface, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   backBtn: { padding: 4 },
-  addBtn: { padding: 4 },
+  headerActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
+  headerActionText: {
+    fontSize: 12,
+    color: Colors.light.tint,
+    fontFamily: "Inter_600SemiBold",
+    marginLeft: 4,
+  },
   content: { padding: 20, paddingBottom: 40 },
   summaryGrid: { flexDirection: "row", gap: 12 },
   statBox: {
