@@ -23,6 +23,7 @@ import { Transaction, Loan, CATEGORY_LABELS } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
 
 type Tab = "transactions" | "transfers" | "loans";
+type FinanceViewScope = "all" | "self" | "member";
 
 function BalanceCard({ label, amount, icon, color }: {
   label: string;
@@ -205,6 +206,10 @@ export default function FinanceScreen() {
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [auditTxn, setAuditTxn] = useState<Transaction | null>(null);
   const [auditNote, setAuditNote] = useState("");
+  const [viewScope, setViewScope] = useState<FinanceViewScope>("all");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [showMemberPicker, setShowMemberPicker] = useState(false);
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -215,6 +220,7 @@ export default function FinanceScreen() {
   const canDeleteFinance = can("finance.delete") || can("finance.manage");
   const canAuditFlagFinance = can("finance.audit_flag");
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
+  const effectiveScope: FinanceViewScope = canViewFinanceDetail ? viewScope : "self";
 
   const handleOpenSettings = () => {
     setTempCash(accountSettings?.openingBalanceCash?.toString() || "0");
@@ -283,6 +289,31 @@ export default function FinanceScreen() {
     return fullName || anyM.email || anyM.phone || "";
   };
 
+  const memberOptions = useMemo(() => {
+    const needle = memberSearch.trim().toLowerCase();
+    const list = [...(members || [])];
+    if (!needle) return list;
+    return list.filter((member: any) => {
+      const id = String(member.id || "").toLowerCase();
+      const name = String(member.name || "").toLowerCase();
+      return id.includes(needle) || name.includes(needle);
+    });
+  }, [members, memberSearch]);
+
+  const scopedMemberId = useMemo<string | null>(() => {
+    if (effectiveScope === "all") return null;
+    if (effectiveScope === "self") return currentUser?.memberId || "__none__";
+    return selectedMemberId || "__none__";
+  }, [effectiveScope, currentUser?.memberId, selectedMemberId]);
+
+  const scopeLabel = useMemo(() => {
+    if (effectiveScope === "all") return "အားလုံး";
+    if (effectiveScope === "self") return "ကိုယ်ပိုင်";
+    const selectedName = members.find((member: any) => member.id === scopedMemberId)?.name || "";
+    if (scopedMemberId === "__none__") return "ရွေးချယ်ထားသူ";
+    return selectedName ? `${selectedName} (${scopedMemberId})` : scopedMemberId;
+  }, [effectiveScope, scopedMemberId, members]);
+
   // Filter transactions by date range
   const sortedTxns = useMemo(
     () => [...(transactions || [])]
@@ -313,10 +344,9 @@ export default function FinanceScreen() {
   );
 
   const visibleTxns = useMemo(() => {
-    if (canViewFinanceDetail) return sortedTxns;
-    if (!canViewFinanceSelf || !currentUser?.memberId) return [];
-    return sortedTxns.filter((t: any) => t.memberId === currentUser.memberId);
-  }, [sortedTxns, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
+    if (scopedMemberId === null) return sortedTxns;
+    return sortedTxns.filter((t: any) => t.memberId === scopedMemberId);
+  }, [sortedTxns, scopedMemberId]);
 
   const sortedLoans = useMemo(
     () => [...(loans || [])].sort((a, b) => {
@@ -328,16 +358,14 @@ export default function FinanceScreen() {
   );
 
   const visibleLoans = useMemo(() => {
-    if (canViewFinanceDetail) return sortedLoans;
-    if (!canViewFinanceSelf || !currentUser?.memberId) return [];
-    return sortedLoans.filter((loan: any) => loan.memberId === currentUser.memberId);
-  }, [sortedLoans, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
+    if (scopedMemberId === null) return sortedLoans;
+    return sortedLoans.filter((loan: any) => loan.memberId === scopedMemberId);
+  }, [sortedLoans, scopedMemberId]);
 
   const balanceSourceTransactions = useMemo(() => {
-    if (canViewFinanceDetail) return transactions || [];
-    if (!canViewFinanceSelf || !currentUser?.memberId) return [];
-    return (transactions || []).filter((t: any) => t.memberId === currentUser.memberId);
-  }, [transactions, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
+    if (scopedMemberId === null) return transactions || [];
+    return (transactions || []).filter((t: any) => t.memberId === scopedMemberId);
+  }, [transactions, scopedMemberId]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -413,8 +441,51 @@ export default function FinanceScreen() {
             )}
           </View>
         </View>
-        <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း</Text>
+        <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း - {scopeLabel}</Text>
       </View>
+
+      {canViewFinanceDetail && (
+        <View style={styles.scopeCard}>
+          <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
+          <View style={styles.scopeRow}>
+            <Pressable
+              style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]}
+              onPress={() => setViewScope("all")}
+            >
+              <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]}
+              onPress={() => setViewScope("self")}
+            >
+              <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]}
+              onPress={() => setViewScope("member")}
+            >
+              <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြား</Text>
+            </Pressable>
+          </View>
+
+          {viewScope === "member" && (
+            <View style={styles.memberPickerWrap}>
+              <TextInput
+                style={styles.memberSearchInput}
+                value={memberSearch}
+                onChangeText={setMemberSearch}
+                placeholder="Member ID / Full Name ရိုက်ရှာပါ"
+              />
+              <Pressable style={styles.memberPickerBtn} onPress={() => setShowMemberPicker(true)}>
+                <Text style={styles.memberPickerBtnText} numberOfLines={1}>
+                  {selectedMemberId === "" ? "Dropdown မှ Member ရွေးမည်" : `${getMemberName(selectedMemberId)} (${selectedMemberId})`}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            </View>
+          )}
+        </View>
+      )}
 
       <View style={styles.filterContainer}>
         {Platform.OS === 'web' ? (
@@ -634,6 +705,45 @@ export default function FinanceScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showMemberPicker}
+        onRequestClose={() => setShowMemberPicker(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowMemberPicker(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+            <FlatList
+              data={memberOptions}
+              keyExtractor={(item: any) => String(item.id)}
+              style={{ maxHeight: 320 }}
+              renderItem={({ item }: { item: any }) => (
+                <Pressable
+                  style={styles.memberOptionRow}
+                  onPress={() => {
+                    setSelectedMemberId(String(item.id || ""));
+                    setShowMemberPicker(false);
+                  }}
+                >
+                  <Text style={styles.memberOptionName}>{item.name || "-"}</Text>
+                  <Text style={styles.memberOptionId}>{item.id || "-"}</Text>
+                </Pressable>
+              )}
+              ListEmptyComponent={
+                <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                  <Text style={styles.emptyText}>ရွေးချယ်ရန် Member မတွေ့ပါ</Text>
+                </View>
+              }
+            />
+            <Pressable style={styles.cancelBtn} onPress={() => setShowMemberPicker(false)}>
+              <Text style={styles.cancelBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -651,6 +761,59 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
+  scopeCard: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  scopeLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+    marginBottom: 8,
+  },
+  scopeRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  scopeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  scopeChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  scopeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  scopeChipTextActive: { color: "white" },
+  memberPickerWrap: { gap: 8 },
+  memberSearchInput: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  memberPickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#F8FAFC",
+  },
+  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
   addButton: {
     width: 40,
     height: 40,
@@ -779,6 +942,13 @@ const styles = StyleSheet.create({
   saveBtnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
   clearFlagBtn: { backgroundColor: "#EF4444", paddingVertical: 12, borderRadius: 12, alignItems: "center", marginTop: 8 },
   clearFlagBtnText: { color: "#fff", fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  memberOptionRow: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  memberOptionName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  memberOptionId: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
   cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
   cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });
