@@ -147,6 +147,13 @@ export default function MemberChangeApprovalsScreen() {
     if (!currentUser?.id) return [];
     return memberChangeRequests.filter((item) => item.createdByUserId === currentUser.id);
   }, [memberChangeRequests, canApprove, currentUser?.id]);
+  const userDisplayById = useMemo(() => {
+    const map = new Map<string, string>();
+    users.forEach((user) => {
+      map.set(user.id, user.displayName || user.id);
+    });
+    return map;
+  }, [users]);
   const pendingRequests = useMemo(
     () => visibleRequests.filter((item) => item.status === "pending"),
     [visibleRequests]
@@ -222,10 +229,11 @@ export default function MemberChangeApprovalsScreen() {
       type: "member_change_requests",
       exportedAt: new Date().toISOString(),
       exportedByUserId: currentUser?.id || "",
+      exportedByDisplayName: currentUser?.displayName || "",
       count: visibleRequests.length,
       requests: visibleRequests,
     }),
-    [visibleRequests, currentUser?.id]
+    [visibleRequests, currentUser?.id, currentUser?.displayName]
   );
 
   useEffect(() => {
@@ -376,6 +384,7 @@ export default function MemberChangeApprovalsScreen() {
       const headers = [
         "exported_at",
         "exported_by",
+        "exported_by_name",
         "request_id",
         "action",
         "status",
@@ -386,8 +395,12 @@ export default function MemberChangeApprovalsScreen() {
         "requested_org_position",
         "requested_status",
         "created_by",
+        "created_by_name",
         "created_at",
+        "assigned_reviewer",
+        "assigned_reviewer_name",
         "reviewed_by",
+        "reviewed_by_name",
         "reviewed_at",
         "review_note",
       ];
@@ -395,9 +408,14 @@ export default function MemberChangeApprovalsScreen() {
         const member = item.payload.member || {};
         const exportedAt = new Date().toISOString();
         const exportedBy = currentUser?.id || "";
+        const exportedByName = currentUser?.displayName || "";
+        const createdByName = userDisplayById.get(item.createdByUserId || "") || "";
+        const assignedReviewerName = userDisplayById.get(item.assignedReviewerUserId || "") || "";
+        const reviewedByName = userDisplayById.get(item.reviewedByUserId || "") || "";
         return [
           exportedAt,
           exportedBy,
+          exportedByName,
           item.id,
           item.action,
           item.status,
@@ -408,8 +426,12 @@ export default function MemberChangeApprovalsScreen() {
           member.orgPosition || "",
           member.status || "",
           item.createdByUserId || "",
+          createdByName,
           item.createdAt || "",
+          item.assignedReviewerUserId || "",
+          assignedReviewerName,
           item.reviewedByUserId || "",
+          reviewedByName,
           item.reviewedAt || "",
           item.reviewNote || "",
         ]
@@ -643,7 +665,7 @@ export default function MemberChangeApprovalsScreen() {
                 <Text style={styles.title}>
                   {item.action.toUpperCase()} {item.targetMemberId || (member.id as string) || "-"}
                 </Text>
-                <Text style={styles.meta}>By: {item.createdByUserId}</Text>
+                <Text style={styles.meta}>By: {userDisplayById.get(item.createdByUserId || "") || item.createdByUserId}</Text>
                 <Text style={styles.meta}>At: {new Date(item.createdAt).toLocaleString()}</Text>
                 {item.status === "pending" && (
                   <Text style={[styles.meta, getPendingAgeDays(item.createdAt) >= PENDING_OVERDUE_DAYS ? styles.overdueText : undefined]}>
@@ -660,7 +682,11 @@ export default function MemberChangeApprovalsScreen() {
                 {!item.assignedReviewerUserId && tab === "pending" && (
                   <Text style={styles.meta}>Assigned To: -</Text>
                 )}
-                {!!item.reviewedByUserId && <Text style={styles.meta}>Reviewed By: {item.reviewedByUserId}</Text>}
+                {!!item.reviewedByUserId && (
+                  <Text style={styles.meta}>
+                    Reviewed By: {userDisplayById.get(item.reviewedByUserId || "") || item.reviewedByUserId}
+                  </Text>
+                )}
                 {!!item.reviewedAt && <Text style={styles.meta}>Reviewed At: {new Date(item.reviewedAt).toLocaleString()}</Text>}
                 {!!item.reviewNote && <Text style={styles.meta}>Review Note: {item.reviewNote}</Text>}
                 {!!item.payload.note && <Text style={styles.meta}>Note: {item.payload.note}</Text>}
@@ -779,20 +805,28 @@ export default function MemberChangeApprovalsScreen() {
                 <Text style={styles.modalMeta}>ID: {selectedRequest.id}</Text>
                 <Text style={styles.modalMeta}>Action: {selectedRequest.action.toUpperCase()}</Text>
                 <Text style={styles.modalMeta}>Status: {selectedRequest.status.toUpperCase()}</Text>
-                <Text style={styles.modalMeta}>Created By: {selectedRequest.createdByUserId}</Text>
+                <Text style={styles.modalMeta}>
+                  Created By: {userDisplayById.get(selectedRequest.createdByUserId || "") || selectedRequest.createdByUserId}
+                </Text>
                 <Text style={styles.modalMeta}>Created At: {new Date(selectedRequest.createdAt).toLocaleString()}</Text>
                 {!!selectedRequest.reviewedByUserId && (
-                  <Text style={styles.modalMeta}>Reviewed By: {selectedRequest.reviewedByUserId}</Text>
+                  <Text style={styles.modalMeta}>
+                    Reviewed By: {userDisplayById.get(selectedRequest.reviewedByUserId || "") || selectedRequest.reviewedByUserId}
+                  </Text>
                 )}
                 {!!selectedRequest.reviewedAt && (
                   <Text style={styles.modalMeta}>Reviewed At: {new Date(selectedRequest.reviewedAt).toLocaleString()}</Text>
                 )}
                 {!!selectedRequest.reviewNote && <Text style={styles.modalMeta}>Review Note: {selectedRequest.reviewNote}</Text>}
                 {!!selectedRequest.assignedReviewerUserId && (
-                  <Text style={styles.modalMeta}>Assigned Reviewer: {selectedRequest.assignedReviewerUserId}</Text>
+                  <Text style={styles.modalMeta}>
+                    Assigned Reviewer: {userDisplayById.get(selectedRequest.assignedReviewerUserId || "") || selectedRequest.assignedReviewerUserId}
+                  </Text>
                 )}
                 {!!selectedRequest.assignedByUserId && (
-                  <Text style={styles.modalMeta}>Assigned By: {selectedRequest.assignedByUserId}</Text>
+                  <Text style={styles.modalMeta}>
+                    Assigned By: {userDisplayById.get(selectedRequest.assignedByUserId || "") || selectedRequest.assignedByUserId}
+                  </Text>
                 )}
                 {!!selectedRequest.assignedAt && (
                   <Text style={styles.modalMeta}>Assigned At: {new Date(selectedRequest.assignedAt).toLocaleString()}</Text>
@@ -806,8 +840,9 @@ export default function MemberChangeApprovalsScreen() {
                       .reverse()
                       .map((entry, idx) => (
                         <Text key={`${selectedRequest.id}-assign-log-${idx}`} style={styles.modalMeta}>
-                          {new Date(entry.at).toLocaleString()} | {entry.action.toUpperCase()} | by {entry.byUserId}
-                          {entry.toUserId ? ` -> ${entry.toUserId}` : ""}
+                          {new Date(entry.at).toLocaleString()} | {entry.action.toUpperCase()} | by{" "}
+                          {userDisplayById.get(entry.byUserId || "") || entry.byUserId}
+                          {entry.toUserId ? ` -> ${userDisplayById.get(entry.toUserId || "") || entry.toUserId}` : ""}
                         </Text>
                       ))}
                   </>
