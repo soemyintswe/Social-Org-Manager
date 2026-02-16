@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import {
   StyleSheet,
   Text,
@@ -35,7 +35,8 @@ export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { transactions, members, loading, accountSettings, loans, getLoanOutstanding } = useData() as any;
   const { can } = useAuth();
-  const canViewReports = can("reports.view_summary") || can("reports.view_all");
+  const canViewAllReports = can("reports.view_all");
+  const canViewReports = can("reports.view_summary") || canViewAllReports;
   
   // Default to Current Year Jan 1 to Today
   const [pickerStartDate, setPickerStartDate] = useState(new Date(new Date().getFullYear(), 0, 1));
@@ -107,9 +108,9 @@ export default function ReportsScreen() {
     const totalOutstanding = (loans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
     
     return { disbursed, repaid, interest, totalOutstanding };
-  }, [filteredTxns, loans]);
+  }, [filteredTxns, loans, getLoanOutstanding]);
 
-  const getBalancesAt = (date: Date) => {
+  const getBalancesAt = useCallback((date: Date) => {
     let cash = accountSettings?.openingBalanceCash || 0;
     let bank = accountSettings?.openingBalanceBank || 0;
     
@@ -130,14 +131,14 @@ export default function ReportsScreen() {
       }
     });
     return { cash, bank, total: cash + bank };
-  };
+  }, [accountSettings, transactions]);
 
   const fundStats = useMemo(() => {
     const start = new Date(startDate); start.setDate(start.getDate() - 1);
     const opening = getBalancesAt(start);
     const closing = getBalancesAt(endDate);
     return { opening, closing };
-  }, [startDate, endDate, transactions, accountSettings]);
+  }, [startDate, endDate, getBalancesAt]);
 
   const monthsInRange = useMemo(() => {
     const months = [];
@@ -156,7 +157,23 @@ export default function ReportsScreen() {
     return months;
   }, [startDate, endDate]);
 
+  const feeSummary = useMemo(() => {
+    const feeTxns = filteredTxns.filter((t: any) => t.category === "member_fees");
+    const totalAmount = feeTxns.reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+    const paidMemberCount = new Set(
+      feeTxns
+        .map((t: any) => String(t.memberId || "").trim())
+        .filter(Boolean)
+    ).size;
+    return { totalAmount, paidMemberCount, paymentCount: feeTxns.length };
+  }, [filteredTxns]);
+
   const generatePdf = async () => {
+    if (!canViewAllReports) {
+      Alert.alert("ခွင့်မပြုပါ", "Summary-only permission ဖြစ်သောကြောင့် detailed member report ကို PDF မထုတ်နိုင်ပါ။");
+      return;
+    }
+
     const html = `
       <html>
         <head>
@@ -354,23 +371,30 @@ export default function ReportsScreen() {
               </View>
             </View>
 
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
-              {filteredTxns.filter((t: any) => t.type !== 'transfer').map((t: any) => (
-                <View key={t.id} style={styles.catRow}>
-                  <View style={styles.catInfo}>
-                    <View style={[styles.catDot, { backgroundColor: t.type === 'income' ? '#10B981' : '#F43F5E' }]} />
-                    <Text style={styles.catLabel}>
-                      {CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}
+            {canViewAllReports ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
+                {filteredTxns.filter((t: any) => t.type !== 'transfer').map((t: any) => (
+                  <View key={t.id} style={styles.catRow}>
+                    <View style={styles.catInfo}>
+                      <View style={[styles.catDot, { backgroundColor: t.type === 'income' ? '#10B981' : '#F43F5E' }]} />
+                      <Text style={styles.catLabel}>
+                        {CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}
+                      </Text>
+                      <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
+                    </View>
+                    <Text style={[styles.catValue, { color: t.type === 'income' ? '#10B981' : '#F43F5E' }]}>
+                      {t.type === 'income' ? '+' : '-'}{t.amount.toLocaleString()}
                     </Text>
-                    <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
                   </View>
-                  <Text style={[styles.catValue, { color: t.type === 'income' ? '#10B981' : '#F43F5E' }]}>
-                    {t.type === 'income' ? '+' : '-'}{t.amount.toLocaleString()}
-                  </Text>
-                </View>
-              ))}
-            </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.summaryOnlyNote}>
+                <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
+                <Text style={styles.summaryOnlyNoteText}>Summary-only permission ဖြစ်သောကြောင့် အသေးစိတ်စာရင်းများ မပြထားပါ။</Text>
+              </View>
+            )}
         </ScrollView>
       )}
 
@@ -396,18 +420,25 @@ export default function ReportsScreen() {
               <Text style={[styles.statValue, { color: "#EF4444" }]}>{loanStats.totalOutstanding.toLocaleString()} KS</Text>
             </View>
           </View>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</Text>
-            {filteredTxns.filter((t: any) => ['loan_disbursement', 'loan_repayment', 'interest_income'].includes(t.category)).map((t: any) => (
-               <View key={t.id} style={styles.catRow}>
-                  <View style={styles.catInfo}>
-                    <Text style={styles.catLabel}>{CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
-                    <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
-                  </View>
-                  <Text style={styles.catValue}>{t.amount.toLocaleString()}</Text>
-               </View>
-            ))}
-          </View>
+          {canViewAllReports ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</Text>
+              {filteredTxns.filter((t: any) => ['loan_disbursement', 'loan_repayment', 'interest_income'].includes(t.category)).map((t: any) => (
+                 <View key={t.id} style={styles.catRow}>
+                    <View style={styles.catInfo}>
+                      <Text style={styles.catLabel}>{CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
+                      <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
+                    </View>
+                    <Text style={styles.catValue}>{t.amount.toLocaleString()}</Text>
+                 </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.summaryOnlyNote}>
+              <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
+              <Text style={styles.summaryOnlyNoteText}>Summary-only permission ဖြစ်သောကြောင့် ချေးငွေ အသေးစိတ်မှတ်တမ်း မပြထားပါ။</Text>
+            </View>
+          )}
         </ScrollView>
       )}
 
@@ -437,28 +468,26 @@ export default function ReportsScreen() {
 
       {reportTab === "fees" && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <View style={{ paddingHorizontal: 20 }}>
-            <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({startDate.getFullYear()})</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-              <View style={{ paddingBottom: 20 }}>
-                <View style={styles.tableHeader}>
-                  <View style={styles.tableNameCol}>
-                    <Text style={styles.tableHeaderText}>အမည်</Text>
-                  </View>
-                  {monthsInRange.map((m) => (
-                    <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
-                      <Text style={styles.tableHeaderText}>{m.name}</Text>
+          {canViewAllReports ? (
+            <View style={{ paddingHorizontal: 20 }}>
+              <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({startDate.getFullYear()})</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                <View style={{ paddingBottom: 20 }}>
+                  <View style={styles.tableHeader}>
+                    <View style={styles.tableNameCol}>
+                      <Text style={styles.tableHeaderText}>အမည်</Text>
                     </View>
-                  ))}
-                  {/* Total Column Header */}
-                  <View style={[styles.tableMonthCol, { width: 90 }]}>
-                    <Text style={styles.tableHeaderText}>စုစုပေါင်း</Text>
+                    {monthsInRange.map((m) => (
+                      <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
+                        <Text style={styles.tableHeaderText}>{m.name}</Text>
+                      </View>
+                    ))}
+                    <View style={[styles.tableMonthCol, { width: 90 }]}>
+                      <Text style={styles.tableHeaderText}>စုစုပေါင်း</Text>
+                    </View>
                   </View>
-                </View>
 
-                {members.map((member: any) => {
-                  let memberTotal = 0;
-                  return (
+                  {members.map((member: any) => (
                     <View key={member.id} style={styles.tableRow}>
                       <View style={styles.tableNameCol}>
                         <Text style={styles.tableName} numberOfLines={1}>
@@ -466,30 +495,24 @@ export default function ReportsScreen() {
                         </Text>
                       </View>
                       {monthsInRange.map((m) => {
-                        // Find payments for this specific member and month/period
                         const monthlyPayments = transactions.filter(
                           (t: any) => {
                             if (t.memberId !== member.id || t.category !== "member_fees") return false;
-                            
+
                             if (t.feePeriodStart && t.feePeriodEnd) {
                               const start = new Date(t.feePeriodStart); start.setHours(0,0,0,0);
                               const end = new Date(t.feePeriodEnd); end.setHours(23,59,59,999);
                               const monthStart = new Date(m.year, m.monthIdx, 1);
                               const monthEnd = new Date(m.year, m.monthIdx + 1, 0);
                               return start <= monthEnd && end >= monthStart;
-                            } else {
-                              const d = new Date(t.date);
-                              return d.getMonth() === m.monthIdx && d.getFullYear() === m.year;
                             }
+
+                            const d = new Date(t.date);
+                            return d.getMonth() === m.monthIdx && d.getFullYear() === m.year;
                           }
                         );
 
                         const isPaid = monthlyPayments.length > 0;
-                        
-                        // Only add to total once for this cell to avoid double counting if a period overlaps multiple months 
-                        // However, to get the actual cash total in range, we sum filteredTxns for this member later.
-                        // For display, we just show the checkmark.
-
                         return (
                           <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
                             {isPaid ? (
@@ -503,7 +526,6 @@ export default function ReportsScreen() {
                         );
                       })}
 
-                      {/* Member Total Calculation based on filtered range */}
                       <View style={[styles.tableMonthCol, { width: 90 }]}>
                         <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
                           {filteredTxns
@@ -513,11 +535,27 @@ export default function ReportsScreen() {
                         </Text>
                       </View>
                     </View>
-                  );
-                })}
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
+          ) : (
+            <View style={[styles.section, { marginTop: 6 }]}>
+              <Text style={styles.sectionTitle}>လစဉ်ကြေး အနှစ်ချုပ်</Text>
+              <View style={styles.catRow}>
+                <Text style={styles.catLabel}>စုစုပေါင်း လစဉ်ကြေးရရှိငွေ</Text>
+                <Text style={styles.catValue}>{feeSummary.totalAmount.toLocaleString()} KS</Text>
               </View>
-            </ScrollView>
-          </View>
+              <View style={styles.catRow}>
+                <Text style={styles.catLabel}>ပေးသွင်းထားသော အသင်းဝင်ဦးရေ</Text>
+                <Text style={styles.catValue}>{feeSummary.paidMemberCount}</Text>
+              </View>
+              <View style={styles.catRow}>
+                <Text style={styles.catLabel}>ပေးသွင်းမှုအကြိမ်ရေ</Text>
+                <Text style={styles.catValue}>{feeSummary.paymentCount}</Text>
+              </View>
+            </View>
+          )}
         </ScrollView>
       )}
     </View>
@@ -581,4 +619,23 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: "row", backgroundColor: "#F8FAFC", borderRadius: 8, paddingVertical: 10, paddingHorizontal: 6, marginBottom: 4, borderWidth: 1, borderColor: "#E2E8F0" },
   tableName: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   paidBadge: { backgroundColor: Colors.light.success + "15", paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  summaryOnlyNote: {
+    marginHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 20,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: "#DBEAFE",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  summaryOnlyNoteText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#1E3A8A",
+  },
 });
