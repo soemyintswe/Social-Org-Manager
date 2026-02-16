@@ -64,6 +64,7 @@ export default function MemberDetailScreen() {
   const { members, groups, updateMember, deleteMember, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
   const { can } = useAuth();
   const member = members?.find((m: any) => m.id === id);
+  const memberId = member?.id || "";
 
   const [editName, setEditName] = useState(member?.name || "");
   const [editMemberId, setEditMemberId] = useState(member?.id || "");
@@ -80,23 +81,15 @@ export default function MemberDetailScreen() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  if (!member) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text>Member not found.</Text>
-        <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
-          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  const memberGroups = groups?.filter((g: any) => g.memberIds.includes(member?.id)) || [];
+  const memberGroups = useMemo(
+    () => groups?.filter((g: any) => g.memberIds.includes(memberId)) || [],
+    [groups, memberId]
+  );
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   // Financial Calculations
-  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === member.id) || [], [transactions, member.id]);
-  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === member.id) || [], [loans, member.id]);
+  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === memberId) || [], [transactions, memberId]);
+  const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === memberId) || [], [loans, memberId]);
 
   const stats = useMemo(() => {
     return {
@@ -107,7 +100,18 @@ export default function MemberDetailScreen() {
       loanOutstanding: memberLoans.reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0),
       activeLoans: memberLoans.filter((l: any) => l.status === 'active').length,
     };
-  }, [memberTxns, memberLoans]);
+  }, [memberTxns, memberLoans, getLoanOutstanding]);
+
+  if (!member) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <Text>Member not found.</Text>
+        <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
+          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   const handleDobChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === "android") {

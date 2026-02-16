@@ -1,7 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from 'expo-splash-screen';
-import { KeyboardProvider } from 'react-native-keyboard-controller';
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -25,14 +24,15 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (loading) return;
-    const inSignIn = segments[0] === "sign-in";
-    if (!isAuthenticated && !inSignIn) {
-      router.replace("/sign-in");
+    const inLogin = (segments[0] as string) === "sign-in";
+    if (!isAuthenticated && !inLogin) {
+      router.replace("/sign-in" as any);
     }
   }, [isAuthenticated, loading, segments]);
 
   return (
     <Stack screenOptions={{ headerBackTitle: "Back" }}>
+      <Stack.Screen name="sign-in" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="add-member" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="add-event" options={{ headerShown: false, presentation: "modal" }} />
@@ -68,13 +68,11 @@ export default function RootLayout() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView>
-          <KeyboardProvider>
             <DataProvider>
               <AuthProvider>
                 <RootLayoutNav />
               </AuthProvider>
             </DataProvider>
-          </KeyboardProvider>
         </GestureHandlerRootView>
       </QueryClientProvider>
     </ErrorBoundary>

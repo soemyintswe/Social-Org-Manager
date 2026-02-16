@@ -22,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import * as store from "@/lib/storage";
+import { getTransactions, importTransactions, saveTransactions } from "@/lib/storage";
 
 const TXN_AUTO_BACKUP_FILE = "transactions_auto_backup.json";
 const LEGACY_AUTO_BACKUP_FILE = "auto_backup.json";
@@ -356,7 +356,7 @@ export default function TransactionDataManagementScreen() {
     if (Platform.OS === "web") return;
     const dir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
     if (!dir) return;
-    const latest = await store.getTransactions();
+    const latest = await getTransactions();
     await FileSystem.writeAsStringAsync(dir + TXN_AUTO_BACKUP_FILE, buildBackup(latest as any[]));
   };
 
@@ -476,7 +476,7 @@ export default function TransactionDataManagementScreen() {
     const run = async () => {
       setImporting(true);
       try {
-        await store.saveTransactions(p.transactions);
+        await saveTransactions(p.transactions);
         await refreshData();
         await writeAutoSnapshot();
         msg("Success", `Restore ပြီးပါပြီ။ ${p.transactions.length} rows သိမ်းခဲ့ပါသည်${p.skipped ? ` (${p.skipped} rows skip)` : ""}။`);
@@ -498,7 +498,7 @@ export default function TransactionDataManagementScreen() {
     const run = async () => {
       setImporting(true);
       try {
-        await store.importTransactions(p.transactions);
+        await importTransactions(p.transactions);
         await refreshData();
         await writeAutoSnapshot();
         msg("Success", `Import ပြီးပါပြီ။ ${p.transactions.length} rows merge လုပ်ခဲ့ပါသည်${p.skipped ? ` (${p.skipped} rows skip)` : ""}။`);

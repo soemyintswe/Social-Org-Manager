@@ -6,10 +6,10 @@ import { router } from 'expo-router';
 const SignInScreen = () => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
-    const { login, isLoading } = useAuth() as any;
+    const { login, loading } = useAuth();
 
     const handleLogin = async () => {
-        if (isLoading) return;
+        if (loading) return;
 
         const success = await login(username, password);
         if (success) {
@@ -35,7 +35,7 @@ const SignInScreen = () => {
                 value={password}
                 onChangeText={setPassword}
             />
-            <Button title="Login" onPress={handleLogin} disabled={isLoading} />
+            <Button title="Login" onPress={handleLogin} disabled={loading} />
         </View>
     );
 };

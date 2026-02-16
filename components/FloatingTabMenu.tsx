@@ -55,7 +55,7 @@ export default function FloatingTabMenu() {
     {
         name: "ချိန်ညှိရန်",
         icon: "options-outline",
-        route: "/settings",
+        route: "/account-settings",
       },
     ].filter((item) => item.enabled !== false);
   }, [can]);

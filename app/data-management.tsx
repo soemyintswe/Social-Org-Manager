@@ -24,7 +24,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
-import { clearAllData, exportData, restoreData } from "@/lib/storage";
+import { clearAllData, exportData, mergeData, restoreData } from "@/lib/storage";
 import { useData } from "@/lib/DataContext";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 
@@ -34,6 +34,7 @@ export default function DataManagementScreen() {
   const [importing, setImporting] = useState(false);
   const [backupText, setBackupText] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [restoreMode, setRestoreMode] = useState<"replace" | "merge">("replace");
   const [isAutoBackup, setIsAutoBackup] = useState(false);
   const [lastBackupDate, setLastBackupDate] = useState<string | null>(null);
 
@@ -215,20 +216,51 @@ export default function DataManagementScreen() {
     }
   };
 
+  const mergeArrayById = (existing: any[], incoming: any[]) => {
+    const result = [...existing];
+    const indexById = new Map<string, number>();
+
+    for (let i = 0; i < result.length; i += 1) {
+      const id = String(result[i]?.id || "").trim();
+      if (!id) continue;
+      indexById.set(id, i);
+    }
+
+    for (const row of incoming) {
+      const id = String(row?.id || "").trim();
+      if (!id) {
+        result.push(row);
+        continue;
+      }
+      const idx = indexById.get(id);
+      if (idx === undefined) {
+        indexById.set(id, result.length);
+        result.push(row);
+      } else {
+        result[idx] = row;
+      }
+    }
+
+    return result;
+  };
+
   const handleRestore = async () => {
     if (!backupText.trim()) {
       alert("Restore လုပ်ရန် အပေါ်ရှိ အကွက်ထဲတွင် Backup စာသားများကို Paste လုပ်ပေးပါ။");
       return;
     }
 
-    const confirmMsg = "လက်ရှိအချက်အလက်များ အားလုံးပျက်စီးသွားပါမည်။ သေချာပါသလား။";
+    const confirmMsg =
+      restoreMode === "replace"
+        ? "လက်ရှိအချက်အလက်များ အားလုံးကို Backup ဖိုင်ဖြင့် အစားထိုးပါမည်။ သေချာပါသလား။"
+        : "Backup ဖိုင်ထဲ data ကို လက်ရှိ data နှင့် ပေါင်းထည့်မည် (ID တူပါက update)။ ဆက်လုပ်မည်လား။";
     const proceed = Platform.OS === 'web' ? confirm(confirmMsg) : true;
 
     if (proceed) {
       if (Platform.OS !== 'web') {
         Alert.alert("Confirm", confirmMsg, [
           { text: "Cancel", style: "cancel" },
-          { text: "Restore", style: "destructive", onPress: async () => performRestore() }
+          { text: "Proceed", style: restoreMode === "replace" ? "destructive" : "default", onPress: async () => performRestore() }
         ]);
       } else {
         performRestore();
@@ -242,25 +274,45 @@ export default function DataManagementScreen() {
     // Events နှင့် Custom Categories များကို သီးသန့်ပြန်ထည့်မည်
     try {
       const parsed = JSON.parse(backupText);
-      if (parsed.events) {
-        await AsyncStorage.setItem("@org_events", JSON.stringify(parsed.events));
+      if (Array.isArray(parsed.events)) {
+        if (restoreMode === "merge") {
+          const currentEventsRaw = await AsyncStorage.getItem("@org_events");
+          const currentEvents = currentEventsRaw ? JSON.parse(currentEventsRaw) : [];
+          const mergedEvents = mergeArrayById(Array.isArray(currentEvents) ? currentEvents : [], parsed.events);
+          await AsyncStorage.setItem("@org_events", JSON.stringify(mergedEvents));
+        } else {
+          await AsyncStorage.setItem("@org_events", JSON.stringify(parsed.events));
+        }
       }
-      if (parsed.customCategories) {
-        await AsyncStorage.setItem("@custom_categories", JSON.stringify(parsed.customCategories));
+      if (Array.isArray(parsed.customCategories)) {
+        if (restoreMode === "merge") {
+          const currentCategoriesRaw = await AsyncStorage.getItem("@custom_categories");
+          const currentCategories = currentCategoriesRaw ? JSON.parse(currentCategoriesRaw) : [];
+          const mergedCategories = mergeArrayById(Array.isArray(currentCategories) ? currentCategories : [], parsed.customCategories);
+          await AsyncStorage.setItem("@custom_categories", JSON.stringify(mergedCategories));
+        } else {
+          await AsyncStorage.setItem("@custom_categories", JSON.stringify(parsed.customCategories));
+        }
       }
     } catch (e) { console.log("Extra data restore error", e); }
 
-    const success = await restoreData(backupText);
+    const success = restoreMode === "merge" ? await mergeData(backupText) : await restoreData(backupText);
     if (success) {
       if (refreshData) await refreshData();
       
       if (Platform.OS === 'web') {
-        alert("အောင်မြင်ပါသည်\nအချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။");
+        alert(
+          restoreMode === "merge"
+            ? "အောင်မြင်ပါသည်\nBackup data ကို လက်ရှိ data နှင့် ပေါင်းထည့်ပြီးပါပြီ။"
+            : "အောင်မြင်ပါသည်\nအချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။"
+        );
         window.location.reload();
       } else {
         Alert.alert(
-          "Success",
-          "အချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။ App ကို Restart ပြုလုပ်ပါမည်။",
+          restoreMode === "merge" ? "Merge Success" : "Restore Success",
+          restoreMode === "merge"
+            ? "Backup data ကို လက်ရှိ data နှင့် ပေါင်းထည့်ပြီးပါပြီ။ App ကို Restart ပြုလုပ်ပါမည်။"
+            : "အချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။ App ကို Restart ပြုလုပ်ပါမည်။",
           [{ 
             text: "OK", 
             onPress: async () => {
@@ -274,7 +326,7 @@ export default function DataManagementScreen() {
         );
       }
     } else {
-      alert("အမှား\nစာသားများ မပြည့်စုံသဖြင့် Restore မအောင်မြင်ပါ။");
+      alert("အမှား\nစာသားများ မပြည့်စုံသဖြင့် လုပ်ဆောင်မှု မအောင်မြင်ပါ။");
     }
     setImporting(false);
   };
@@ -375,14 +427,29 @@ export default function DataManagementScreen() {
             textAlignVertical="top"
           />
 
+          <View style={styles.modeRow}>
+            <Pressable
+              style={[styles.modeBtn, restoreMode === "replace" && styles.modeBtnActive]}
+              onPress={() => setRestoreMode("replace")}
+            >
+              <Text style={[styles.modeBtnText, restoreMode === "replace" && styles.modeBtnTextActive]}>Restore (Replace All)</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.modeBtn, restoreMode === "merge" && styles.modeBtnActive]}
+              onPress={() => setRestoreMode("merge")}
+            >
+              <Text style={[styles.modeBtnText, restoreMode === "merge" && styles.modeBtnTextActive]}>Import (Merge)</Text>
+            </Pressable>
+          </View>
+
           <Pressable 
-            style={[styles.actionBtn, { backgroundColor: "#F59E0B" }]} 
+            style={[styles.actionBtn, { backgroundColor: restoreMode === "merge" ? "#0EA5A4" : "#F59E0B" }]} 
             onPress={handleRestore} 
             disabled={importing}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="download-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
-              <Text style={styles.btnText}>Restore Data</Text>
+              <Ionicons name={restoreMode === "merge" ? "git-merge-outline" : "download-outline"} size={20} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.btnText}>{restoreMode === "merge" ? "Import & Merge Data" : "Restore Data (Replace All)"}</Text>
             </View>
           </Pressable>
 
@@ -431,6 +498,28 @@ const styles = StyleSheet.create({
   content: { padding: 20, flexGrow: 1 },
   instruction: { fontSize: 14, color: Colors.light.text, marginBottom: 12, fontFamily: "Inter_400Regular" },
   input: { flex: 1, minHeight: 250, backgroundColor: Colors.light.surface, borderRadius: 12, padding: 16, fontSize: 12, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border, marginBottom: 20 },
+  modeRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  modeBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: Colors.light.surface,
+  },
+  modeBtnActive: {
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.tintLight,
+  },
+  modeBtnText: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+  },
+  modeBtnTextActive: {
+    color: Colors.light.tint,
+  },
   actionBtn: { paddingVertical: 16, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   btnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
   divider: { height: 1, backgroundColor: Colors.light.border, marginVertical: 30 },

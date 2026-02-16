@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Member, OrgEvent, Group, AttendanceRecord, Transaction, Loan, AccountSettings, UserAccount } from "./types";
+import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -65,7 +66,7 @@ export const saveMembers = async (data: Member[]) => {
   await syncUsersWithMembers(data);
 };
 
-async function setUserPassword(userId: string, passwordPlaintext: string): Promise<void> {
+export async function setUserPassword(userId: string, passwordPlaintext: string): Promise<void> {
     const passwords = await getUserPasswords();
     const updatedPasswords = { ...passwords, [userId]: passwordPlaintext };
     await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(updatedPasswords));
@@ -85,6 +86,100 @@ async function getUserPasswords(): Promise<Record<string, string>> {
         console.error(`Error reading ${KEYS.USER_PASSWORDS}:`, e);
         return {};
     }
+}
+
+function getTrailingDigits(rawValue?: string): string {
+  const normalized = toEnglishDigits(String(rawValue || ""));
+  const matched = normalized.match(/(\d+)\s*$/);
+  return matched ? matched[1] : "";
+}
+
+export function buildMemberUsername(memberId?: string): string {
+  const digits = getTrailingDigits(memberId);
+  if (!digits) return "";
+  return `ID${digits}`;
+}
+
+export function buildDefaultPassword(memberId?: string, isAdmin?: boolean): string {
+  if (isAdmin) return "Admin";
+  const digits = getTrailingDigits(memberId);
+  return digits || "member";
+}
+
+async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Member[]): Promise<void> {
+  const passwords = await getUserPasswords();
+  let changed = false;
+
+  for (const user of users) {
+    if (passwords[user.id]) continue;
+    if (user.systemRole === "admin") {
+      passwords[user.id] = buildDefaultPassword(undefined, true);
+      changed = true;
+      continue;
+    }
+    const member = members.find((item) => item.id === user.memberId);
+    if (member) {
+      passwords[user.id] = buildDefaultPassword(member.id, false);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(passwords));
+  }
+}
+
+export async function changeUserPassword(userId: string, currentPassword: string, nextPassword: string): Promise<boolean> {
+  if (!userId || !nextPassword.trim()) return false;
+  const isValid = await verifyPassword(userId, currentPassword);
+  if (!isValid) return false;
+  await setUserPassword(userId, nextPassword.trim());
+  return true;
+}
+
+export async function resetUserPasswordByIdentifier(identifier: string): Promise<{ ok: boolean; userId?: string; reason?: string }> {
+  const needle = toEnglishDigits(identifier || "").trim().toLowerCase();
+  if (!needle) return { ok: false, reason: "empty" };
+
+  const [users, members] = await Promise.all([getUsers(), getMembers()]);
+  const targetUser = users.find((user) => {
+    if (!user.isActive) return false;
+    if (user.systemRole === "admin") {
+      return needle === "admin";
+    }
+
+    const member = members.find((item) => item.id === user.memberId);
+    if (!member) return false;
+
+    const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
+    const phoneCandidates = [primaryPhone, secondaryPhone]
+      .filter(Boolean)
+      .map((phone) => toEnglishDigits(phone).replace(/[^\d]/g, ""));
+    const emailCandidate = String(member.email || "").trim().toLowerCase();
+    const memberIdCandidate = toEnglishDigits(member.id).trim().toLowerCase();
+    const aliasCandidate = buildMemberUsername(member.id).toLowerCase();
+    const normalizedNeedleDigits = needle.replace(/[^\d]/g, "");
+
+    return (
+      needle === memberIdCandidate ||
+      needle === aliasCandidate ||
+      (emailCandidate && needle === emailCandidate) ||
+      (!!normalizedNeedleDigits && phoneCandidates.includes(normalizedNeedleDigits))
+    );
+  });
+
+  if (!targetUser) return { ok: false, reason: "not_found" };
+
+  if (targetUser.systemRole === "admin") {
+    await setUserPassword(targetUser.id, buildDefaultPassword(undefined, true));
+    return { ok: true, userId: targetUser.id };
+  }
+
+  const member = members.find((item) => item.id === targetUser.memberId);
+  if (!member) return { ok: false, reason: "missing_member" };
+
+  await setUserPassword(targetUser.id, buildDefaultPassword(member.id));
+  return { ok: true, userId: targetUser.id };
 }
 
 
@@ -112,16 +207,11 @@ export async function addMember(member: any): Promise<Member> {
 
     await saveMembers([...members, newMember]);
 
-    // Set default password based on member ID
-    let defaultPassword = "member";
-    if (newMember.id && newMember.id.length > 3) {
-        const lastThree = newMember.id.slice(-3);
-        defaultPassword = `ID${lastThree}`;
-    }
-
     const user = await getUsers()
     const newUser = user.find((e) => e.memberId === newMember.id)
-    await setUserPassword(newUser?.id as string, defaultPassword);
+    if (newUser?.id) {
+      await setUserPassword(newUser.id, buildDefaultPassword(newMember.id));
+    }
 
   return newMember;
 }
@@ -221,6 +311,20 @@ export async function addTransaction(txn: any) {
   return newTxn;
 }
 
+export async function saveTransactions(data: Transaction[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(data));
+}
+
+export async function importTransactions(newTransactions: Transaction[]): Promise<void> {
+  const existing = await getTransactions();
+  const byId = new Map(existing.map((item) => [item.id, item]));
+  for (const txn of newTransactions) {
+    if (!txn?.id) continue;
+    byId.set(txn.id, txn);
+  }
+  await saveTransactions(Array.from(byId.values()));
+}
+
 export async function deleteTransaction(id: string) {
   const txns = await getTransactions();
   await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns.filter(t => t.id !== id)));
@@ -309,12 +413,9 @@ export async function seedDefaultAdminUser() {
 
   // Sync existing members to user accounts
   const members = await getMembers();
-    await setUserPassword("admin-001", "Admin");
-
-
-
-
   await syncUsersWithMembers(members);
+  const syncedUsers = await getUsers();
+  await ensureDefaultPasswordsForUsers(syncedUsers, members);
 }
 
 export async function upsertUserAccount(user: UserAccount) {
@@ -367,6 +468,92 @@ export async function restoreData(jsonString: string): Promise<boolean> {
     return false;
   } catch (error) {
     console.error("Restore failed:", error);
+    return false;
+  }
+}
+
+function parseJsonSafe<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return value as T;
+}
+
+function mergeRecordsById<T extends { id?: string }>(existing: T[], incoming: T[]): T[] {
+  const result = [...existing];
+  const indexById = new Map<string, number>();
+
+  for (let i = 0; i < result.length; i += 1) {
+    const id = String(result[i]?.id || "").trim();
+    if (!id) continue;
+    indexById.set(id, i);
+  }
+
+  for (const row of incoming) {
+    const id = String(row?.id || "").trim();
+    if (!id) {
+      result.push(row);
+      continue;
+    }
+    const idx = indexById.get(id);
+    if (idx === undefined) {
+      indexById.set(id, result.length);
+      result.push(row);
+    } else {
+      result[idx] = row;
+    }
+  }
+
+  return result;
+}
+
+export async function mergeData(jsonString: string): Promise<boolean> {
+  try {
+    const exportObj = JSON.parse(jsonString) as Record<string, unknown>;
+
+    const keys = Object.values(KEYS);
+    let changed = false;
+
+    for (const key of keys) {
+      if (!(key in exportObj)) continue;
+      const incomingRaw = exportObj[key];
+      const existingRaw = await AsyncStorage.getItem(key);
+
+      if (key === KEYS.ACCOUNT_SETTINGS) {
+        const existingSettings = parseJsonSafe<Record<string, unknown>>(existingRaw, {});
+        const incomingSettings = parseJsonSafe<Record<string, unknown>>(incomingRaw, {});
+        const mergedSettings = { ...existingSettings, ...incomingSettings };
+        await AsyncStorage.setItem(key, JSON.stringify(mergedSettings));
+        changed = true;
+        continue;
+      }
+
+      if (key === KEYS.USER_PASSWORDS) {
+        const existingPasswords = parseJsonSafe<Record<string, string>>(existingRaw, {});
+        const incomingPasswords = parseJsonSafe<Record<string, string>>(incomingRaw, {});
+        const mergedPasswords = { ...existingPasswords, ...incomingPasswords };
+        await AsyncStorage.setItem(key, JSON.stringify(mergedPasswords));
+        changed = true;
+        continue;
+      }
+
+      const existingArray = parseJsonSafe<any[]>(existingRaw, []);
+      const incomingArray = parseJsonSafe<any[]>(incomingRaw, []);
+      if (!Array.isArray(incomingArray)) continue;
+
+      const mergedArray = mergeRecordsById(existingArray, incomingArray);
+      await AsyncStorage.setItem(key, JSON.stringify(mergedArray));
+      changed = true;
+    }
+
+    return changed;
+  } catch (error) {
+    console.error("Merge failed:", error);
     return false;
   }
 }

@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { useAuth } from "@/lib/AuthContext";
 import { CATEGORY_LABELS, normalizeMemberStatus, TransactionCategory } from "@/lib/types";
 import { exportData } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
@@ -91,6 +92,8 @@ function QuickAction({
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { members, transactions, loans, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { currentUser, currentMember } = useAuth();
+  const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -355,7 +358,7 @@ export default function DashboardScreen() {
     >
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>မင်္ဂလာပါ</Text>
+          <Text style={styles.greeting}>မင်္ဂလာပါ{userDisplayName ? `၊ ${userDisplayName}` : ""}</Text>
           <Text style={styles.orgName}>OrgHub Dashboard</Text>
         </View>
       </View>

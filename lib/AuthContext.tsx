@@ -2,13 +2,31 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { canAccess, canAccessMemberRecord as canAccessMember, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
+import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 import { normalizeMemberStatus, normalizeOrgPosition, type Member, type UserAccount } from "./types";
+import { buildMemberUsername, changeUserPassword, resetUserPasswordByIdentifier, verifyPassword } from "./storage";
 
 const AUTH_SESSION_KEY = "@orghub_auth_session";
+const RESTORE_SESSION_ON_LAUNCH = false;
+const LOGIN_GUARD_KEY = "@orghub_login_guard";
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 3 * 60 * 60 * 1000;
 
 type PersistedSession = {
   userId: string;
   signedInAt: string;
+};
+
+type LoginGuardState = {
+  failedAttempts: number;
+  lockedUntil: number;
+};
+
+type LoginResult = {
+  ok: boolean;
+  reason: "success" | "locked" | "invalid_username" | "invalid_password";
+  remainingMs?: number;
+  failedAttempts?: number;
 };
 
 interface AuthContextValue {
@@ -20,11 +38,88 @@ interface AuthContextValue {
   availableUsers: UserAccount[];
   signIn: (userId: string) => Promise<boolean>;
   signOut: () => Promise<void>;
+  checkUsername: (username: string) => Promise<boolean>;
+  attemptLogin: (username: string, password: string) => Promise<LoginResult>;
+  getLoginLockInfo: () => Promise<{ locked: boolean; remainingMs: number; failedAttempts: number }>;
+  login: (username: string, password: string) => Promise<boolean>;
+  verifyCurrentPassword: (password: string) => Promise<boolean>;
+  changePassword: (currentPassword: string, nextPassword: string) => Promise<boolean>;
+  resetPassword: (identifier: string) => Promise<boolean>;
   can: (permission: AccessPermission, options?: { targetMemberId?: string }) => boolean;
   canAccessMemberRecord: (targetMemberId: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+async function readLoginGuardState(): Promise<LoginGuardState> {
+  try {
+    const raw = await AsyncStorage.getItem(LOGIN_GUARD_KEY);
+    if (!raw) return { failedAttempts: 0, lockedUntil: 0 };
+    const parsed = JSON.parse(raw) as Partial<LoginGuardState>;
+    return {
+      failedAttempts: Number.isFinite(parsed?.failedAttempts) ? Number(parsed?.failedAttempts) : 0,
+      lockedUntil: Number.isFinite(parsed?.lockedUntil) ? Number(parsed?.lockedUntil) : 0,
+    };
+  } catch {
+    return { failedAttempts: 0, lockedUntil: 0 };
+  }
+}
+
+async function writeLoginGuardState(state: LoginGuardState): Promise<void> {
+  await AsyncStorage.setItem(LOGIN_GUARD_KEY, JSON.stringify(state));
+}
+
+async function clearLoginGuardState(): Promise<void> {
+  await AsyncStorage.removeItem(LOGIN_GUARD_KEY);
+}
+
+function normalizeText(input: string): string {
+  return toEnglishDigits(String(input || "")).trim();
+}
+
+function normalizeIdentifier(input: string): string {
+  return normalizeText(input).toLowerCase();
+}
+
+function normalizePhoneForLookup(rawValue: string): string {
+  return normalizeText(rawValue).replace(/[^\d]/g, "");
+}
+
+function resolveUserByIdentifier(users: UserAccount[], members: Member[], identifier: string): UserAccount | undefined {
+  const needle = normalizeIdentifier(identifier);
+  if (!needle) return undefined;
+
+  return users.find((user) => {
+    if (!user.isActive) return false;
+
+    if (user.systemRole === "admin") {
+      return needle === "admin";
+    }
+
+    if (normalizeIdentifier(user.id) === needle) {
+      return true;
+    }
+
+    const member = members.find((item) => item.id === user.memberId);
+    if (!member) return false;
+
+    const memberIdCandidate = normalizeIdentifier(member.id);
+    const emailCandidate = normalizeIdentifier(member.email || "");
+    const aliasCandidate = normalizeIdentifier(buildMemberUsername(member.id));
+    const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
+    const phoneCandidates = [primaryPhone, secondaryPhone]
+      .filter(Boolean)
+      .map((phone) => normalizePhoneForLookup(phone));
+    const needlePhone = normalizePhoneForLookup(needle);
+
+    return (
+      needle === memberIdCandidate ||
+      (emailCandidate && needle === emailCandidate) ||
+      (aliasCandidate && needle === aliasCandidate) ||
+      (!!needlePhone && phoneCandidates.includes(needlePhone))
+    );
+  });
+}
 
 function parsePersistedSession(raw: string | null): PersistedSession | null {
   if (!raw) return null;
@@ -50,6 +145,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
     (async () => {
+      if (!RESTORE_SESSION_ON_LAUNCH) {
+        await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+        if (!active) return;
+        setSessionUserId(null);
+        setRestoring(false);
+        return;
+      }
       const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
       const restored = parsePersistedSession(raw);
       if (!active) return;
@@ -126,6 +228,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signedInAt: new Date().toISOString(),
       };
       await AsyncStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+      await clearLoginGuardState();
       return true;
     },
     [users]
@@ -134,6 +237,116 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     await clearSession();
   }, [clearSession]);
+
+  const checkUsername = useCallback(async (username: string) => {
+    const user = resolveUserByIdentifier(users, members, username);
+    return Boolean(user);
+  }, [users, members]);
+
+  const getLoginLockInfo = useCallback(async () => {
+    const state = await readLoginGuardState();
+    const now = Date.now();
+    const remainingMs = Math.max(0, state.lockedUntil - now);
+    if (remainingMs === 0 && (state.failedAttempts > 0 || state.lockedUntil > 0)) {
+      await clearLoginGuardState();
+      return { locked: false, remainingMs: 0, failedAttempts: 0 };
+    }
+    return { locked: remainingMs > 0, remainingMs, failedAttempts: state.failedAttempts };
+  }, []);
+
+  const attemptLogin = useCallback(async (username: string, passwordPlaintext: string): Promise<LoginResult> => {
+    const guard = await readLoginGuardState();
+    const now = Date.now();
+    const lockRemaining = Math.max(0, guard.lockedUntil - now);
+    if (lockRemaining > 0) {
+      return {
+        ok: false,
+        reason: "locked",
+        remainingMs: lockRemaining,
+        failedAttempts: guard.failedAttempts,
+      };
+    }
+
+    const user = resolveUserByIdentifier(users, members, username);
+    if (!user) {
+      const nextFailed = guard.failedAttempts + 1;
+      if (nextFailed >= MAX_FAILED_ATTEMPTS) {
+        await writeLoginGuardState({
+          failedAttempts: nextFailed,
+          lockedUntil: now + LOCKOUT_DURATION_MS,
+        });
+        return {
+          ok: false,
+          reason: "locked",
+          remainingMs: LOCKOUT_DURATION_MS,
+          failedAttempts: nextFailed,
+        };
+      }
+      await writeLoginGuardState({ failedAttempts: nextFailed, lockedUntil: 0 });
+      return {
+        ok: false,
+        reason: "invalid_username",
+        failedAttempts: nextFailed,
+      };
+    }
+
+    const isValid = await verifyPassword(user.id, passwordPlaintext);
+    if (!isValid) {
+      const nextFailed = guard.failedAttempts + 1;
+      if (nextFailed >= MAX_FAILED_ATTEMPTS) {
+        await writeLoginGuardState({
+          failedAttempts: nextFailed,
+          lockedUntil: now + LOCKOUT_DURATION_MS,
+        });
+        return {
+          ok: false,
+          reason: "locked",
+          remainingMs: LOCKOUT_DURATION_MS,
+          failedAttempts: nextFailed,
+        };
+      }
+      await writeLoginGuardState({ failedAttempts: nextFailed, lockedUntil: 0 });
+      return {
+        ok: false,
+        reason: "invalid_password",
+        failedAttempts: nextFailed,
+      };
+    }
+
+    const success = await signIn(user.id);
+    if (!success) return { ok: false, reason: "invalid_username" };
+    return { ok: true, reason: "success" };
+  }, [users, members, signIn]);
+
+  const login = useCallback(async (username: string, passwordPlaintext: string) => {
+    const result = await attemptLogin(username, passwordPlaintext);
+    return result.ok;
+  }, [attemptLogin]);
+
+  const changePassword = useCallback(
+    async (currentPassword: string, nextPassword: string) => {
+      if (!currentUser) return false;
+      return changeUserPassword(currentUser.id, currentPassword, nextPassword);
+    },
+    [currentUser]
+  );
+
+  const verifyCurrentPassword = useCallback(
+    async (password: string) => {
+      if (!currentUser) return false;
+      return verifyPassword(currentUser.id, password);
+    },
+    [currentUser]
+  );
+
+  const resetPassword = useCallback(
+    async (identifier: string) => {
+      if (!currentUser || currentUser.systemRole !== "admin") return false;
+      const result = await resetUserPasswordByIdentifier(identifier);
+      return result.ok;
+    },
+    [currentUser]
+  );
 
   const can = useCallback(
     (permission: AccessPermission, options?: { targetMemberId?: string }) => {
@@ -161,10 +374,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       availableUsers,
       signIn,
       signOut,
+      checkUsername,
+      attemptLogin,
+      getLoginLockInfo,
+      login,
+      verifyCurrentPassword,
+      changePassword,
+      resetPassword,
       can,
       canAccessMemberRecord,
     }),
-    [dataLoading, restoring, currentUser, currentMember, profile, availableUsers, signIn, signOut, can, canAccessMemberRecord]
+    [dataLoading, restoring, currentUser, currentMember, profile, availableUsers, signIn, signOut, checkUsername, attemptLogin, getLoginLockInfo, login, verifyCurrentPassword, changePassword, resetPassword, can, canAccessMemberRecord]
   );
 
   return React.createElement(AuthContext.Provider, { value }, children);
