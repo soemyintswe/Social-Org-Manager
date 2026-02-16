@@ -34,9 +34,12 @@ type ReportTab = "income_expense" | "loans" | "funds" | "fees";
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { transactions, members, loading, accountSettings, loans, getLoanOutstanding } = useData() as any;
-  const { can } = useAuth();
+  const { can, currentUser } = useAuth();
   const canViewAllReports = can("reports.view_all");
   const canViewReports = can("reports.view_summary") || canViewAllReports;
+  const canViewAllFinanceRecords = can("finance.view_detail") || can("finance.view_all");
+  const reportOwnMemberId = currentUser?.memberId || "";
+  const scopeReportToOwn = !canViewAllFinanceRecords;
   
   // Default to Current Year Jan 1 to Today
   const [pickerStartDate, setPickerStartDate] = useState(new Date(new Date().getFullYear(), 0, 1));
@@ -74,14 +77,26 @@ export default function ReportsScreen() {
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
+  const reportTransactions = useMemo(() => {
+    if (!scopeReportToOwn) return transactions;
+    if (!reportOwnMemberId) return [];
+    return transactions.filter((t: any) => t.memberId === reportOwnMemberId);
+  }, [transactions, scopeReportToOwn, reportOwnMemberId]);
+
+  const reportLoans = useMemo(() => {
+    if (!scopeReportToOwn) return loans;
+    if (!reportOwnMemberId) return [];
+    return loans.filter((loan: any) => loan.memberId === reportOwnMemberId);
+  }, [loans, scopeReportToOwn, reportOwnMemberId]);
+
   const filteredTxns = useMemo(
-    () => transactions.filter((t: any) => {
+    () => reportTransactions.filter((t: any) => {
       const d = new Date(t.date);
       const start = new Date(startDate); start.setHours(0,0,0,0);
       const end = new Date(endDate); end.setHours(23,59,59,999);
       return d >= start && d <= end;
     }),
-    [transactions, startDate, endDate]
+    [reportTransactions, startDate, endDate]
   );
 
   const incomeExpenseStats = useMemo(() => {
@@ -105,16 +120,16 @@ export default function ReportsScreen() {
       .filter((t: any) => t.category === "interest_income" || t.category === "bank_interest")
       .reduce((sum: number, t: any) => sum + t.amount, 0);
     
-    const totalOutstanding = (loans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
+    const totalOutstanding = (reportLoans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
     
     return { disbursed, repaid, interest, totalOutstanding };
-  }, [filteredTxns, loans, getLoanOutstanding]);
+  }, [filteredTxns, reportLoans, getLoanOutstanding]);
 
   const getBalancesAt = useCallback((date: Date) => {
     let cash = accountSettings?.openingBalanceCash || 0;
     let bank = accountSettings?.openingBalanceBank || 0;
     
-    transactions.forEach((t: any) => {
+    reportTransactions.forEach((t: any) => {
       const tDate = new Date(t.date);
       if (tDate <= date) {
          const amt = t.amount;
@@ -131,7 +146,7 @@ export default function ReportsScreen() {
       }
     });
     return { cash, bank, total: cash + bank };
-  }, [accountSettings, transactions]);
+  }, [accountSettings, reportTransactions]);
 
   const fundStats = useMemo(() => {
     const start = new Date(startDate); start.setDate(start.getDate() - 1);
@@ -353,6 +368,12 @@ export default function ReportsScreen() {
           </Pressable>
         </ScrollView>
       </View>
+      {scopeReportToOwn && (
+        <View style={styles.summaryOnlyNote}>
+          <Ionicons name="person-circle-outline" size={18} color="#1E3A8A" />
+          <Text style={styles.summaryOnlyNoteText}>သင့်အကောင့်နှင့်သက်ဆိုင်သော Report အချက်အလက်များကိုသာ ပြသထားပါသည်။</Text>
+        </View>
+      )}
 
       {reportTab === "income_expense" && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>

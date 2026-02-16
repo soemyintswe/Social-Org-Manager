@@ -333,12 +333,18 @@ export default function FinanceScreen() {
     return sortedLoans.filter((loan: any) => loan.memberId === currentUser.memberId);
   }, [sortedLoans, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
 
+  const balanceSourceTransactions = useMemo(() => {
+    if (canViewFinanceDetail) return transactions || [];
+    if (!canViewFinanceSelf || !currentUser?.memberId) return [];
+    return (transactions || []).filter((t: any) => t.memberId === currentUser.memberId);
+  }, [transactions, canViewFinanceDetail, canViewFinanceSelf, currentUser?.memberId]);
+
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
     let cash = (accountSettings?.openingBalanceCash || 0);
     let bank = (accountSettings?.openingBalanceBank || 0);
 
-    (transactions || []).forEach((t: any) => {
+    balanceSourceTransactions.forEach((t: any) => {
       const amt = t.amount || 0;
       if (t.type === 'income') {
         if (t.paymentMethod === 'bank') bank += amt;
@@ -357,7 +363,7 @@ export default function FinanceScreen() {
       }
     });
     return { cash, bank, total: cash + bank };
-  }, [transactions, accountSettings]);
+  }, [balanceSourceTransactions, accountSettings]);
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 

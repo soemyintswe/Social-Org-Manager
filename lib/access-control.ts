@@ -319,6 +319,8 @@ function getChecklist(profile: AccessProfile): PermissionChecklist {
     ...ORG_ROLE_CHECKLIST[resolveOrgAccessRole(profile)],
     // Non-admin users can view member directory; write actions remain role-restricted.
     "members.view_all": true,
+    // Non-admin users can always view their own finance records.
+    "finance.view_self": true,
   };
 }
 
