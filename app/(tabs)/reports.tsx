@@ -7,7 +7,9 @@ import {
   Pressable,
   Platform,
   ActivityIndicator,
-
+  Modal,
+  FlatList,
+  TextInput,
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -30,6 +32,7 @@ const PERIOD_OPTIONS = [
 ];
 
 type ReportTab = "income_expense" | "loans" | "funds" | "fees";
+type ReportViewScope = "all" | "self" | "member";
 
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
@@ -38,8 +41,7 @@ export default function ReportsScreen() {
   const canViewAllReports = can("reports.view_all");
   const canViewReports = can("reports.view_summary") || canViewAllReports;
   const canViewAllFinanceRecords = can("finance.view_detail") || can("finance.view_all");
-  const reportOwnMemberId = currentUser?.memberId || "";
-  const scopeReportToOwn = !canViewAllFinanceRecords;
+  const canChooseScope = canViewAllReports && canViewAllFinanceRecords;
   
   // Default to Current Year Jan 1 to Today
   const [pickerStartDate, setPickerStartDate] = useState(new Date(new Date().getFullYear(), 0, 1));
@@ -52,6 +54,11 @@ export default function ReportsScreen() {
   const [showEndPicker, setShowEndPicker] = useState(false);
   
   const [reportTab, setReportTab] = useState<ReportTab>("income_expense");
+  const [viewScope, setViewScope] = useState<ReportViewScope>("all");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const effectiveScope: ReportViewScope = canChooseScope ? viewScope : "self";
 
   const handlePeriodSelect = (months: number) => {
     const now = new Date();
@@ -77,17 +84,44 @@ export default function ReportsScreen() {
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
+  const memberOptions = useMemo(() => {
+    const needle = memberSearch.trim().toLowerCase();
+    if (!needle) return members;
+    return members.filter((member: any) => {
+      const id = String(member.id || "").toLowerCase();
+      const name = String(member.name || "").toLowerCase();
+      return id.includes(needle) || name.includes(needle);
+    });
+  }, [members, memberSearch]);
+
+  const scopedMemberId = useMemo<string | null>(() => {
+    if (effectiveScope === "all") return null;
+    if (effectiveScope === "self") return currentUser?.memberId || "__none__";
+    return selectedMemberId || "__none__";
+  }, [effectiveScope, currentUser?.memberId, selectedMemberId]);
+
+  const scopeLabel = useMemo(() => {
+    if (effectiveScope === "all") return "အားလုံး";
+    if (effectiveScope === "self") return "ကိုယ်ပိုင်";
+    if (scopedMemberId === "__none__") return "ရွေးချယ်ထားသူ";
+    const selectedName = members.find((member: any) => member.id === scopedMemberId)?.name || "";
+    return selectedName ? `${selectedName} (${scopedMemberId})` : scopedMemberId;
+  }, [effectiveScope, scopedMemberId, members]);
+
+  const reportMembers = useMemo(() => {
+    if (scopedMemberId === null) return members;
+    return members.filter((member: any) => member.id === scopedMemberId);
+  }, [members, scopedMemberId]);
+
   const reportTransactions = useMemo(() => {
-    if (!scopeReportToOwn) return transactions;
-    if (!reportOwnMemberId) return [];
-    return transactions.filter((t: any) => t.memberId === reportOwnMemberId);
-  }, [transactions, scopeReportToOwn, reportOwnMemberId]);
+    if (scopedMemberId === null) return transactions;
+    return transactions.filter((t: any) => t.memberId === scopedMemberId);
+  }, [transactions, scopedMemberId]);
 
   const reportLoans = useMemo(() => {
-    if (!scopeReportToOwn) return loans;
-    if (!reportOwnMemberId) return [];
-    return loans.filter((loan: any) => loan.memberId === reportOwnMemberId);
-  }, [loans, scopeReportToOwn, reportOwnMemberId]);
+    if (scopedMemberId === null) return loans;
+    return loans.filter((loan: any) => loan.memberId === scopedMemberId);
+  }, [loans, scopedMemberId]);
 
   const filteredTxns = useMemo(
     () => reportTransactions.filter((t: any) => {
@@ -172,17 +206,6 @@ export default function ReportsScreen() {
     return months;
   }, [startDate, endDate]);
 
-  const feeSummary = useMemo(() => {
-    const feeTxns = filteredTxns.filter((t: any) => t.category === "member_fees");
-    const totalAmount = feeTxns.reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
-    const paidMemberCount = new Set(
-      feeTxns
-        .map((t: any) => String(t.memberId || "").trim())
-        .filter(Boolean)
-    ).size;
-    return { totalAmount, paidMemberCount, paymentCount: feeTxns.length };
-  }, [filteredTxns]);
-
   const generatePdf = async () => {
     if (!canViewAllReports) {
       Alert.alert("ခွင့်မပြုပါ", "Summary-only permission ဖြစ်သောကြောင့် detailed member report ကို PDF မထုတ်နိုင်ပါ။");
@@ -222,7 +245,7 @@ export default function ReportsScreen() {
               </tr>
             </thead>
             <tbody>
-              ${members.map((m: any, index: number) => `
+              ${reportMembers.map((m: any, index: number) => `
                 <tr>
                   <td>${index + 1}</td>
                   <td>${m.name}</td>
@@ -270,7 +293,7 @@ export default function ReportsScreen() {
           </Pressable>
 
 
-        <Text style={[styles.title, { marginLeft: 70 }]}>အစီရင်ခံစာ</Text>
+        <Text style={[styles.title, { marginLeft: 70 }]}>အစီရင်ခံစာ - {scopeLabel}</Text>
         <View style={styles.headerActions}>
           <Pressable style={styles.headerIconBtn} onPress={generatePdf}>
             <Ionicons name="print-outline" size={22} color={Colors.light.text} />
@@ -334,6 +357,38 @@ export default function ReportsScreen() {
           ))}
         </View>
       </View>
+      {canChooseScope && (
+        <View style={styles.scopeCard}>
+          <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
+          <View style={styles.scopeRow}>
+            <Pressable style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]} onPress={() => setViewScope("all")}>
+              <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
+            </Pressable>
+            <Pressable style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]} onPress={() => setViewScope("self")}>
+              <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
+            </Pressable>
+            <Pressable style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]} onPress={() => setViewScope("member")}>
+              <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြားသူ</Text>
+            </Pressable>
+          </View>
+          {viewScope === "member" && (
+            <View style={styles.memberPickerWrap}>
+              <TextInput
+                style={styles.memberSearchInput}
+                value={memberSearch}
+                onChangeText={setMemberSearch}
+                placeholder="Member ID / Full Name ရိုက်ရှာပါ"
+              />
+              <Pressable style={styles.memberPickerBtn} onPress={() => setShowMemberPicker(true)}>
+                <Text style={styles.memberPickerBtnText} numberOfLines={1}>
+                  {selectedMemberId === "" ? "Dropdown မှ Member ရွေးမည်" : `${members.find((m: any) => m.id === selectedMemberId)?.name || ""} (${selectedMemberId})`}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            </View>
+          )}
+        </View>
+      )}
 
       {(showStartPicker || showEndPicker) && Platform.OS !== 'web' && (
         <DateTimePicker
@@ -368,7 +423,7 @@ export default function ReportsScreen() {
           </Pressable>
         </ScrollView>
       </View>
-      {scopeReportToOwn && (
+      {!canChooseScope && (
         <View style={styles.summaryOnlyNote}>
           <Ionicons name="person-circle-outline" size={18} color="#1E3A8A" />
           <Text style={styles.summaryOnlyNoteText}>သင့်အကောင့်နှင့်သက်ဆိုင်သော Report အချက်အလက်များကိုသာ ပြသထားပါသည်။</Text>
@@ -489,96 +544,117 @@ export default function ReportsScreen() {
 
       {reportTab === "fees" && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {canViewAllReports ? (
-            <View style={{ paddingHorizontal: 20 }}>
-              <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({startDate.getFullYear()})</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                <View style={{ paddingBottom: 20 }}>
-                  <View style={styles.tableHeader}>
-                    <View style={styles.tableNameCol}>
-                      <Text style={styles.tableHeaderText}>အမည်</Text>
-                    </View>
-                    {monthsInRange.map((m) => (
-                      <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
-                        <Text style={styles.tableHeaderText}>{m.name}</Text>
-                      </View>
-                    ))}
-                    <View style={[styles.tableMonthCol, { width: 90 }]}>
-                      <Text style={styles.tableHeaderText}>စုစုပေါင်း</Text>
-                    </View>
+          <View style={{ paddingHorizontal: 20 }}>
+            <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({startDate.getFullYear()})</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+              <View style={{ paddingBottom: 20 }}>
+                <View style={styles.tableHeader}>
+                  <View style={styles.tableNameCol}>
+                    <Text style={styles.tableHeaderText}>အမည်</Text>
                   </View>
-
-                  {members.map((member: any) => (
-                    <View key={member.id} style={styles.tableRow}>
-                      <View style={styles.tableNameCol}>
-                        <Text style={styles.tableName} numberOfLines={1}>
-                          {member.name}
-                        </Text>
-                      </View>
-                      {monthsInRange.map((m) => {
-                        const monthlyPayments = transactions.filter(
-                          (t: any) => {
-                            if (t.memberId !== member.id || t.category !== "member_fees") return false;
-
-                            if (t.feePeriodStart && t.feePeriodEnd) {
-                              const start = new Date(t.feePeriodStart); start.setHours(0,0,0,0);
-                              const end = new Date(t.feePeriodEnd); end.setHours(23,59,59,999);
-                              const monthStart = new Date(m.year, m.monthIdx, 1);
-                              const monthEnd = new Date(m.year, m.monthIdx + 1, 0);
-                              return start <= monthEnd && end >= monthStart;
-                            }
-
-                            const d = new Date(t.date);
-                            return d.getMonth() === m.monthIdx && d.getFullYear() === m.year;
-                          }
-                        );
-
-                        const isPaid = monthlyPayments.length > 0;
-                        return (
-                          <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
-                            {isPaid ? (
-                              <View style={[styles.paidBadge, { backgroundColor: Colors.light.success }]}>
-                                <Ionicons name="checkmark" size={14} color="white" />
-                              </View>
-                            ) : (
-                              <Ionicons name="close" size={14} color={Colors.light.textSecondary + "40"} />
-                            )}
-                          </View>
-                        );
-                      })}
-
-                      <View style={[styles.tableMonthCol, { width: 90 }]}>
-                        <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
-                          {filteredTxns
-                            .filter((t: any) => t.memberId === member.id && t.category === "member_fees")
-                            .reduce((sum: number, t: any) => sum + t.amount, 0)
-                            .toLocaleString()}
-                        </Text>
-                      </View>
+                  {monthsInRange.map((m) => (
+                    <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
+                      <Text style={styles.tableHeaderText}>{m.name}</Text>
                     </View>
                   ))}
+                  <View style={[styles.tableMonthCol, { width: 90 }]}>
+                    <Text style={styles.tableHeaderText}>စုစုပေါင်း</Text>
+                  </View>
                 </View>
-              </ScrollView>
-            </View>
-          ) : (
-            <View style={[styles.section, { marginTop: 6 }]}>
-              <Text style={styles.sectionTitle}>လစဉ်ကြေး အနှစ်ချုပ်</Text>
-              <View style={styles.catRow}>
-                <Text style={styles.catLabel}>စုစုပေါင်း လစဉ်ကြေးရရှိငွေ</Text>
-                <Text style={styles.catValue}>{feeSummary.totalAmount.toLocaleString()} KS</Text>
+
+                {reportMembers.map((member: any) => (
+                  <View key={member.id} style={styles.tableRow}>
+                    <View style={styles.tableNameCol}>
+                      <Text style={styles.tableName} numberOfLines={1}>
+                        {member.name}
+                      </Text>
+                    </View>
+                    {monthsInRange.map((m) => {
+                      const monthlyPayments = reportTransactions.filter(
+                        (t: any) => {
+                          if (t.memberId !== member.id || t.category !== "member_fees") return false;
+
+                          if (t.feePeriodStart && t.feePeriodEnd) {
+                            const start = new Date(t.feePeriodStart); start.setHours(0,0,0,0);
+                            const end = new Date(t.feePeriodEnd); end.setHours(23,59,59,999);
+                            const monthStart = new Date(m.year, m.monthIdx, 1);
+                            const monthEnd = new Date(m.year, m.monthIdx + 1, 0);
+                            return start <= monthEnd && end >= monthStart;
+                          }
+
+                          const d = new Date(t.date);
+                          return d.getMonth() === m.monthIdx && d.getFullYear() === m.year;
+                        }
+                      );
+
+                      const isPaid = monthlyPayments.length > 0;
+                      return (
+                        <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
+                          {isPaid ? (
+                            <View style={[styles.paidBadge, { backgroundColor: Colors.light.success }]}>
+                              <Ionicons name="checkmark" size={14} color="white" />
+                            </View>
+                          ) : (
+                            <Ionicons name="close" size={14} color={Colors.light.textSecondary + "40"} />
+                          )}
+                        </View>
+                      );
+                    })}
+
+                    <View style={[styles.tableMonthCol, { width: 90 }]}>
+                      <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
+                        {filteredTxns
+                          .filter((t: any) => t.memberId === member.id && t.category === "member_fees")
+                          .reduce((sum: number, t: any) => sum + t.amount, 0)
+                          .toLocaleString()}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
               </View>
-              <View style={styles.catRow}>
-                <Text style={styles.catLabel}>ပေးသွင်းထားသော အသင်းဝင်ဦးရေ</Text>
-                <Text style={styles.catValue}>{feeSummary.paidMemberCount}</Text>
-              </View>
-              <View style={styles.catRow}>
-                <Text style={styles.catLabel}>ပေးသွင်းမှုအကြိမ်ရေ</Text>
-                <Text style={styles.catValue}>{feeSummary.paymentCount}</Text>
-              </View>
-            </View>
-          )}
+            </ScrollView>
+          </View>
         </ScrollView>
       )}
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showMemberPicker}
+        onRequestClose={() => setShowMemberPicker(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowMemberPicker(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+            <FlatList
+              data={memberOptions}
+              keyExtractor={(item: any) => String(item.id)}
+              style={{ maxHeight: 320 }}
+              renderItem={({ item }: { item: any }) => (
+                <Pressable
+                  style={styles.memberOptionRow}
+                  onPress={() => {
+                    setSelectedMemberId(String(item.id || ""));
+                    setShowMemberPicker(false);
+                  }}
+                >
+                  <Text style={styles.memberOptionName}>{item.name || "-"}</Text>
+                  <Text style={styles.memberOptionId}>{item.id || "-"}</Text>
+                </Pressable>
+              )}
+              ListEmptyComponent={
+                <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                  <Text style={styles.summaryOnlyNoteText}>ရွေးချယ်ရန် Member မတွေ့ပါ</Text>
+                </View>
+              }
+            />
+            <Pressable style={styles.cancelBtn} onPress={() => setShowMemberPicker(false)}>
+              <Text style={styles.cancelBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -597,6 +673,59 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", alignItems: "center", marginRight: 108 },
   headerIconBtn: { padding: 8 },
   filterSection: { paddingHorizontal: 20, marginBottom: 15, gap: 10 },
+  scopeCard: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  scopeLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+    marginBottom: 8,
+  },
+  scopeRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  scopeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  scopeChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  scopeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  scopeChipTextActive: { color: "white" },
+  memberPickerWrap: { gap: 8 },
+  memberSearchInput: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  memberPickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#F8FAFC",
+  },
+  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
   dateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
@@ -659,4 +788,16 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: "#1E3A8A",
   },
+  modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
+  modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
+  memberOptionRow: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  memberOptionName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  memberOptionId: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
+  cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });
