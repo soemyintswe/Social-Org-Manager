@@ -212,11 +212,30 @@ export async function assignMemberChangeRequest(
   if (requests[index].status !== "pending") throw new Error("request_not_pending");
 
   const targetReviewer = String(assignedReviewerUserId || "").trim();
+  const previousReviewer = String(requests[index].assignedReviewerUserId || "").trim();
+  let action: "assign" | "unassign" | "reassign" = "assign";
+  if (!targetReviewer) {
+    action = "unassign";
+  } else if (previousReviewer && previousReviewer !== targetReviewer) {
+    action = "reassign";
+  } else {
+    action = "assign";
+  }
+
+  const assignmentHistory = [...(requests[index].assignmentHistory || [])];
+  assignmentHistory.push({
+    action,
+    byUserId: assignerUserId,
+    toUserId: targetReviewer || undefined,
+    at: new Date().toISOString(),
+  });
+
   requests[index] = {
     ...requests[index],
     assignedReviewerUserId: targetReviewer || undefined,
     assignedByUserId: targetReviewer ? assignerUserId : undefined,
     assignedAt: targetReviewer ? new Date().toISOString() : undefined,
+    assignmentHistory,
   };
   await saveMemberChangeRequests(requests);
 }

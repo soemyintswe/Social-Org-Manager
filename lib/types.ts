@@ -155,6 +155,14 @@ export interface UserAccount {
 
 export type MemberChangeAction = "create" | "update" | "delete";
 export type MemberChangeStatus = "pending" | "approved" | "rejected" | "cancelled";
+export type MemberChangeAssignmentAction = "assign" | "unassign" | "reassign";
+
+export interface MemberChangeAssignmentLog {
+  action: MemberChangeAssignmentAction;
+  byUserId: string;
+  toUserId?: string;
+  at: string;
+}
 
 export interface MemberChangeRequest {
   id: string;
@@ -171,6 +179,7 @@ export interface MemberChangeRequest {
   assignedReviewerUserId?: string;
   assignedByUserId?: string;
   assignedAt?: string;
+  assignmentHistory?: MemberChangeAssignmentLog[];
   reviewedByUserId?: string;
   reviewedAt?: string;
   reviewNote?: string;

@@ -758,6 +758,30 @@ export default function MemberChangeApprovalsScreen() {
                   <Text style={styles.modalMeta}>Reviewed At: {new Date(selectedRequest.reviewedAt).toLocaleString()}</Text>
                 )}
                 {!!selectedRequest.reviewNote && <Text style={styles.modalMeta}>Review Note: {selectedRequest.reviewNote}</Text>}
+                {!!selectedRequest.assignedReviewerUserId && (
+                  <Text style={styles.modalMeta}>Assigned Reviewer: {selectedRequest.assignedReviewerUserId}</Text>
+                )}
+                {!!selectedRequest.assignedByUserId && (
+                  <Text style={styles.modalMeta}>Assigned By: {selectedRequest.assignedByUserId}</Text>
+                )}
+                {!!selectedRequest.assignedAt && (
+                  <Text style={styles.modalMeta}>Assigned At: {new Date(selectedRequest.assignedAt).toLocaleString()}</Text>
+                )}
+                {!!selectedRequest.assignmentHistory?.length && (
+                  <>
+                    <View style={styles.modalDivider} />
+                    <Text style={styles.changePreviewTitle}>Assignment Timeline</Text>
+                    {[...selectedRequest.assignmentHistory]
+                      .slice()
+                      .reverse()
+                      .map((entry, idx) => (
+                        <Text key={`${selectedRequest.id}-assign-log-${idx}`} style={styles.modalMeta}>
+                          {new Date(entry.at).toLocaleString()} | {entry.action.toUpperCase()} | by {entry.byUserId}
+                          {entry.toUserId ? ` -> ${entry.toUserId}` : ""}
+                        </Text>
+                      ))}
+                  </>
+                )}
                 <View style={styles.modalDivider} />
                 <Text style={styles.changePreviewTitle}>ပြင်ဆင်မည့်အချက်များ (Full)</Text>
                 {selectedChangeRows.length > 0 && (
