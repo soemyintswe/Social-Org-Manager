@@ -154,7 +154,7 @@ export interface UserAccount {
 }
 
 export type MemberChangeAction = "create" | "update" | "delete";
-export type MemberChangeStatus = "pending" | "approved" | "rejected";
+export type MemberChangeStatus = "pending" | "approved" | "rejected" | "cancelled";
 
 export interface MemberChangeRequest {
   id: string;

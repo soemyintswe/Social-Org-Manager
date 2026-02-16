@@ -195,6 +195,23 @@ export async function rejectMemberChangeRequest(requestId: string, reviewerUserI
   await saveMemberChangeRequests(requests);
 }
 
+export async function withdrawMemberChangeRequest(requestId: string, requesterUserId: string, note?: string): Promise<void> {
+  const requests = await getMemberChangeRequests();
+  const index = requests.findIndex((item) => item.id === requestId);
+  if (index === -1) throw new Error("request_not_found");
+  if (requests[index].status !== "pending") throw new Error("request_not_pending");
+  if (requests[index].createdByUserId !== requesterUserId) throw new Error("not_owner");
+
+  requests[index] = {
+    ...requests[index],
+    status: "cancelled",
+    reviewedByUserId: requesterUserId,
+    reviewedAt: new Date().toISOString(),
+    reviewNote: note?.trim() || "Withdrawn by requester",
+  };
+  await saveMemberChangeRequests(requests);
+}
+
 export async function setUserPassword(userId: string, passwordPlaintext: string): Promise<void> {
     const passwords = await getUserPasswords();
     const updatedPasswords = { ...passwords, [userId]: passwordPlaintext };

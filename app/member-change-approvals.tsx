@@ -11,7 +11,7 @@ import AccessDenied from "@/components/AccessDenied";
 export default function MemberChangeApprovalsScreen() {
   const insets = useSafeAreaInsets();
   const { can, currentUser } = useAuth();
-  const { memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest } = useData();
+  const { memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest, withdrawMemberChangeRequest } = useData();
   const [reviewNote, setReviewNote] = useState("");
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [tab, setTab] = useState<"pending" | "history">("pending");
@@ -59,6 +59,20 @@ export default function MemberChangeApprovalsScreen() {
       Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ပယ်ချပြီးပါပြီ။");
     } catch (error: any) {
       Alert.alert("အမှား", error?.message || "Reject မလုပ်နိုင်ပါ။");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleWithdraw = async (requestId: string) => {
+    if (!currentUser?.id) return;
+    try {
+      setProcessingId(requestId);
+      await withdrawMemberChangeRequest(requestId, currentUser.id, reviewNote);
+      setReviewNote("");
+      Alert.alert("လုပ်ဆောင်ပြီးပါပြီ", "Request ကို ရုပ်သိမ်းပြီးပါပြီ။");
+    } catch (error: any) {
+      Alert.alert("အမှား", error?.message || "Withdraw မလုပ်နိုင်ပါ။");
     } finally {
       setProcessingId(null);
     }
@@ -149,6 +163,17 @@ export default function MemberChangeApprovalsScreen() {
                       disabled={processingId === item.id}
                     >
                       <Text style={styles.actionText}>Approve</Text>
+                    </Pressable>
+                  </View>
+                )}
+                {!canApprove && canPropose && tab === "pending" && (
+                  <View style={styles.actions}>
+                    <Pressable
+                      style={[styles.actionBtn, styles.rejectBtn]}
+                      onPress={() => handleWithdraw(item.id)}
+                      disabled={processingId === item.id}
+                    >
+                      <Text style={styles.actionText}>Withdraw</Text>
                     </Pressable>
                   </View>
                 )}
