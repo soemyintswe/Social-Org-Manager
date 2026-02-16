@@ -14,14 +14,25 @@ export default function MemberChangeApprovalsScreen() {
   const { memberChangeRequests, approveMemberChangeRequest, rejectMemberChangeRequest } = useData();
   const [reviewNote, setReviewNote] = useState("");
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"pending" | "history">("pending");
 
   const canApprove = can("members.approve_changes");
+  const canPropose = can("members.propose_changes");
+  const visibleRequests = useMemo(() => {
+    if (canApprove) return memberChangeRequests;
+    if (!currentUser?.id) return [];
+    return memberChangeRequests.filter((item) => item.createdByUserId === currentUser.id);
+  }, [memberChangeRequests, canApprove, currentUser?.id]);
   const pendingRequests = useMemo(
-    () => memberChangeRequests.filter((item) => item.status === "pending"),
-    [memberChangeRequests]
+    () => visibleRequests.filter((item) => item.status === "pending"),
+    [visibleRequests]
+  );
+  const historyRequests = useMemo(
+    () => visibleRequests.filter((item) => item.status !== "pending"),
+    [visibleRequests]
   );
 
-  if (!canApprove) {
+  if (!canApprove && !canPropose) {
     return <AccessDenied showBack={true} />;
   }
 
@@ -64,23 +75,47 @@ export default function MemberChangeApprovalsScreen() {
       </View>
 
       <View style={styles.noteBox}>
-        <Text style={styles.noteLabel}>Review Note (optional)</Text>
-        <TextInput
-          value={reviewNote}
-          onChangeText={setReviewNote}
-          placeholder="မှတ်ချက်..."
-          style={styles.noteInput}
-          placeholderTextColor={Colors.light.textSecondary}
-        />
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryCount}>{pendingRequests.length}</Text>
+            <Text style={styles.summaryLabel}>Pending</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryCount}>{historyRequests.length}</Text>
+            <Text style={styles.summaryLabel}>History</Text>
+          </View>
+        </View>
+        <View style={styles.tabRow}>
+          <Pressable style={[styles.tabBtn, tab === "pending" && styles.tabBtnActive]} onPress={() => setTab("pending")}>
+            <Text style={[styles.tabText, tab === "pending" && styles.tabTextActive]}>Pending</Text>
+          </Pressable>
+          <Pressable style={[styles.tabBtn, tab === "history" && styles.tabBtnActive]} onPress={() => setTab("history")}>
+            <Text style={[styles.tabText, tab === "history" && styles.tabTextActive]}>History</Text>
+          </Pressable>
+        </View>
+        {canApprove && tab === "pending" && (
+          <>
+            <Text style={styles.noteLabel}>Review Note (optional)</Text>
+            <TextInput
+              value={reviewNote}
+              onChangeText={setReviewNote}
+              placeholder="မှတ်ချက်..."
+              style={styles.noteInput}
+              placeholderTextColor={Colors.light.textSecondary}
+            />
+          </>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.list}>
-        {pendingRequests.length === 0 ? (
+        {(tab === "pending" ? pendingRequests : historyRequests).length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>Pending request မရှိသေးပါ။</Text>
+            <Text style={styles.emptyText}>
+              {tab === "pending" ? "Pending request မရှိသေးပါ။" : "History မရှိသေးပါ။"}
+            </Text>
           </View>
         ) : (
-          pendingRequests.map((item) => {
+          (tab === "pending" ? pendingRequests : historyRequests).map((item) => {
             const member = item.payload.member || {};
             return (
               <View key={item.id} style={styles.card}>
@@ -89,28 +124,34 @@ export default function MemberChangeApprovalsScreen() {
                 </Text>
                 <Text style={styles.meta}>By: {item.createdByUserId}</Text>
                 <Text style={styles.meta}>At: {new Date(item.createdAt).toLocaleString()}</Text>
+                <Text style={styles.meta}>Status: {item.status.toUpperCase()}</Text>
+                {!!item.reviewedByUserId && <Text style={styles.meta}>Reviewed By: {item.reviewedByUserId}</Text>}
+                {!!item.reviewedAt && <Text style={styles.meta}>Reviewed At: {new Date(item.reviewedAt).toLocaleString()}</Text>}
+                {!!item.reviewNote && <Text style={styles.meta}>Review Note: {item.reviewNote}</Text>}
                 {!!item.payload.note && <Text style={styles.meta}>Note: {item.payload.note}</Text>}
                 {item.action !== "delete" && (
                   <Text style={styles.meta}>
                     Name: {String(member.name || "-")} | Phone: {String(member.phone || "-")}
                   </Text>
                 )}
-                <View style={styles.actions}>
-                  <Pressable
-                    style={[styles.actionBtn, styles.rejectBtn]}
-                    onPress={() => handleReject(item.id)}
-                    disabled={processingId === item.id}
-                  >
-                    <Text style={styles.actionText}>Reject</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.actionBtn, styles.approveBtn]}
-                    onPress={() => handleApprove(item.id)}
-                    disabled={processingId === item.id}
-                  >
-                    <Text style={styles.actionText}>Approve</Text>
-                  </Pressable>
-                </View>
+                {canApprove && tab === "pending" && (
+                  <View style={styles.actions}>
+                    <Pressable
+                      style={[styles.actionBtn, styles.rejectBtn]}
+                      onPress={() => handleReject(item.id)}
+                      disabled={processingId === item.id}
+                    >
+                      <Text style={styles.actionText}>Reject</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.actionBtn, styles.approveBtn]}
+                      onPress={() => handleApprove(item.id)}
+                      disabled={processingId === item.id}
+                    >
+                      <Text style={styles.actionText}>Approve</Text>
+                    </Pressable>
+                  </View>
+                )}
               </View>
             );
           })
@@ -135,6 +176,31 @@ const styles = StyleSheet.create({
   backBtn: { padding: 4 },
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   noteBox: { padding: 16, gap: 8 },
+  summaryRow: { flexDirection: "row", gap: 10 },
+  summaryCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: Colors.light.surface,
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  summaryCount: { fontSize: 18, color: Colors.light.text, fontFamily: "Inter_700Bold" },
+  summaryLabel: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  tabRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  tabBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: "center",
+    backgroundColor: Colors.light.surface,
+  },
+  tabBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  tabText: { color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
+  tabTextActive: { color: "#fff" },
   noteLabel: { color: Colors.light.textSecondary, fontSize: 12, fontFamily: "Inter_500Medium" },
   noteInput: {
     borderWidth: 1,

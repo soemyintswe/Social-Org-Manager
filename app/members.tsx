@@ -37,7 +37,7 @@ type MemberListItem = Member & { profileImage?: string };
 
 export default function MembersScreen() {
   const insets = useSafeAreaInsets();
-  const { members, loading } = useData();
+  const { members, loading, memberChangeRequests } = useData();
   const { can, currentUser } = useAuth();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("id");
@@ -61,6 +61,10 @@ export default function MembersScreen() {
   const canProposeMemberChanges = can("members.propose_changes");
   const canApproveMemberChanges = can("members.approve_changes");
   const ownMemberId = currentUser?.memberId || "";
+  const pendingApprovalCount = useMemo(
+    () => memberChangeRequests.filter((item) => item.status === "pending").length,
+    [memberChangeRequests]
+  );
 
   const sourceMembers = useMemo(() => {
     if (canViewAllMembers) return members as MemberListItem[];
@@ -325,15 +329,22 @@ export default function MembersScreen() {
               <Text style={styles.headerActionText} numberOfLines={1}>Data</Text>
             </Pressable>
           )}
-          {canApproveMemberChanges && (
+          {(canApproveMemberChanges || canProposeMemberChanges) && (
             <Pressable
               onPress={() => router.push("/member-change-approvals" as any)}
               style={styles.headerActionBtn}
               accessibilityRole="button"
-              accessibilityLabel="Approve Member Changes"
+              accessibilityLabel="Member Change Requests"
             >
               <Ionicons name="checkmark-done-outline" size={21} color={Colors.light.tint} />
-              <Text style={styles.headerActionText} numberOfLines={1}>Approve</Text>
+              <Text style={styles.headerActionText} numberOfLines={1}>
+                {canApproveMemberChanges ? "Approve" : "Requests"}
+              </Text>
+              {pendingApprovalCount > 0 && canApproveMemberChanges && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{pendingApprovalCount}</Text>
+                </View>
+              )}
             </Pressable>
           )}
         </View>
@@ -671,6 +682,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Colors.light.textSecondary,
     fontFamily: "Inter_500Medium",
+  },
+  badge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#EF4444",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
   },
   searchBar: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, margin: 15, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, height: 44 },
   filterBtn: {
