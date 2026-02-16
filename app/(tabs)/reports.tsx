@@ -219,6 +219,21 @@ export default function ReportsScreen() {
     return months;
   }, [startDate, endDate]);
 
+  const scopedExpenseTransactions = useMemo(() => {
+    return filteredTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer");
+  }, [filteredTxns]);
+
+  const scopedExpenseByCategory = useMemo(() => {
+    const map = new Map<string, number>();
+    scopedExpenseTransactions.forEach((t: any) => {
+      const key = String(t.category || "other");
+      map.set(key, (map.get(key) || 0) + Number(t.amount || 0));
+    });
+    return Array.from(map.entries())
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [scopedExpenseTransactions]);
+
   const roleSummaryCards = useMemo(() => {
     const role = profile?.orgPosition || "member";
     const feeTxns = filteredTxns.filter((t: any) => t.category === "member_fees");
@@ -702,25 +717,59 @@ export default function ReportsScreen() {
 
       {reportTab === "funds" && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>လက်ကျန်ရှင်းတမ်း (Opening/Closing)</Text>
-            <View style={styles.catRow}>
-              <Text style={styles.catLabel}>စာရင်းဖွင့် လက်ကျန်</Text>
-              <Text style={styles.catValue}>{fundStats.opening.total.toLocaleString()} KS</Text>
+          {isAllScope ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>လက်ကျန်ရှင်းတမ်း (Opening/Closing)</Text>
+              <View style={styles.catRow}>
+                <Text style={styles.catLabel}>စာရင်းဖွင့် လက်ကျန်</Text>
+                <Text style={styles.catValue}>{fundStats.opening.total.toLocaleString()} KS</Text>
+              </View>
+              <View style={[styles.catRow, { paddingLeft: 20 }]}>
+                 <Text style={styles.catSub}>ငွေသား: {fundStats.opening.cash.toLocaleString()}</Text>
+                 <Text style={styles.catSub}>ဘဏ်: {fundStats.opening.bank.toLocaleString()}</Text>
+              </View>
+              <View style={[styles.catRow, { borderTopWidth: 1, borderColor: '#eee', paddingTop: 10, marginTop: 10 }]}>
+                <Text style={styles.catLabel}>စာရင်းပိတ် လက်ကျန်</Text>
+                <Text style={[styles.catValue, { fontWeight: 'bold' }]}>{fundStats.closing.total.toLocaleString()} KS</Text>
+              </View>
+               <View style={[styles.catRow, { paddingLeft: 20 }]}>
+                 <Text style={styles.catSub}>ငွေသား: {fundStats.closing.cash.toLocaleString()}</Text>
+                 <Text style={styles.catSub}>ဘဏ်: {fundStats.closing.bank.toLocaleString()}</Text>
+              </View>
             </View>
-            <View style={[styles.catRow, { paddingLeft: 20 }]}>
-               <Text style={styles.catSub}>ငွေသား: {fundStats.opening.cash.toLocaleString()}</Text>
-               <Text style={styles.catSub}>ဘဏ်: {fundStats.opening.bank.toLocaleString()}</Text>
-            </View>
-            <View style={[styles.catRow, { borderTopWidth: 1, borderColor: '#eee', paddingTop: 10, marginTop: 10 }]}>
-              <Text style={styles.catLabel}>စာရင်းပိတ် လက်ကျန်</Text>
-              <Text style={[styles.catValue, { fontWeight: 'bold' }]}>{fundStats.closing.total.toLocaleString()} KS</Text>
-            </View>
-             <View style={[styles.catRow, { paddingLeft: 20 }]}>
-               <Text style={styles.catSub}>ငွေသား: {fundStats.closing.cash.toLocaleString()}</Text>
-               <Text style={styles.catSub}>ဘဏ်: {fundStats.closing.bank.toLocaleString()}</Text>
-            </View>
-          </View>
+          ) : (
+            <>
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>အသုံးစရိတ် အနှစ်ချုပ် (ခေါင်းစဉ်အလိုက်)</Text>
+                {scopedExpenseByCategory.length === 0 ? (
+                  <Text style={styles.summaryOnlyNoteText}>အသုံးစရိတ်မှတ်တမ်း မရှိသေးပါ။</Text>
+                ) : (
+                  scopedExpenseByCategory.map((row) => (
+                    <View key={row.category} style={styles.catRow}>
+                      <Text style={styles.catLabel}>{CATEGORY_LABELS[row.category as keyof typeof CATEGORY_LABELS] || row.category}</Text>
+                      <Text style={styles.catValue}>{row.amount.toLocaleString()} KS</Text>
+                    </View>
+                  ))
+                )}
+              </View>
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>အသုံးစရိတ် အသေးစိတ်</Text>
+                {scopedExpenseTransactions.length === 0 ? (
+                  <Text style={styles.summaryOnlyNoteText}>အသေးစိတ်စာရင်း မရှိသေးပါ။</Text>
+                ) : (
+                  scopedExpenseTransactions.map((t: any) => (
+                    <View key={t.id} style={styles.catRow}>
+                      <View style={styles.catInfo}>
+                        <Text style={styles.catLabel}>{CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
+                        <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
+                      </View>
+                      <Text style={styles.catValue}>{Number(t.amount || 0).toLocaleString()} KS</Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            </>
+          )}
         </ScrollView>
       )}
 
