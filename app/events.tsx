@@ -7,6 +7,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -44,12 +45,47 @@ interface OrgEventNotice {
   summary?: string;
   detail?: string;
   topic?: string;
+  subjectMemberName?: string;
+  subjectMemberId?: string;
   eventDate?: string;
   eventTime?: string;
   eventLocation?: string;
+  eventLocationMapUrl?: string;
+  healthPatientName?: string;
+  healthPatientMemberId?: string;
+  healthPatientAge?: string;
+  healthRelation?: string;
+  healthIllnessSummary?: string;
+  healthCondition?: string;
+  healthTreatmentType?: "hospital" | "clinic_home";
+  healthFacilityName?: string;
+  healthFacilityLocation?: string;
+  healthFacilityMapUrl?: string;
+  healthStartDate?: string;
+  healthEndDate?: string;
+  healthProgressStatus?: "ကုသပြီး" | "ကုသနေဆဲ";
+  funeralDeceasedName?: string;
+  funeralAge?: string;
+  funeralDeceasedDate?: string;
+  funeralRelation?: string;
+  funeralIllnessSummary?: string;
+  funeralBurialDate?: string;
+  funeralBurialTime?: string;
+  funeralCemetery?: string;
+  funeralCemeteryMapUrl?: string;
+  funeralTransportLocation?: string;
+  funeralTransportMapUrl?: string;
+  funeralTransportDate?: string;
+  funeralTransportTime?: string;
+  funeralMemorialLocation?: string;
+  funeralMemorialMapUrl?: string;
+  funeralMemorialDate?: string;
+  funeralMemorialTime?: string;
 }
 
 const CUSTOM_TOPIC_KEY = "@org_notice_custom_topics";
+const CUSTOM_RELATION_KEY = "@org_notice_custom_relations";
+const CUSTOM_CONDITION_KEY = "@org_notice_custom_conditions";
 const PRESET_TOPICS = [
   "အလှူပွဲတက်ရောက်ရန်ဖိတ်ကြားခြင်း",
   "မင်္ဂလာပွဲတက်ရောက်ရန်ဖိတ်ကြားခြင်း",
@@ -57,6 +93,8 @@ const PRESET_TOPICS = [
   "နာရေး အကြောင်းကြားခြင်း",
   "အခြားကိစ္စ",
 ] as const;
+const PRESET_RELATIONS = ["ကိုယ်တိုင်", "ဖခင်", "မိခင်", "သား", "သမီး", "အတူနေမိသားစုဝင်"] as const;
+const PRESET_HEALTH_CONDITIONS = ["အသဲအသန်", "ခွဲစိတ်ကုသ", "ထိခိုက်ဒဏ်ရာရ", "ဖျားနာ"] as const;
 
 function formatYmd(date: Date): string {
   const y = date.getFullYear();
@@ -71,6 +109,49 @@ function formatHm(date: Date): string {
   return `${h}:${m}`;
 }
 
+function parseFlexibleDate(input?: string): Date | null {
+  if (!input) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const d = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const parsed = new Date(year, month - 1, day);
+    if (
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day
+    ) return null;
+    return parsed;
+  }
+
+  const fallback = new Date(raw);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+}
+
+function calculateAgeFromDob(dob?: string, onDate?: string): string {
+  if (!dob) return "";
+  const birth = parseFlexibleDate(dob);
+  if (!birth) return "";
+  const ref = onDate ? parseFlexibleDate(onDate) : new Date();
+  if (!ref) return "";
+  let age = ref.getFullYear() - birth.getFullYear();
+  const monthDelta = ref.getMonth() - birth.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && ref.getDate() < birth.getDate())) age -= 1;
+  return age >= 0 ? String(age) : "";
+}
+
 function getTopicColor(topic?: string): string {
   if (!topic) return "#6B7280";
   if (topic.includes("အလှူ")) return "#3B82F6";
@@ -83,7 +164,7 @@ function getTopicColor(topic?: string): string {
 
 export default function EventsScreen() {
   const insets = useSafeAreaInsets();
-  const { events, addEvent, editEvent, removeEvent } = useData() as any;
+  const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
   const { can, currentUser } = useAuth();
   const canViewEvents = can("events.view_public");
   const canCreateOwnEvent = can("events.create_own");
@@ -96,22 +177,90 @@ export default function EventsScreen() {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [topicPickerVisible, setTopicPickerVisible] = useState(false);
+  const [relationPickerVisible, setRelationPickerVisible] = useState(false);
+  const [conditionPickerVisible, setConditionPickerVisible] = useState(false);
+  const [subjectPickerVisible, setSubjectPickerVisible] = useState(false);
+  const [senderPickerVisible, setSenderPickerVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [topic, setTopic] = useState<string>(PRESET_TOPICS[0]);
   const [customTopics, setCustomTopics] = useState<string[]>([]);
+  const [customRelations, setCustomRelations] = useState<string[]>([]);
+  const [customConditions, setCustomConditions] = useState<string[]>([]);
   const [newCustomTopic, setNewCustomTopic] = useState("");
+  const [newCustomRelation, setNewCustomRelation] = useState("");
+  const [newCustomCondition, setNewCustomCondition] = useState("");
   const [summary, setSummary] = useState("");
   const [detail, setDetail] = useState("");
   const [eventDate, setEventDate] = useState(formatYmd(new Date()));
   const [eventTime, setEventTime] = useState(formatHm(new Date()));
   const [eventLocation, setEventLocation] = useState("");
+  const [eventLocationMapUrl, setEventLocationMapUrl] = useState("");
   const [images, setImages] = useState<string[]>([]);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showHealthDatePicker, setShowHealthDatePicker] = useState(false);
+  const [healthDateTarget, setHealthDateTarget] = useState<"start" | "end" | null>(null);
+  const [showFuneralDatePicker, setShowFuneralDatePicker] = useState(false);
+  const [funeralDateTarget, setFuneralDateTarget] = useState<"deceased" | "burial" | "transport" | "memorial" | null>(null);
+  const [showFuneralTimePicker, setShowFuneralTimePicker] = useState(false);
+  const [funeralTimeTarget, setFuneralTimeTarget] = useState<"burial" | "transport" | "memorial" | null>(null);
+
+  const [healthPatientName, setHealthPatientName] = useState("");
+  const [healthPatientMemberId, setHealthPatientMemberId] = useState("");
+  const [healthPatientAge, setHealthPatientAge] = useState("");
+  const [healthRelation, setHealthRelation] = useState<string>(PRESET_RELATIONS[0]);
+  const [healthIllnessSummary, setHealthIllnessSummary] = useState("");
+  const [healthCondition, setHealthCondition] = useState<string>(PRESET_HEALTH_CONDITIONS[0]);
+  const [healthTreatmentType, setHealthTreatmentType] = useState<"hospital" | "clinic_home">("hospital");
+  const [healthFacilityName, setHealthFacilityName] = useState("");
+  const [healthFacilityLocation, setHealthFacilityLocation] = useState("");
+  const [healthFacilityMapUrl, setHealthFacilityMapUrl] = useState("");
+  const [healthStartDate, setHealthStartDate] = useState(formatYmd(new Date()));
+  const [healthEndDate, setHealthEndDate] = useState("");
+  const [healthProgressStatus, setHealthProgressStatus] = useState<"ကုသပြီး" | "ကုသနေဆဲ">("ကုသနေဆဲ");
+  const [funeralDeceasedName, setFuneralDeceasedName] = useState("");
+  const [funeralAge, setFuneralAge] = useState("");
+  const [funeralDeceasedDate, setFuneralDeceasedDate] = useState(formatYmd(new Date()));
+  const [funeralRelation, setFuneralRelation] = useState<string>(PRESET_RELATIONS[0]);
+  const [funeralIllnessSummary, setFuneralIllnessSummary] = useState("");
+  const [funeralBurialDate, setFuneralBurialDate] = useState(formatYmd(new Date()));
+  const [funeralBurialTime, setFuneralBurialTime] = useState(formatHm(new Date()));
+  const [funeralCemetery, setFuneralCemetery] = useState("");
+  const [funeralCemeteryMapUrl, setFuneralCemeteryMapUrl] = useState("");
+  const [funeralTransportLocation, setFuneralTransportLocation] = useState("");
+  const [funeralTransportMapUrl, setFuneralTransportMapUrl] = useState("");
+  const [funeralTransportDate, setFuneralTransportDate] = useState(formatYmd(new Date()));
+  const [funeralTransportTime, setFuneralTransportTime] = useState(formatHm(new Date()));
+  const [funeralMemorialLocation, setFuneralMemorialLocation] = useState("");
+  const [funeralMemorialMapUrl, setFuneralMemorialMapUrl] = useState("");
+  const [funeralMemorialDate, setFuneralMemorialDate] = useState(formatYmd(new Date()));
+  const [funeralMemorialTime, setFuneralMemorialTime] = useState(formatHm(new Date()));
+  const [selectedSubjectMemberId, setSelectedSubjectMemberId] = useState<string>(currentUser?.memberId || "");
+  const [subjectMemberNameInput, setSubjectMemberNameInput] = useState(currentUser?.displayName || "");
+  const [subjectMemberIdInput, setSubjectMemberIdInput] = useState(currentUser?.memberId || "");
+  const [selectedSenderMemberId, setSelectedSenderMemberId] = useState<string>("");
+  const [senderNameInput, setSenderNameInput] = useState(currentUser?.displayName || "");
+  const [senderMemberIdInput, setSenderMemberIdInput] = useState(currentUser?.memberId || "");
 
   const allTopics = useMemo(() => [...PRESET_TOPICS, ...customTopics], [customTopics]);
+  const allRelations = useMemo(() => [...PRESET_RELATIONS, ...customRelations], [customRelations]);
+  const allHealthConditions = useMemo(() => [...PRESET_HEALTH_CONDITIONS, ...customConditions], [customConditions]);
+  const senderMembers = useMemo(
+    () => [...(members || [])].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
+    [members]
+  );
+  const currentMemberRecord = useMemo(
+    () => senderMembers.find((m: any) => String(m?.id) === String(currentUser?.memberId || "")),
+    [senderMembers, currentUser?.memberId]
+  );
+  const selectedSubjectMember = useMemo(
+    () => senderMembers.find((m: any) => String(m?.id) === String(selectedSubjectMemberId)),
+    [senderMembers, selectedSubjectMemberId]
+  );
+  const isHealthNotice = topic.includes("ကျန်းမာရေး");
+  const isFuneralNotice = topic.includes("နာရေး");
 
   useEffect(() => {
     let mounted = true;
@@ -125,6 +274,61 @@ export default function EventsScreen() {
         }
       } catch {
         // ignore storage parse error
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isHealthNotice || healthRelation !== "ကိုယ်တိုင်") return;
+    setHealthPatientName(String(selectedSubjectMember?.name || subjectMemberNameInput || ""));
+    setHealthPatientMemberId(String(selectedSubjectMember?.id || subjectMemberIdInput || ""));
+    setHealthPatientAge(calculateAgeFromDob(selectedSubjectMember?.dob, healthStartDate));
+  }, [
+    isHealthNotice,
+    healthRelation,
+    selectedSubjectMember?.id,
+    selectedSubjectMember?.name,
+    selectedSubjectMember?.dob,
+    subjectMemberNameInput,
+    subjectMemberIdInput,
+    healthStartDate,
+  ]);
+
+  useEffect(() => {
+    if (!isFuneralNotice || funeralRelation !== "ကိုယ်တိုင်") return;
+    setFuneralDeceasedName(String(selectedSubjectMember?.name || subjectMemberNameInput || ""));
+    setFuneralAge(calculateAgeFromDob(selectedSubjectMember?.dob, funeralDeceasedDate));
+  }, [
+    isFuneralNotice,
+    funeralRelation,
+    selectedSubjectMember?.name,
+    selectedSubjectMember?.dob,
+    subjectMemberNameInput,
+    funeralDeceasedDate,
+  ]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const [rawRelations, rawConditions] = await Promise.all([
+          AsyncStorage.getItem(CUSTOM_RELATION_KEY),
+          AsyncStorage.getItem(CUSTOM_CONDITION_KEY),
+        ]);
+        if (!mounted) return;
+        if (rawRelations) {
+          const parsed = JSON.parse(rawRelations);
+          if (Array.isArray(parsed)) setCustomRelations(parsed.map((x) => String(x)).filter(Boolean));
+        }
+        if (rawConditions) {
+          const parsed = JSON.parse(rawConditions);
+          if (Array.isArray(parsed)) setCustomConditions(parsed.map((x) => String(x)).filter(Boolean));
+        }
+      } catch {
+        // ignore
       }
     })();
     return () => {
@@ -150,8 +354,47 @@ export default function EventsScreen() {
     setEventDate(formatYmd(new Date()));
     setEventTime(formatHm(new Date()));
     setEventLocation("");
+    setEventLocationMapUrl("");
     setImages([]);
     setNewCustomTopic("");
+    setNewCustomRelation("");
+    setNewCustomCondition("");
+    setSelectedSubjectMemberId(currentUser?.memberId || "");
+    setSubjectMemberNameInput(String(currentMemberRecord?.name || currentUser?.displayName || ""));
+    setSubjectMemberIdInput(String(currentMemberRecord?.id || currentUser?.memberId || ""));
+    setHealthPatientName("");
+    setHealthPatientMemberId("");
+    setHealthPatientAge("");
+    setHealthRelation(PRESET_RELATIONS[0]);
+    setHealthIllnessSummary("");
+    setHealthCondition(PRESET_HEALTH_CONDITIONS[0]);
+    setHealthTreatmentType("hospital");
+    setHealthFacilityName("");
+    setHealthFacilityLocation("");
+    setHealthFacilityMapUrl("");
+    setHealthStartDate(formatYmd(new Date()));
+    setHealthEndDate("");
+    setHealthProgressStatus("ကုသနေဆဲ");
+    setFuneralDeceasedName("");
+    setFuneralAge("");
+    setFuneralDeceasedDate(formatYmd(new Date()));
+    setFuneralRelation(PRESET_RELATIONS[0]);
+    setFuneralIllnessSummary("");
+    setFuneralBurialDate(formatYmd(new Date()));
+    setFuneralBurialTime(formatHm(new Date()));
+    setFuneralCemetery("");
+    setFuneralCemeteryMapUrl("");
+    setFuneralTransportLocation("");
+    setFuneralTransportMapUrl("");
+    setFuneralTransportDate(formatYmd(new Date()));
+    setFuneralTransportTime(formatHm(new Date()));
+    setFuneralMemorialLocation("");
+    setFuneralMemorialMapUrl("");
+    setFuneralMemorialDate(formatYmd(new Date()));
+    setFuneralMemorialTime(formatHm(new Date()));
+    setSelectedSenderMemberId(currentUser?.memberId || "");
+    setSenderNameInput(currentUser?.displayName || "");
+    setSenderMemberIdInput(currentUser?.memberId || "");
   };
 
   const pickImages = async () => {
@@ -188,6 +431,113 @@ export default function EventsScreen() {
     setNewCustomTopic("");
   };
 
+  const addCustomRelation = async () => {
+    const value = newCustomRelation.trim();
+    if (!value) return;
+    if (allRelations.includes(value)) {
+      if (isFuneralNotice) {
+        applyFuneralRelation(value);
+      } else {
+        applyHealthRelation(value);
+      }
+      setNewCustomRelation("");
+      return;
+    }
+    const next = [...customRelations, value];
+    setCustomRelations(next);
+    await AsyncStorage.setItem(CUSTOM_RELATION_KEY, JSON.stringify(next));
+    if (isFuneralNotice) {
+      applyFuneralRelation(value);
+    } else {
+      applyHealthRelation(value);
+    }
+    setNewCustomRelation("");
+  };
+
+  const addCustomCondition = async () => {
+    const value = newCustomCondition.trim();
+    if (!value) return;
+    if (allHealthConditions.includes(value)) {
+      setHealthCondition(value);
+      setNewCustomCondition("");
+      return;
+    }
+    const next = [...customConditions, value];
+    setCustomConditions(next);
+    await AsyncStorage.setItem(CUSTOM_CONDITION_KEY, JSON.stringify(next));
+    setHealthCondition(value);
+    setNewCustomCondition("");
+  };
+
+  const chooseSubjectMember = (memberId: string) => {
+    if (!memberId) {
+      setSelectedSubjectMemberId("");
+      setSubjectMemberNameInput("");
+      setSubjectMemberIdInput("");
+      return;
+    }
+    const selected = senderMembers.find((m: any) => String(m?.id) === String(memberId));
+    if (!selected) return;
+    setSelectedSubjectMemberId(String(selected.id));
+    setSubjectMemberNameInput(String(selected.name || ""));
+    setSubjectMemberIdInput(String(selected.id || ""));
+    if (healthRelation === "ကိုယ်တိုင်") {
+      setHealthPatientName(String(selected.name || ""));
+      setHealthPatientMemberId(String(selected.id || ""));
+      setHealthPatientAge(calculateAgeFromDob(selected.dob, healthStartDate));
+    }
+    if (funeralRelation === "ကိုယ်တိုင်") {
+      setFuneralDeceasedName(String(selected.name || ""));
+      setFuneralAge(calculateAgeFromDob(selected.dob, funeralDeceasedDate));
+    }
+  };
+
+  const chooseSenderMember = (memberId: string) => {
+    if (!memberId) {
+      setSelectedSenderMemberId("");
+      return;
+    }
+    const selected = senderMembers.find((m: any) => String(m?.id) === String(memberId));
+    if (!selected) return;
+    setSelectedSenderMemberId(String(selected.id));
+    setSenderNameInput(String(selected.name || ""));
+    setSenderMemberIdInput(String(selected.id || ""));
+  };
+
+  const onChangeSenderName = (value: string) => {
+    setSenderNameInput(value);
+    if (selectedSenderMemberId) setSelectedSenderMemberId("");
+  };
+
+  const onChangeSenderMemberId = (value: string) => {
+    setSenderMemberIdInput(value);
+    if (selectedSenderMemberId) setSelectedSenderMemberId("");
+  };
+
+  const applyHealthRelation = (relation: string) => {
+    setHealthRelation(relation);
+    if (relation !== "ကိုယ်တိုင်") {
+      setHealthPatientName("");
+      setHealthPatientMemberId("");
+      setHealthPatientAge("");
+      return;
+    }
+    setHealthPatientName(String(selectedSubjectMember?.name || subjectMemberNameInput || ""));
+    setHealthPatientMemberId(String(selectedSubjectMember?.id || subjectMemberIdInput || ""));
+    setHealthPatientAge(calculateAgeFromDob(selectedSubjectMember?.dob, healthStartDate));
+  };
+
+  const applyFuneralRelation = (relation: string) => {
+    setFuneralRelation(relation);
+    if (relation !== "ကိုယ်တိုင်") {
+      setFuneralDeceasedName("");
+      setFuneralAge("");
+      return;
+    }
+    setFuneralDeceasedName(String(selectedSubjectMember?.name || subjectMemberNameInput || ""));
+    setFuneralAge(calculateAgeFromDob(selectedSubjectMember?.dob, funeralDeceasedDate));
+  };
+
   const handleEdit = (item: OrgEventNotice) => {
     if (!canEditItem(item)) {
       Alert.alert("ခွင့်မပြုပါ", "ဤသတင်းကို ပြင်ဆင်ခွင့် မရှိပါ။");
@@ -197,9 +547,49 @@ export default function EventsScreen() {
     setTopic(item.topic || item.title || PRESET_TOPICS[0]);
     setSummary(item.summary || item.title || "");
     setDetail(item.detail || item.description || "");
+    const savedSubjectId = String(item.subjectMemberId || item.healthPatientMemberId || "");
+    const matchedSubjectMember = senderMembers.find((m: any) => String(m?.id) === savedSubjectId);
+    setSelectedSubjectMemberId(matchedSubjectMember ? String(matchedSubjectMember.id) : savedSubjectId);
+    setSubjectMemberNameInput(item.subjectMemberName || matchedSubjectMember?.name || "");
+    setSubjectMemberIdInput(savedSubjectId || "");
     setEventDate(item.eventDate || formatYmd(new Date(item.date || Date.now())));
     setEventTime(item.eventTime || item.senderTime || formatHm(new Date()));
     setEventLocation(item.eventLocation || "");
+    setEventLocationMapUrl(item.eventLocationMapUrl || "");
+    setHealthPatientName(item.healthPatientName || "");
+    setHealthPatientMemberId(item.healthPatientMemberId || "");
+    setHealthPatientAge(item.healthPatientAge || "");
+    setHealthRelation(item.healthRelation || PRESET_RELATIONS[0]);
+    setHealthIllnessSummary(item.healthIllnessSummary || "");
+    setHealthCondition(item.healthCondition || PRESET_HEALTH_CONDITIONS[0]);
+    setHealthTreatmentType(item.healthTreatmentType || "hospital");
+    setHealthFacilityName(item.healthFacilityName || "");
+    setHealthFacilityLocation(item.healthFacilityLocation || "");
+    setHealthFacilityMapUrl(item.healthFacilityMapUrl || "");
+    setHealthStartDate(item.healthStartDate || formatYmd(new Date(item.date || Date.now())));
+    setHealthEndDate(item.healthEndDate || "");
+    setHealthProgressStatus(item.healthProgressStatus || "ကုသနေဆဲ");
+    setFuneralDeceasedName(item.funeralDeceasedName || "");
+    setFuneralAge(item.funeralAge || "");
+    setFuneralDeceasedDate(item.funeralDeceasedDate || formatYmd(new Date(item.date || Date.now())));
+    setFuneralRelation(item.funeralRelation || PRESET_RELATIONS[0]);
+    setFuneralIllnessSummary(item.funeralIllnessSummary || "");
+    setFuneralBurialDate(item.funeralBurialDate || formatYmd(new Date(item.date || Date.now())));
+    setFuneralBurialTime(item.funeralBurialTime || formatHm(new Date(item.date || Date.now())));
+    setFuneralCemetery(item.funeralCemetery || "");
+    setFuneralCemeteryMapUrl(item.funeralCemeteryMapUrl || "");
+    setFuneralTransportLocation(item.funeralTransportLocation || "");
+    setFuneralTransportMapUrl(item.funeralTransportMapUrl || "");
+    setFuneralTransportDate(item.funeralTransportDate || formatYmd(new Date(item.date || Date.now())));
+    setFuneralTransportTime(item.funeralTransportTime || formatHm(new Date(item.date || Date.now())));
+    setFuneralMemorialLocation(item.funeralMemorialLocation || "");
+    setFuneralMemorialMapUrl(item.funeralMemorialMapUrl || "");
+    setFuneralMemorialDate(item.funeralMemorialDate || formatYmd(new Date(item.date || Date.now())));
+    setFuneralMemorialTime(item.funeralMemorialTime || formatHm(new Date(item.date || Date.now())));
+    const matchedSenderMember = senderMembers.find((m: any) => String(m?.id) === String(item.senderMemberId || ""));
+    setSelectedSenderMemberId(matchedSenderMember ? String(matchedSenderMember.id) : "");
+    setSenderNameInput(item.senderName || "");
+    setSenderMemberIdInput(item.senderMemberId || "");
     setImages(item.images && item.images.length ? item.images : item.image ? [item.image] : []);
     setModalVisible(true);
   };
@@ -213,10 +603,78 @@ export default function EventsScreen() {
       Alert.alert("လိုအပ်ချက်", "သတင်းခေါင်းစဉ် ရွေးချယ်ပါ။");
       return;
     }
+    if (!subjectMemberNameInput.trim() || !subjectMemberIdInput.trim()) {
+      Alert.alert("လိုအပ်ချက်", "သက်ဆိုင်သည့် အသင်းဝင်အမည် နှင့် အသင်းဝင်အမှတ် ရွေးချယ်ပါ။");
+      return;
+    }
+    if (!senderNameInput.trim()) {
+      Alert.alert("လိုအပ်ချက်", "ပေးပို့သူအမည် ဖြည့်ပါ။");
+      return;
+    }
     const isInvite = topic.includes("ဖိတ်ကြား");
     if (isInvite && (!eventDate.trim() || !eventTime.trim() || !eventLocation.trim())) {
       Alert.alert("လိုအပ်ချက်", "ဖိတ်ကြားသတင်းအတွက် နေ့ရက်၊ အချိန်၊ နေရာ ထည့်ပါ။");
       return;
+    }
+    if (isHealthNotice) {
+      if (!healthPatientName.trim()) {
+        Alert.alert("လိုအပ်ချက်", "နာမကျန်းဖြစ်သူအမည် ဖြည့်ပါ။");
+        return;
+      }
+      if (!healthRelation.trim()) {
+        Alert.alert("လိုအပ်ချက်", "တော်စပ်ပုံ ရွေးချယ်ပါ။");
+        return;
+      }
+      if (!healthIllnessSummary.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ရောဂါအမျိုးဖြစ်စဉ်အကျဉ်း ဖြည့်ပါ။");
+        return;
+      }
+      if (!healthCondition.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ရောဂါအခြေအနေ ရွေးချယ်ပါ။");
+        return;
+      }
+      if (!healthFacilityName.trim() || !healthFacilityLocation.trim() || !healthStartDate.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ကုသမှုအခြေအနေအတွက် ဆေးရုံ/ဆေးခန်း အချက်အလက်များဖြည့်ပါ။");
+        return;
+      }
+      if (healthProgressStatus === "ကုသပြီး" && !healthEndDate.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ကုသပြီး ဖြစ်ပါက ပြီးဆုံးသည့်နေ့ ဖြည့်ပါ။");
+        return;
+      }
+    }
+    if (isFuneralNotice) {
+      if (!funeralDeceasedName.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ကွယ်လွန်သူအမည် ဖြည့်ပါ။");
+        return;
+      }
+      if (!funeralAge.trim()) {
+        Alert.alert("လိုအပ်ချက်", "အသက် ဖြည့်ပါ။");
+        return;
+      }
+      if (!funeralDeceasedDate.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ကွယ်လွန်သည့်နေ့ရက် ဖြည့်ပါ။");
+        return;
+      }
+      if (!funeralRelation.trim()) {
+        Alert.alert("လိုအပ်ချက်", "တော်စပ်ပုံ ရွေးချယ်ပါ။");
+        return;
+      }
+      if (!funeralIllnessSummary.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ရောဂါအမျိုးအစားဖြစ်စဉ်အကျဉ်း ဖြည့်ပါ။");
+        return;
+      }
+      if (!funeralBurialDate.trim() || !funeralBurialTime.trim() || !funeralCemetery.trim()) {
+        Alert.alert("လိုအပ်ချက်", "သင်္ဂြိုလ်မည့် နေ့ရက်၊ အချိန်၊ သုဿာန် ဖြည့်ပါ။");
+        return;
+      }
+      if (!funeralTransportLocation.trim() || !funeralTransportDate.trim() || !funeralTransportTime.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ကြို/ပို့ယာဉ်ထွက်ခွာမည့် အချက်အလက်များ ဖြည့်ပါ။");
+        return;
+      }
+      if (!funeralMemorialLocation.trim() || !funeralMemorialDate.trim() || !funeralMemorialTime.trim()) {
+        Alert.alert("လိုအပ်ချက်", "ရက်လည်ကျင်းပမည့် အချက်အလက်များ ဖြည့်ပါ။");
+        return;
+      }
     }
 
     const now = new Date();
@@ -229,13 +687,46 @@ export default function EventsScreen() {
       image: images[0],
       images,
       topic: topic.trim(),
+      subjectMemberName: subjectMemberNameInput.trim(),
+      subjectMemberId: subjectMemberIdInput.trim(),
       summary: summary.trim(),
       detail: detail.trim(),
       eventDate: eventDate.trim(),
       eventTime: eventTime.trim(),
       eventLocation: eventLocation.trim(),
-      senderName: currentUser?.displayName || "",
-      senderMemberId: currentUser?.memberId || "",
+      eventLocationMapUrl: eventLocationMapUrl.trim(),
+      healthPatientName: healthPatientName.trim(),
+      healthPatientMemberId: healthPatientMemberId.trim(),
+      healthPatientAge: healthPatientAge.trim(),
+      healthRelation: healthRelation.trim(),
+      healthIllnessSummary: healthIllnessSummary.trim(),
+      healthCondition: healthCondition.trim(),
+      healthTreatmentType,
+      healthFacilityName: healthFacilityName.trim(),
+      healthFacilityLocation: healthFacilityLocation.trim(),
+      healthFacilityMapUrl: healthFacilityMapUrl.trim(),
+      healthStartDate: healthStartDate.trim(),
+      healthEndDate: healthEndDate.trim(),
+      healthProgressStatus,
+      funeralDeceasedName: funeralDeceasedName.trim(),
+      funeralAge: funeralAge.trim(),
+      funeralDeceasedDate: funeralDeceasedDate.trim(),
+      funeralRelation: funeralRelation.trim(),
+      funeralIllnessSummary: funeralIllnessSummary.trim(),
+      funeralBurialDate: funeralBurialDate.trim(),
+      funeralBurialTime: funeralBurialTime.trim(),
+      funeralCemetery: funeralCemetery.trim(),
+      funeralCemeteryMapUrl: funeralCemeteryMapUrl.trim(),
+      funeralTransportLocation: funeralTransportLocation.trim(),
+      funeralTransportMapUrl: funeralTransportMapUrl.trim(),
+      funeralTransportDate: funeralTransportDate.trim(),
+      funeralTransportTime: funeralTransportTime.trim(),
+      funeralMemorialLocation: funeralMemorialLocation.trim(),
+      funeralMemorialMapUrl: funeralMemorialMapUrl.trim(),
+      funeralMemorialDate: funeralMemorialDate.trim(),
+      funeralMemorialTime: funeralMemorialTime.trim(),
+      senderName: senderNameInput.trim(),
+      senderMemberId: senderMemberIdInput.trim(),
       senderDate: formatYmd(now),
       senderTime: formatHm(now),
       createdByUserId: currentUser?.id,
@@ -375,6 +866,24 @@ export default function EventsScreen() {
               <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
             </Pressable>
 
+            <Text style={styles.label}>သက်ဆိုင်သည့် အသင်းဝင် (Dropdown)</Text>
+            <Pressable style={styles.inputLike} onPress={() => setSubjectPickerVisible(true)}>
+              <Text style={{ color: Colors.light.text }}>
+                {selectedSubjectMemberId
+                  ? `${subjectMemberNameInput || "-"} (${subjectMemberIdInput || "-"})`
+                  : "အသင်းဝင်ရွေးချယ်ပါ"}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+            </Pressable>
+            <Text style={styles.label}>သက်ဆိုင်သည့် အသင်းဝင်အမည်</Text>
+            <View style={styles.inputLike}>
+              <Text style={{ color: Colors.light.text }}>{subjectMemberNameInput || "-"}</Text>
+            </View>
+            <Text style={styles.label}>သက်ဆိုင်သည့် အသင်းဝင်အမှတ်</Text>
+            <View style={styles.inputLike}>
+              <Text style={{ color: Colors.light.text }}>{subjectMemberIdInput || "-"}</Text>
+            </View>
+
             {(topic.includes("ဖိတ်ကြား")) && (
               <>
                 <Text style={styles.label}>ကျင်းပမည့်နေ့ရက် (Date)</Text>
@@ -439,6 +948,379 @@ export default function EventsScreen() {
 
                 <Text style={styles.label}>ကျင်းပမည့်နေရာ</Text>
                 <TextInput style={styles.input} value={eventLocation} onChangeText={setEventLocation} placeholder="နေရာထည့်ပါ" />
+                <Text style={styles.label}>Google Maps Link (URL)</Text>
+                <View style={styles.locationRow}>
+                  <TextInput style={[styles.input, styles.locationInput]} value={eventLocationMapUrl} onChangeText={setEventLocationMapUrl} placeholder="https://maps.google.com/..." autoCapitalize="none" />
+                  <Pressable
+                    style={styles.mapBtn}
+                    onPress={() => {
+                      const url = eventLocationMapUrl.trim();
+                      if (!url) return;
+                      void Linking.openURL(url);
+                    }}
+                  >
+                    <Ionicons name="open-outline" size={16} color={Colors.light.tint} />
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {isHealthNotice && (
+              <>
+                <Text style={styles.label}>တော်စပ်ပုံ (Dropdown)</Text>
+                <Pressable style={styles.inputLike} onPress={() => setRelationPickerVisible(true)}>
+                  <Text style={{ color: Colors.light.text }}>{healthRelation || "တော်စပ်ပုံရွေးပါ"}</Text>
+                  <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+                </Pressable>
+
+                <Text style={styles.label}>နာမကျန်းဖြစ်သူအမည်</Text>
+                <TextInput
+                  style={styles.input}
+                  value={healthPatientName}
+                  onChangeText={setHealthPatientName}
+                  editable={healthRelation !== "ကိုယ်တိုင်"}
+                  placeholder={healthRelation === "ကိုယ်တိုင်" ? "Auto ဖြည့်သွားမည်" : "အမည်"}
+                />
+
+                <Text style={styles.label}>အသင်းဝင်အမှတ်</Text>
+                <TextInput
+                  style={styles.input}
+                  value={healthPatientMemberId}
+                  onChangeText={setHealthPatientMemberId}
+                  editable={healthRelation !== "ကိုယ်တိုင်"}
+                  placeholder={healthRelation === "ကိုယ်တိုင်" ? "Auto ဖြည့်သွားမည်" : "အသင်းဝင် ID"}
+                />
+
+                <Text style={styles.label}>အသက်</Text>
+                <TextInput
+                  style={styles.input}
+                  value={healthPatientAge}
+                  onChangeText={setHealthPatientAge}
+                  editable={healthRelation !== "ကိုယ်တိုင်"}
+                  placeholder={healthRelation === "ကိုယ်တိုင်" ? "Auto ဖြည့်သွားမည်" : "အသက်"}
+                  keyboardType="numeric"
+                />
+
+                <Text style={styles.label}>ရောဂါအမျိုးဖြစ်စဉ်အကျဉ်း</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]}
+                  value={healthIllnessSummary}
+                  onChangeText={setHealthIllnessSummary}
+                  multiline
+                  placeholder="ဖြစ်စဉ်အကျဉ်း"
+                />
+
+                <Text style={styles.label}>ရောဂါအခြေအနေ (Dropdown)</Text>
+                <Pressable style={styles.inputLike} onPress={() => setConditionPickerVisible(true)}>
+                  <Text style={{ color: Colors.light.text }}>{healthCondition || "ရောဂါအခြေအနေရွေးပါ"}</Text>
+                  <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+                </Pressable>
+
+                <Text style={styles.label}>ကုသမှုအခြေအနေ</Text>
+                <View style={styles.typeRow}>
+                  <Pressable
+                    style={[styles.typeChip, healthTreatmentType === "hospital" && styles.typeChipActive]}
+                    onPress={() => setHealthTreatmentType("hospital")}
+                  >
+                    <Text style={[styles.typeText, healthTreatmentType === "hospital" && styles.typeTextActive]}>ဆေးရုံတက်ရောက်</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.typeChip, healthTreatmentType === "clinic_home" && styles.typeChipActive]}
+                    onPress={() => setHealthTreatmentType("clinic_home")}
+                  >
+                    <Text style={[styles.typeText, healthTreatmentType === "clinic_home" && styles.typeTextActive]}>ဆေးခန်း/အိမ်တွင်ကုသ</Text>
+                  </Pressable>
+                </View>
+
+                <Text style={styles.label}>{healthTreatmentType === "hospital" ? "ဆေးရုံအမည်" : "ဆေးခန်းအမည်"}</Text>
+                <TextInput style={styles.input} value={healthFacilityName} onChangeText={setHealthFacilityName} placeholder="အမည်" />
+
+                <Text style={styles.label}>တည်နေရာ</Text>
+                <TextInput style={styles.input} value={healthFacilityLocation} onChangeText={setHealthFacilityLocation} placeholder="တည်နေရာ" />
+                <Text style={styles.label}>Google Maps Link (URL)</Text>
+                <View style={styles.locationRow}>
+                  <TextInput style={[styles.input, styles.locationInput]} value={healthFacilityMapUrl} onChangeText={setHealthFacilityMapUrl} placeholder="https://maps.google.com/..." autoCapitalize="none" />
+                  <Pressable
+                    style={styles.mapBtn}
+                    onPress={() => {
+                      const url = healthFacilityMapUrl.trim();
+                      if (!url) return;
+                      void Linking.openURL(url);
+                    }}
+                  >
+                    <Ionicons name="open-outline" size={16} color={Colors.light.tint} />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.label}>{healthTreatmentType === "hospital" ? "စတင်တက်ရောက်သည့်နေ့" : "စတင်ကုသသည့်နေ့"}</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "date",
+                      value: healthStartDate,
+                      onChange: (e: any) => setHealthStartDate(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setHealthDateTarget("start"); setShowHealthDatePicker(true); }}>
+                    <Text>{healthStartDate || "YYYY-MM-DD"}</Text>
+                    <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>{healthTreatmentType === "hospital" ? "ဆင်းသည့်နေ့/တက်ရောက်နေဆဲ" : "ကုသပြီးသည့်နေ့/ကုသနေဆဲ"}</Text>
+                <View style={styles.typeRow}>
+                  <Pressable
+                    style={[styles.typeChip, healthProgressStatus === "ကုသနေဆဲ" && styles.typeChipActive]}
+                    onPress={() => setHealthProgressStatus("ကုသနေဆဲ")}
+                  >
+                    <Text style={[styles.typeText, healthProgressStatus === "ကုသနေဆဲ" && styles.typeTextActive]}>ကုသနေဆဲ</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.typeChip, healthProgressStatus === "ကုသပြီး" && styles.typeChipActive]}
+                    onPress={() => setHealthProgressStatus("ကုသပြီး")}
+                  >
+                    <Text style={[styles.typeText, healthProgressStatus === "ကုသပြီး" && styles.typeTextActive]}>ကုသပြီး</Text>
+                  </Pressable>
+                </View>
+                {healthProgressStatus === "ကုသပြီး" && (
+                  <>
+                    {Platform.OS === "web" ? (
+                      <View style={styles.inputLike}>
+                        {React.createElement("input", {
+                          type: "date",
+                          value: healthEndDate,
+                          onChange: (e: any) => setHealthEndDate(String(e?.target?.value || "")),
+                          style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                        })}
+                      </View>
+                    ) : (
+                      <Pressable style={styles.inputLike} onPress={() => { setHealthDateTarget("end"); setShowHealthDatePicker(true); }}>
+                        <Text>{healthEndDate || "YYYY-MM-DD"}</Text>
+                        <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+                      </Pressable>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            {isFuneralNotice && (
+              <>
+                <Text style={styles.label}>တော်စပ်ပုံ (Dropdown)</Text>
+                <Pressable style={styles.inputLike} onPress={() => setRelationPickerVisible(true)}>
+                  <Text style={{ color: Colors.light.text }}>{funeralRelation || "တော်စပ်ပုံရွေးပါ"}</Text>
+                  <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+                </Pressable>
+
+                <Text style={styles.label}>ကွယ်လွန်သူအမည်</Text>
+                <TextInput
+                  style={styles.input}
+                  value={funeralDeceasedName}
+                  onChangeText={setFuneralDeceasedName}
+                  editable={funeralRelation !== "ကိုယ်တိုင်"}
+                  placeholder={funeralRelation === "ကိုယ်တိုင်" ? "Auto ဖြည့်သွားမည်" : "အမည်"}
+                />
+
+                <Text style={styles.label}>အသက်</Text>
+                <TextInput
+                  style={styles.input}
+                  value={funeralAge}
+                  onChangeText={setFuneralAge}
+                  editable={funeralRelation !== "ကိုယ်တိုင်"}
+                  placeholder={funeralRelation === "ကိုယ်တိုင်" ? "Auto ဖြည့်သွားမည်" : "အသက်"}
+                  keyboardType="numeric"
+                />
+
+                <Text style={styles.label}>ကွယ်လွန်သည့်နေ့ရက်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "date",
+                      value: funeralDeceasedDate,
+                      onChange: (e: any) => setFuneralDeceasedDate(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralDateTarget("deceased"); setShowFuneralDatePicker(true); }}>
+                    <Text>{funeralDeceasedDate || "YYYY-MM-DD"}</Text>
+                    <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>ရောဂါအမျိုးအစားဖြစ်စဉ်အကျဉ်း</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]}
+                  value={funeralIllnessSummary}
+                  onChangeText={setFuneralIllnessSummary}
+                  multiline
+                  placeholder="ဖြစ်စဉ်အကျဉ်း"
+                />
+
+                <Text style={styles.label}>သင်္ဂြိုလ်မည့်နေ့ရက်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "date",
+                      value: funeralBurialDate,
+                      onChange: (e: any) => setFuneralBurialDate(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralDateTarget("burial"); setShowFuneralDatePicker(true); }}>
+                    <Text>{funeralBurialDate || "YYYY-MM-DD"}</Text>
+                    <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>သင်္ဂြိုလ်မည့်အချိန်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "time",
+                      value: funeralBurialTime,
+                      onChange: (e: any) => setFuneralBurialTime(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralTimeTarget("burial"); setShowFuneralTimePicker(true); }}>
+                    <Text>{funeralBurialTime || "HH:mm"}</Text>
+                    <Ionicons name="time-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>သင်္ဂြိုလ်မည့် သုဿာန်</Text>
+                <TextInput style={styles.input} value={funeralCemetery} onChangeText={setFuneralCemetery} placeholder="သုဿာန်" />
+                <Text style={styles.label}>Google Maps Link (URL)</Text>
+                <View style={styles.locationRow}>
+                  <TextInput style={[styles.input, styles.locationInput]} value={funeralCemeteryMapUrl} onChangeText={setFuneralCemeteryMapUrl} placeholder="https://maps.google.com/..." autoCapitalize="none" />
+                  <Pressable
+                    style={styles.mapBtn}
+                    onPress={() => {
+                      const url = funeralCemeteryMapUrl.trim();
+                      if (!url) return;
+                      void Linking.openURL(url);
+                    }}
+                  >
+                    <Ionicons name="open-outline" size={16} color={Colors.light.tint} />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.label}>ကြို/ပို့ယာဉ်ထွက်ခွာမည့် နေရာလိပ်စာ / Google Map link</Text>
+                <TextInput
+                  style={styles.input}
+                  value={funeralTransportLocation}
+                  onChangeText={setFuneralTransportLocation}
+                  placeholder="နေရာလိပ်စာ သို့ Google Map link"
+                />
+                <Text style={styles.label}>Google Maps Link (URL)</Text>
+                <View style={styles.locationRow}>
+                  <TextInput style={[styles.input, styles.locationInput]} value={funeralTransportMapUrl} onChangeText={setFuneralTransportMapUrl} placeholder="https://maps.google.com/..." autoCapitalize="none" />
+                  <Pressable
+                    style={styles.mapBtn}
+                    onPress={() => {
+                      const url = funeralTransportMapUrl.trim();
+                      if (!url) return;
+                      void Linking.openURL(url);
+                    }}
+                  >
+                    <Ionicons name="open-outline" size={16} color={Colors.light.tint} />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.label}>ကြို/ပို့ယာဉ်ထွက်ခွာမည့် နေ့ရက်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "date",
+                      value: funeralTransportDate,
+                      onChange: (e: any) => setFuneralTransportDate(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralDateTarget("transport"); setShowFuneralDatePicker(true); }}>
+                    <Text>{funeralTransportDate || "YYYY-MM-DD"}</Text>
+                    <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>ကြို/ပို့ယာဉ်ထွက်ခွာမည့် အချိန်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "time",
+                      value: funeralTransportTime,
+                      onChange: (e: any) => setFuneralTransportTime(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralTimeTarget("transport"); setShowFuneralTimePicker(true); }}>
+                    <Text>{funeralTransportTime || "HH:mm"}</Text>
+                    <Ionicons name="time-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>ရက်လည် ကျင်းပမည့် နေရာလိပ်စာ / Google Map link</Text>
+                <TextInput
+                  style={styles.input}
+                  value={funeralMemorialLocation}
+                  onChangeText={setFuneralMemorialLocation}
+                  placeholder="နေရာလိပ်စာ သို့ Google Map link"
+                />
+                <Text style={styles.label}>Google Maps Link (URL)</Text>
+                <View style={styles.locationRow}>
+                  <TextInput style={[styles.input, styles.locationInput]} value={funeralMemorialMapUrl} onChangeText={setFuneralMemorialMapUrl} placeholder="https://maps.google.com/..." autoCapitalize="none" />
+                  <Pressable
+                    style={styles.mapBtn}
+                    onPress={() => {
+                      const url = funeralMemorialMapUrl.trim();
+                      if (!url) return;
+                      void Linking.openURL(url);
+                    }}
+                  >
+                    <Ionicons name="open-outline" size={16} color={Colors.light.tint} />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.label}>ရက်လည် ကျင်းပမည့် နေ့ရက်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "date",
+                      value: funeralMemorialDate,
+                      onChange: (e: any) => setFuneralMemorialDate(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralDateTarget("memorial"); setShowFuneralDatePicker(true); }}>
+                    <Text>{funeralMemorialDate || "YYYY-MM-DD"}</Text>
+                    <Ionicons name="calendar-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
+
+                <Text style={styles.label}>ရက်လည် ကျင်းပမည့် အချိန်</Text>
+                {Platform.OS === "web" ? (
+                  <View style={styles.inputLike}>
+                    {React.createElement("input", {
+                      type: "time",
+                      value: funeralMemorialTime,
+                      onChange: (e: any) => setFuneralMemorialTime(String(e?.target?.value || "")),
+                      style: { border: "none", outline: "none", backgroundColor: "transparent", width: "100%", fontSize: 14 },
+                    })}
+                  </View>
+                ) : (
+                  <Pressable style={styles.inputLike} onPress={() => { setFuneralTimeTarget("memorial"); setShowFuneralTimePicker(true); }}>
+                    <Text>{funeralMemorialTime || "HH:mm"}</Text>
+                    <Ionicons name="time-outline" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+                )}
               </>
             )}
 
@@ -477,8 +1359,86 @@ export default function EventsScreen() {
               </ScrollView>
             )}
 
+            {showHealthDatePicker && Platform.OS !== "web" && (
+              <DateTimePicker
+                value={
+                  healthDateTarget === "end" && healthEndDate
+                    ? new Date(healthEndDate)
+                    : healthStartDate
+                      ? new Date(healthStartDate)
+                      : new Date()
+                }
+                mode="date"
+                display="default"
+                onChange={(_, selectedDate) => {
+                  setShowHealthDatePicker(false);
+                  setHealthDateTarget(null);
+                  if (!selectedDate) return;
+                  if (healthDateTarget === "start") setHealthStartDate(formatYmd(selectedDate));
+                  if (healthDateTarget === "end") setHealthEndDate(formatYmd(selectedDate));
+                }}
+              />
+            )}
+
+            {showFuneralDatePicker && Platform.OS !== "web" && (
+              <DateTimePicker
+                value={
+                  funeralDateTarget === "deceased"
+                    ? new Date(funeralDeceasedDate || formatYmd(new Date()))
+                    : funeralDateTarget === "transport"
+                    ? new Date(funeralTransportDate || formatYmd(new Date()))
+                    : funeralDateTarget === "memorial"
+                      ? new Date(funeralMemorialDate || formatYmd(new Date()))
+                      : new Date(funeralBurialDate || formatYmd(new Date()))
+                }
+                mode="date"
+                display="default"
+                onChange={(_, selectedDate) => {
+                  setShowFuneralDatePicker(false);
+                  if (!selectedDate) return;
+                  if (funeralDateTarget === "deceased") setFuneralDeceasedDate(formatYmd(selectedDate));
+                  if (funeralDateTarget === "burial") setFuneralBurialDate(formatYmd(selectedDate));
+                  if (funeralDateTarget === "transport") setFuneralTransportDate(formatYmd(selectedDate));
+                  if (funeralDateTarget === "memorial") setFuneralMemorialDate(formatYmd(selectedDate));
+                  setFuneralDateTarget(null);
+                }}
+              />
+            )}
+
+            {showFuneralTimePicker && Platform.OS !== "web" && (
+              <DateTimePicker
+                value={new Date()}
+                mode="time"
+                display="default"
+                onChange={(_, selectedDate) => {
+                  setShowFuneralTimePicker(false);
+                  if (!selectedDate) return;
+                  if (funeralTimeTarget === "burial") setFuneralBurialTime(formatHm(selectedDate));
+                  if (funeralTimeTarget === "transport") setFuneralTransportTime(formatHm(selectedDate));
+                  if (funeralTimeTarget === "memorial") setFuneralMemorialTime(formatHm(selectedDate));
+                  setFuneralTimeTarget(null);
+                }}
+              />
+            )}
+
+            <Text style={styles.label}>ပေးပို့သူ (Member Dropdown)</Text>
+            <Pressable style={styles.inputLike} onPress={() => setSenderPickerVisible(true)}>
+              <Text style={{ color: Colors.light.text }}>
+                {selectedSenderMemberId
+                  ? `${senderNameInput || "-"} (${senderMemberIdInput || "-"})`
+                  : "Member ရွေးချယ်ပါ (မရွေးလည်းရသည်)"}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+            </Pressable>
+
+            <Text style={styles.label}>ပေးပို့သူအမည် (Textbox)</Text>
+            <TextInput style={styles.input} value={senderNameInput} onChangeText={onChangeSenderName} placeholder="အမည်" />
+
+            <Text style={styles.label}>အဖွဲ့ဝင် ID (Textbox - optional)</Text>
+            <TextInput style={styles.input} value={senderMemberIdInput} onChangeText={onChangeSenderMemberId} placeholder="ဥပမာ - ရဆသ-001" />
+
             <View style={styles.senderBox}>
-              <Text style={styles.senderText}>ပေးပို့သူ: {currentUser?.displayName || "-"} ({currentUser?.memberId || "-"})</Text>
+              <Text style={styles.senderText}>ပေးပို့သူ: {senderNameInput || "-"} ({senderMemberIdInput || "-"})</Text>
               <Text style={styles.senderText}>နေ့/အချိန်: {formatYmd(new Date())} {formatHm(new Date())}</Text>
             </View>
 
@@ -525,6 +1485,147 @@ export default function EventsScreen() {
               </Pressable>
             </View>
             <Pressable style={[styles.cancelBtn, { alignSelf: "flex-end", marginTop: 8 }]} onPress={() => setTopicPickerVisible(false)}>
+              <Text style={styles.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="slide" transparent visible={relationPickerVisible} onRequestClose={() => setRelationPickerVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.topicModalContent}>
+            <Text style={styles.modalTitle}>တော်စပ်ပုံရွေးချယ်ရန်</Text>
+            <ScrollView style={{ maxHeight: 240 }}>
+              {allRelations.map((r) => (
+                <Pressable
+                  key={r}
+                  style={[styles.topicRow, (isFuneralNotice ? funeralRelation : healthRelation) === r && styles.topicRowActive]}
+                  onPress={() => {
+                    if (isFuneralNotice) applyFuneralRelation(r);
+                    else applyHealthRelation(r);
+                    setRelationPickerVisible(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.topicRowText,
+                      (isFuneralNotice ? funeralRelation : healthRelation) === r && styles.topicRowTextActive,
+                    ]}
+                  >
+                    {r}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Text style={styles.label}>တော်စပ်ပုံအသစ်ထည့်ရန်</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TextInput style={[styles.input, { flex: 1 }]} value={newCustomRelation} onChangeText={setNewCustomRelation} placeholder="အသစ်ထည့်ရန်" />
+              <Pressable style={[styles.saveBtn, { paddingHorizontal: 14 }]} onPress={() => void addCustomRelation()}>
+                <Text style={styles.saveText}>ထည့်မည်</Text>
+              </Pressable>
+            </View>
+            <Pressable style={[styles.cancelBtn, { alignSelf: "flex-end", marginTop: 8 }]} onPress={() => setRelationPickerVisible(false)}>
+              <Text style={styles.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="slide" transparent visible={conditionPickerVisible} onRequestClose={() => setConditionPickerVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.topicModalContent}>
+            <Text style={styles.modalTitle}>ရောဂါအခြေအနေရွေးချယ်ရန်</Text>
+            <ScrollView style={{ maxHeight: 240 }}>
+              {allHealthConditions.map((c) => (
+                <Pressable
+                  key={c}
+                  style={[styles.topicRow, healthCondition === c && styles.topicRowActive]}
+                  onPress={() => {
+                    setHealthCondition(c);
+                    setConditionPickerVisible(false);
+                  }}
+                >
+                  <Text style={[styles.topicRowText, healthCondition === c && styles.topicRowTextActive]}>{c}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Text style={styles.label}>အခြေအနေအသစ်ထည့်ရန်</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TextInput style={[styles.input, { flex: 1 }]} value={newCustomCondition} onChangeText={setNewCustomCondition} placeholder="အသစ်ထည့်ရန်" />
+              <Pressable style={[styles.saveBtn, { paddingHorizontal: 14 }]} onPress={() => void addCustomCondition()}>
+                <Text style={styles.saveText}>ထည့်မည်</Text>
+              </Pressable>
+            </View>
+            <Pressable style={[styles.cancelBtn, { alignSelf: "flex-end", marginTop: 8 }]} onPress={() => setConditionPickerVisible(false)}>
+              <Text style={styles.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="slide" transparent visible={subjectPickerVisible} onRequestClose={() => setSubjectPickerVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.topicModalContent}>
+            <Text style={styles.modalTitle}>သက်ဆိုင်သည့်အသင်းဝင် ရွေးချယ်ရန်</Text>
+            <ScrollView style={{ maxHeight: 260 }}>
+              {senderMembers.map((member: any) => {
+                const id = String(member?.id || "");
+                const label = `${member?.name || "-"} (${id || "-"})`;
+                const active = selectedSubjectMemberId === id;
+                return (
+                  <Pressable
+                    key={id}
+                    style={[styles.topicRow, active && styles.topicRowActive]}
+                    onPress={() => {
+                      chooseSubjectMember(id);
+                      setSubjectPickerVisible(false);
+                    }}
+                  >
+                    <Text style={[styles.topicRowText, active && styles.topicRowTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Pressable style={[styles.cancelBtn, { alignSelf: "flex-end", marginTop: 8 }]} onPress={() => setSubjectPickerVisible(false)}>
+              <Text style={styles.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="slide" transparent visible={senderPickerVisible} onRequestClose={() => setSenderPickerVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.topicModalContent}>
+            <Text style={styles.modalTitle}>ပေးပို့သူ Member ရွေးချယ်ရန်</Text>
+            <ScrollView style={{ maxHeight: 260 }}>
+              <Pressable
+                style={[styles.topicRow, !selectedSenderMemberId && styles.topicRowActive]}
+                onPress={() => {
+                  setSelectedSenderMemberId("");
+                  setSenderPickerVisible(false);
+                }}
+              >
+                <Text style={[styles.topicRowText, !selectedSenderMemberId && styles.topicRowTextActive]}>မရွေးပါ (Textbox ဖြင့်ထည့်မည်)</Text>
+              </Pressable>
+              {senderMembers.map((member: any) => {
+                const id = String(member?.id || "");
+                const label = `${member?.name || "-"} (${id || "-"})`;
+                const active = selectedSenderMemberId === id;
+                return (
+                  <Pressable
+                    key={id}
+                    style={[styles.topicRow, active && styles.topicRowActive]}
+                    onPress={() => {
+                      chooseSenderMember(id);
+                      setSenderPickerVisible(false);
+                    }}
+                  >
+                    <Text style={[styles.topicRowText, active && styles.topicRowTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Pressable style={[styles.cancelBtn, { alignSelf: "flex-end", marginTop: 8 }]} onPress={() => setSenderPickerVisible(false)}>
               <Text style={styles.cancelText}>Close</Text>
             </Pressable>
           </View>
@@ -591,6 +1692,18 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     backgroundColor: "#F8FAFC",
   },
+  locationRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  locationInput: { flex: 1 },
+  mapBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8FAFC",
+  },
   imagePickerBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -617,5 +1730,16 @@ const styles = StyleSheet.create({
   topicRowActive: { backgroundColor: `${Colors.light.tint}20` },
   topicRowText: { color: Colors.light.text, fontSize: 14 },
   topicRowTextActive: { color: Colors.light.tint, fontFamily: "Inter_700Bold" },
+  typeRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  typeChip: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#F8FAFC",
+  },
+  typeChipActive: { backgroundColor: `${Colors.light.tint}16`, borderColor: Colors.light.tint },
+  typeText: { color: Colors.light.textSecondary, fontSize: 13, fontFamily: "Inter_500Medium" },
+  typeTextActive: { color: Colors.light.tint, fontFamily: "Inter_700Bold" },
 });
-

@@ -6,8 +6,12 @@ export interface Member {
   dob?: string;
   nrc?: string;
   phone: string;
+  viberNumber?: string;
+  telegramNumber?: string;
+  messengerAccount?: string;
   email?: string;
   address?: string;
+  addressMapUrl?: string;
   joinDate: string;
   status: MemberStatus;
   avatarColor?: string;

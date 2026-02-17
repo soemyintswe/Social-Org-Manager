@@ -21,9 +21,42 @@ interface OrgEventNotice {
   summary?: string;
   detail?: string;
   topic?: string;
+  subjectMemberName?: string;
+  subjectMemberId?: string;
   eventDate?: string;
   eventTime?: string;
   eventLocation?: string;
+  eventLocationMapUrl?: string;
+  healthPatientName?: string;
+  healthPatientMemberId?: string;
+  healthPatientAge?: string;
+  healthRelation?: string;
+  healthIllnessSummary?: string;
+  healthCondition?: string;
+  healthTreatmentType?: "hospital" | "clinic_home";
+  healthFacilityName?: string;
+  healthFacilityLocation?: string;
+  healthFacilityMapUrl?: string;
+  healthStartDate?: string;
+  healthEndDate?: string;
+  healthProgressStatus?: "ကုသပြီး" | "ကုသနေဆဲ";
+  funeralDeceasedName?: string;
+  funeralAge?: string;
+  funeralDeceasedDate?: string;
+  funeralRelation?: string;
+  funeralIllnessSummary?: string;
+  funeralBurialDate?: string;
+  funeralBurialTime?: string;
+  funeralCemetery?: string;
+  funeralCemeteryMapUrl?: string;
+  funeralTransportLocation?: string;
+  funeralTransportMapUrl?: string;
+  funeralTransportDate?: string;
+  funeralTransportTime?: string;
+  funeralMemorialLocation?: string;
+  funeralMemorialMapUrl?: string;
+  funeralMemorialDate?: string;
+  funeralMemorialTime?: string;
 }
 
 function getTopicColor(topic?: string): string {
@@ -124,6 +157,14 @@ export default function EventDetailScreen() {
           <Text style={styles.summaryTitle}>အကျဉ်းချုပ်</Text>
           <Text style={styles.summaryText}>{event.summary || event.title}</Text>
 
+          {(event.subjectMemberName || event.subjectMemberId) && (
+            <View style={styles.scheduleBox}>
+              <Text style={styles.scheduleTitle}>သက်ဆိုင်သည့် အသင်းဝင်</Text>
+              <Text style={styles.scheduleText}>အမည်: {event.subjectMemberName || "-"}</Text>
+              <Text style={styles.scheduleText}>အသင်းဝင်အမှတ်: {event.subjectMemberId || "-"}</Text>
+            </View>
+          )}
+
           <Text style={styles.summaryTitle}>အပြည့်အစုံ</Text>
           <Text style={styles.description}>{event.detail || event.description}</Text>
 
@@ -133,6 +174,51 @@ export default function EventDetailScreen() {
               <Text style={styles.scheduleText}>နေ့ရက်: {event.eventDate || "-"}</Text>
               <Text style={styles.scheduleText}>အချိန်: {event.eventTime || "-"}</Text>
               <Text style={styles.scheduleText}>နေရာ: {event.eventLocation || "-"}</Text>
+              <Text style={styles.scheduleText}>Map URL: {event.eventLocationMapUrl || "-"}</Text>
+            </View>
+          )}
+
+          {topic.includes("ကျန်းမာရေး") && (
+            <View style={styles.scheduleBox}>
+              <Text style={styles.scheduleTitle}>ကျန်းမာရေးအခြေအနေအသေးစိတ်</Text>
+              <Text style={styles.scheduleText}>တော်စပ်ပုံ: {event.healthRelation || "-"}</Text>
+              <Text style={styles.scheduleText}>နာမကျန်းဖြစ်သူအမည်: {event.healthPatientName || "-"}</Text>
+              <Text style={styles.scheduleText}>အသင်းဝင်အမှတ်: {event.healthPatientMemberId || "-"}</Text>
+              <Text style={styles.scheduleText}>အသက်: {event.healthPatientAge || "-"}</Text>
+              <Text style={styles.scheduleText}>ရောဂါအမျိုးဖြစ်စဉ်အကျဉ်း: {event.healthIllnessSummary || "-"}</Text>
+              <Text style={styles.scheduleText}>ရောဂါအခြေအနေ: {event.healthCondition || "-"}</Text>
+              <Text style={styles.scheduleText}>
+                ကုသမှုအခြေအနေ: {event.healthTreatmentType === "clinic_home" ? "ဆေးခန်း/အိမ်တွင်ကုသ" : "ဆေးရုံတက်ရောက်"}
+              </Text>
+              <Text style={styles.scheduleText}>ဆေးရုံ/ဆေးခန်းအမည်: {event.healthFacilityName || "-"}</Text>
+              <Text style={styles.scheduleText}>တည်နေရာ: {event.healthFacilityLocation || "-"}</Text>
+              <Text style={styles.scheduleText}>Map URL: {event.healthFacilityMapUrl || "-"}</Text>
+              <Text style={styles.scheduleText}>စတင်ကုသသည့်နေ့: {event.healthStartDate || "-"}</Text>
+              <Text style={styles.scheduleText}>အခြေအနေ: {event.healthProgressStatus || "-"}</Text>
+              <Text style={styles.scheduleText}>ပြီးဆုံး/ဆင်းသည့်နေ့: {event.healthEndDate || "-"}</Text>
+            </View>
+          )}
+
+          {topic.includes("နာရေး") && (
+            <View style={styles.scheduleBox}>
+              <Text style={styles.scheduleTitle}>နာရေးအသေးစိတ်</Text>
+              <Text style={styles.scheduleText}>တော်စပ်ပုံ: {event.funeralRelation || "-"}</Text>
+              <Text style={styles.scheduleText}>ကွယ်လွန်သူအမည်: {event.funeralDeceasedName || "-"}</Text>
+              <Text style={styles.scheduleText}>အသက်: {event.funeralAge || "-"}</Text>
+              <Text style={styles.scheduleText}>ကွယ်လွန်သည့်နေ့ရက်: {event.funeralDeceasedDate || "-"}</Text>
+              <Text style={styles.scheduleText}>ရောဂါအမျိုးအစားဖြစ်စဉ်အကျဉ်း: {event.funeralIllnessSummary || "-"}</Text>
+              <Text style={styles.scheduleText}>သင်္ဂြိုလ်မည့်နေ့ရက်: {event.funeralBurialDate || "-"}</Text>
+              <Text style={styles.scheduleText}>သင်္ဂြိုလ်မည့်အချိန်: {event.funeralBurialTime || "-"}</Text>
+              <Text style={styles.scheduleText}>သင်္ဂြိုလ်မည့်သုဿာန်: {event.funeralCemetery || "-"}</Text>
+              <Text style={styles.scheduleText}>သုဿာန် Map URL: {event.funeralCemeteryMapUrl || "-"}</Text>
+              <Text style={styles.scheduleText}>ကြို/ပို့ယာဉ်ထွက်ခွာနေရာ: {event.funeralTransportLocation || "-"}</Text>
+              <Text style={styles.scheduleText}>ကြို/ပို့ Map URL: {event.funeralTransportMapUrl || "-"}</Text>
+              <Text style={styles.scheduleText}>ကြို/ပို့ယာဉ်နေ့ရက်: {event.funeralTransportDate || "-"}</Text>
+              <Text style={styles.scheduleText}>ကြို/ပို့ယာဉ်အချိန်: {event.funeralTransportTime || "-"}</Text>
+              <Text style={styles.scheduleText}>ရက်လည်ကျင်းပမည့်နေရာ: {event.funeralMemorialLocation || "-"}</Text>
+              <Text style={styles.scheduleText}>ရက်လည် Map URL: {event.funeralMemorialMapUrl || "-"}</Text>
+              <Text style={styles.scheduleText}>ရက်လည်နေ့ရက်: {event.funeralMemorialDate || "-"}</Text>
+              <Text style={styles.scheduleText}>ရက်လည်အချိန်: {event.funeralMemorialTime || "-"}</Text>
             </View>
           )}
 
@@ -181,4 +267,3 @@ const styles = StyleSheet.create({
   backButton: { padding: 10 },
   backButtonText: { color: Colors.light.tint, fontSize: 16, fontFamily: "Inter_600SemiBold" },
 });
-

@@ -45,6 +45,15 @@ function RootLayoutNav() {
       <Stack.Screen name="member-change-approvals" options={{ headerShown: false }} />
       <Stack.Screen name="group-detail" options={{ headerShown: false }} />
       <Stack.Screen name="loan-detail" options={{ headerShown: false }} />
+      <Stack.Screen name="qr-scanner" options={{ headerShown: false, presentation: "fullScreenModal" }} />
+      <Stack.Screen name="member-card" options={{ headerShown: false, presentation: "modal" }} />
+      <Stack.Screen name="data-management" options={{ headerShown: false }} />
+      <Stack.Screen name="member-data-management" options={{ headerShown: false }} />
+      <Stack.Screen name="import-members" options={{ headerShown: false }} />
+      <Stack.Screen name="settings" options={{ headerShown: false }} />
+      <Stack.Screen name="members" options={{ headerShown: false }} />
+      <Stack.Screen name="events" options={{ headerShown: false }} />
+      <Stack.Screen name="loans" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -68,7 +77,7 @@ export default function RootLayout() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <GestureHandlerRootView>
+        <GestureHandlerRootView style={{ flex: 1 }}>
             <DataProvider>
               <AuthProvider>
                 <RootLayoutNav />
