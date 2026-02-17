@@ -4,6 +4,12 @@ import { registerRoutes } from "./routes";
 import * as fs from "fs";
 import * as path from "path";
 
+// Temporary code to capture DATABASE_URL
+if (process.env.DATABASE_URL) {
+  fs.writeFileSync('temp_db_url.txt', process.env.DATABASE_URL);
+}
+// End of temporary code
+
 const app = express();
 const log = console.log;
 
