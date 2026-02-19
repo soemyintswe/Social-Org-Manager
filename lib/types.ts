@@ -61,6 +61,8 @@ export interface AccountSettings {
   openingBalanceCash: number;
   openingBalanceBank: number;
   asOfDate: string;
+  syncServerUrl?: string;
+  syncEnabled?: boolean;
 }
 
 export type TransactionType = "income" | "expense";

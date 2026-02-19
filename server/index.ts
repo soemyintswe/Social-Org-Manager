@@ -39,8 +39,12 @@ function setupCors(app: express.Application) {
     const isLocalhost =
       origin?.startsWith("http://localhost:") ||
       origin?.startsWith("http://127.0.0.1:");
+    const isLanOrigin =
+      origin?.startsWith("http://192.168.") ||
+      origin?.startsWith("http://10.") ||
+      origin?.startsWith("http://172.");
 
-    if (origin && (origins.has(origin) || isLocalhost)) {
+    if (origin && (origins.has(origin) || isLocalhost || isLanOrigin)) {
       res.header("Access-Control-Allow-Origin", origin);
       res.header(
         "Access-Control-Allow-Methods",
@@ -243,14 +247,14 @@ function setupErrorHandler(app: express.Application) {
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    },
-  );
+  const listenOptions: any = {
+    port,
+    host: "0.0.0.0",
+  };
+  if (process.platform !== "win32") {
+    listenOptions.reusePort = true;
+  }
+  server.listen(listenOptions, () => {
+    log(`express server serving on port ${port}`);
+  });
 })();

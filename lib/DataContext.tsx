@@ -4,6 +4,7 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useRef,
 } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -120,11 +121,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     asOfDate: new Date().toISOString(),
+    syncServerUrl: "",
+    syncEnabled: true,
   });
   const [loading, setLoading] = useState(true);
+  const bootstrappedRef = useRef(false);
 
   const refreshData = useCallback(async () => {
     try {
+      await store.pullLanSnapshotToLocal();
       await store.seedDefaultAdminUser();
       const [m, e, g, a, t, l, u, r, ec, sar, sacr, s] = await Promise.all([
         store.getMembers(),
@@ -161,6 +166,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refreshData();
+  }, [refreshData]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!bootstrappedRef.current) {
+      bootstrappedRef.current = true;
+      return;
+    }
+    const timer = setTimeout(() => {
+      void store.pushLanSnapshotFromLocal();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [
+    loading,
+    members,
+    events,
+    groups,
+    attendance,
+    transactions,
+    loans,
+    users,
+    memberChangeRequests,
+    expenseClaims,
+    standardAmountRules,
+    standardAmountChangeRequests,
+    accountSettings,
+  ]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void (async () => {
+        const changed = await store.pullLanSnapshotToLocal();
+        if (changed) {
+          await refreshData();
+        }
+      })();
+    }, 10000);
+    return () => clearInterval(timer);
   }, [refreshData]);
 
   // --- Actions ---

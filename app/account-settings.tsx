@@ -17,6 +17,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { pullLanSnapshotToLocal, pushLanSnapshotFromLocal } from "@/lib/storage";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -37,8 +38,16 @@ export default function AccountSettingsScreen() {
   const [resetIdentifier, setResetIdentifier] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || "");
+  const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
+  const [syncing, setSyncing] = useState(false);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  React.useEffect(() => {
+    setSyncServerUrl(accountSettings.syncServerUrl || "");
+    setSyncEnabled(accountSettings.syncEnabled !== false);
+  }, [accountSettings.syncServerUrl, accountSettings.syncEnabled]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -48,6 +57,8 @@ export default function AccountSettingsScreen() {
         openingBalanceCash: accountSettings.openingBalanceCash,
         openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",
+        syncServerUrl: syncServerUrl.trim(),
+        syncEnabled,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
@@ -151,6 +162,18 @@ export default function AccountSettingsScreen() {
     }
   };
 
+  const handleSyncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const pulled = await pullLanSnapshotToLocal();
+      const pushed = await pushLanSnapshotFromLocal();
+      Alert.alert("Sync", `Pull: ${pulled ? "OK" : "Skip/Fail"}\nPush: ${pushed ? "OK" : "Skip/Fail"}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -177,14 +200,33 @@ export default function AccountSettingsScreen() {
       >
         <View style={styles.storageCard}>
           <View style={styles.storageIcon}>
-            <Ionicons name="cloud-offline" size={24} color="#F59E0B" />
+            <Ionicons name={syncEnabled ? "cloud-done" : "cloud-offline"} size={24} color={syncEnabled ? "#16A34A" : "#F59E0B"} />
           </View>
           <View style={styles.storageTextContainer}>
-            <Text style={styles.storageTitle}>Storage: Offline (Local)</Text>
+            <Text style={styles.storageTitle}>Storage: {syncEnabled ? "Online + Offline (LAN Sync)" : "Offline (Local)"}</Text>
             <Text style={styles.storageDesc}>
-              အချက်အလက်များကို ဤစက်ထဲတွင်သာ သိမ်းဆည်းထားပါသည်။ အခြားစက်နှင့် ချိတ်ဆက်အသုံးပြုလိုပါက Backup/Restore ပြုလုပ်ရန် လိုအပ်ပါသည်။
+              LAN Sync URL သတ်မှတ်ပြီး Enable လုပ်ပါက Computer/Mobile တို့တွင် အချက်အလက်များ အလိုအလျောက်ညှိနှိုင်းသွားပါမည်။
             </Text>
           </View>
+        </View>
+        <Text style={styles.label}>LAN Sync Server URL</Text>
+        <TextInput
+          style={styles.input}
+          value={syncServerUrl}
+          onChangeText={setSyncServerUrl}
+          placeholder="ဥပမာ - http://192.168.1.100:5000"
+          autoCapitalize="none"
+        />
+        <View style={styles.syncRow}>
+          <Pressable style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive]} onPress={() => setSyncEnabled((v) => !v)}>
+            <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
+            <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
+              {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
+            <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
+          </Pressable>
         </View>
 
         {canManageSystem && (
@@ -535,5 +577,46 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     color: "#9A3412",
     lineHeight: 18,
+  },
+  syncRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    gap: 10,
+  },
+  syncToggleBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    paddingVertical: 11,
+  },
+  syncToggleBtnActive: {
+    backgroundColor: "#16A34A",
+    borderColor: "#16A34A",
+  },
+  syncToggleText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  syncToggleTextActive: {
+    color: "#fff",
+  },
+  syncNowBtn: {
+    borderRadius: 10,
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  syncNowText: {
+    color: "#fff",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
   },
 });

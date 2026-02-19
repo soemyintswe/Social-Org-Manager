@@ -33,6 +33,7 @@ const KEYS = {
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
 };
+const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
 
@@ -901,12 +902,85 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     currency: "MMK",
-    asOfDate: new Date().toISOString()
+    asOfDate: new Date().toISOString(),
+    syncServerUrl: "",
+    syncEnabled: true,
   });
 }
 
 export async function saveAccountSettings(settings: AccountSettings) {
   await AsyncStorage.setItem(KEYS.ACCOUNT_SETTINGS, JSON.stringify(settings));
+}
+
+function normalizeSyncServerUrl(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
+  const settings = await getAccountSettings();
+  const url = normalizeSyncServerUrl(
+    settings.syncServerUrl || String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || "")
+  );
+  const enabled = settings.syncEnabled !== false && !!url;
+  return { url, enabled };
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 6000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...(init || {}), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function pushLanSnapshotFromLocal(): Promise<boolean> {
+  try {
+    const { url, enabled } = await resolveSyncServerUrl();
+    if (!enabled) return false;
+    const raw = await exportData();
+    const data = JSON.parse(raw) as Record<string, string>;
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      source: "mobile",
+      data,
+    };
+    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function pullLanSnapshotToLocal(): Promise<boolean> {
+  try {
+    const { url, enabled } = await resolveSyncServerUrl();
+    if (!enabled) return false;
+    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, { method: "GET" });
+    if (!res.ok) return false;
+    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string> };
+    if (!payload || typeof payload !== "object" || !payload.data) return false;
+
+    const incomingUpdatedAt = String(payload.updatedAt || "");
+    const lastApplied = String((await AsyncStorage.getItem(SYNC_LAST_SERVER_UPDATED_AT_KEY)) || "");
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) return false;
+
+    const merged = await mergeData(JSON.stringify(payload.data));
+    if (incomingUpdatedAt) {
+      await AsyncStorage.setItem(SYNC_LAST_SERVER_UPDATED_AT_KEY, incomingUpdatedAt);
+    }
+    return merged;
+  } catch {
+    return false;
+  }
 }
 
 // --- Users ---
