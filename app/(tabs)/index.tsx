@@ -20,7 +20,7 @@ import { router, useFocusEffect } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { CATEGORY_LABELS, normalizeMemberStatus, TransactionCategory } from "@/lib/types";
+import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory } from "@/lib/types";
 import { exportData } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
@@ -37,6 +37,12 @@ interface Transaction {
   categoryLabel?: string;
   payerPayee?: string;
 }
+
+const getEventTime = (event: OrgEvent) => {
+  const dateText = String((event as any).eventDate || event.date || "").trim();
+  const parsed = dateText ? new Date(dateText).getTime() : 0;
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
 
 // A utility function for consistent currency formatting
 const formatCurrency = (amount: number) => `${amount.toLocaleString()} KS`;
@@ -93,7 +99,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, transactions, loans, memberChangeRequests, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, events, transactions, loans, memberChangeRequests, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const canCreateMember = can("members.create") || can("members.manage");
@@ -121,6 +127,9 @@ export default function DashboardScreen() {
 
   const recentTxns: Transaction[] = [...(transactions || [])]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5);
+  const recentEvents: OrgEvent[] = [...(events || [])]
+    .sort((a, b) => getEventTime(b) - getEventTime(a))
     .slice(0, 5);
 
   const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
@@ -186,15 +195,7 @@ export default function DashboardScreen() {
     return { cash, bank, total: cash + bank };
   }, [transactions, accountSettings]);
 
-  // Events Count (for badge)
-  const [eventCount, setEventCount] = useState(0);
-  useEffect(() => {
-    const loadEventCount = async () => {
-      const stored = await AsyncStorage.getItem("@org_events");
-      if (stored) setEventCount(JSON.parse(stored).length);
-    };
-    loadEventCount();
-  }, []);
+  const eventCount = Array.isArray(events) ? events.length : 0;
 
   // Auto Backup Logic
   useEffect(() => {
@@ -508,6 +509,26 @@ export default function DashboardScreen() {
         <QuickAction icon="qr-code-outline" label="ကတ်ဖတ်မည်" onPress={() => router.push("/qr-scanner" as any)} />
       </View>
 
+      {recentEvents.length > 0 && (
+        <>
+          <Text style={styles.sectionTitle}>Recent Events</Text>
+          {recentEvents.map((event) => (
+            <Pressable key={event.id} style={styles.recentEventRow} onPress={() => router.push({ pathname: "/event-detail", params: { id: event.id } } as any)}>
+              <View style={styles.recentEventIcon}>
+                <Ionicons name="calendar-outline" size={16} color="#3B82F6" />
+              </View>
+              <View style={styles.recentEventInfo}>
+                <Text style={styles.recentEventTitle} numberOfLines={1}>{event.title || "Untitled Event"}</Text>
+                <Text style={styles.recentEventMeta} numberOfLines={1}>
+                  {(event as any).eventDate || event.date || "-"} {(event as any).eventTime || ""}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+            </Pressable>
+          ))}
+        </>
+      )}
+
       {recentTxns.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Recent Transactions</Text>
@@ -573,6 +594,27 @@ const styles = StyleSheet.create({
   recentTxnAmt: { fontSize: 14, fontWeight: "bold" },
   incomeText: { color: Colors.light.success },
   expenseText: { color: Colors.light.accent },
+  recentEventRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "white",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 10,
+    marginHorizontal: 20,
+  },
+  recentEventIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+    backgroundColor: "#DBEAFE",
+  },
+  recentEventInfo: { flex: 1 },
+  recentEventTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  recentEventMeta: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 2 },
   footer: { padding: 20, alignItems: "center", marginTop: 10, opacity: 0.6 },
   footerText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text, textAlign: "center" },
   footerSubText: { fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2, textAlign: "center" },

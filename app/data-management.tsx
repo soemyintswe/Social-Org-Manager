@@ -98,7 +98,7 @@ export default function DataManagementScreen() {
       }
 
       // Events နှင့် Custom Categories များကို သီးသန့်ဆွဲထုတ်ပြီး ပေါင်းထည့်မည်
-      const eventsStr = await AsyncStorage.getItem("@org_events");
+      const eventsStr = await AsyncStorage.getItem("@orghub_events");
       const customCatsStr = await AsyncStorage.getItem("@custom_categories");
       
       // Data အားလုံးပေါင်းစပ်ခြင်း
@@ -280,12 +280,12 @@ export default function DataManagementScreen() {
       const parsed = JSON.parse(backupText);
       if (Array.isArray(parsed.events)) {
         if (restoreMode === "merge") {
-          const currentEventsRaw = await AsyncStorage.getItem("@org_events");
+          const currentEventsRaw = await AsyncStorage.getItem("@orghub_events");
           const currentEvents = currentEventsRaw ? JSON.parse(currentEventsRaw) : [];
           const mergedEvents = mergeArrayById(Array.isArray(currentEvents) ? currentEvents : [], parsed.events);
-          await AsyncStorage.setItem("@org_events", JSON.stringify(mergedEvents));
+          await AsyncStorage.setItem("@orghub_events", JSON.stringify(mergedEvents));
         } else {
-          await AsyncStorage.setItem("@org_events", JSON.stringify(parsed.events));
+          await AsyncStorage.setItem("@orghub_events", JSON.stringify(parsed.events));
         }
       }
       if (Array.isArray(parsed.customCategories)) {
