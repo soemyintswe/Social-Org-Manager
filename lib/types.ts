@@ -193,6 +193,89 @@ export interface MemberChangeRequest {
   reviewNote?: string;
 }
 
+export type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";
+export type ExpenseClaimStatus = "pending_approval" | "approved" | "rejected" | "disbursed";
+export type DisbursementMethod = "cash" | "bank";
+
+export interface ExpenseClaim {
+  id: string;
+  claimNumber: string;
+  claimDate: string;
+  expenseCategory: string;
+  expenseCategoryLabel: string;
+  claimantType: ClaimantType;
+  claimantMemberId?: string;
+  relatedMemberId?: string;
+  relatedMemberName?: string;
+  claimantName: string;
+  claimantAddress?: string;
+  familyMemberName?: string;
+  familyRelation?: string;
+  relationDescription?: string;
+  nrc?: string;
+  phone?: string;
+  reason: string;
+  linkedEventId?: string;
+  linkedEventTitle?: string;
+  requestedAmount: number;
+  approvedAmount?: number;
+  status: ExpenseClaimStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  approverUserId?: string;
+  approvalNote?: string;
+  approvedAt?: string;
+  disburserUserId?: string;
+  disbursementMethod?: DisbursementMethod;
+  disbursementDate?: string;
+  voucherNumber?: string;
+  disbursementNote?: string;
+  disbursedAt?: string;
+  linkedTransactionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StandardAmountRule {
+  key: string;
+  label: string;
+  amount: number;
+  enabled: boolean;
+  updatedAt: string;
+  updatedByUserId?: string;
+}
+
+export type StandardAmountRequestStatus = "pending_approval" | "approved" | "rejected";
+
+export interface StandardAmountChangeRequest {
+  id: string;
+  ruleKey: string;
+  ruleLabel: string;
+  previousAmount: number;
+  requestedAmount: number;
+  reason: string;
+  status: StandardAmountRequestStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  approverUserId?: string;
+  approvalNote?: string;
+  approvedAt?: string;
+}
+
+export const DEFAULT_STANDARD_AMOUNT_RULES: StandardAmountRule[] = [
+  { key: "health_support", label: "ကျန်းမာရေးထောက်ပံ့ငွေ", amount: 50000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "education_support", label: "ပညာရေးထောက်ပံ့ငွေ", amount: 50000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "funeral_support_self", label: "နာရေးကူညီငွေ (ကိုယ်တိုင်)", amount: 200000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "funeral_support_family", label: "နာရေးကူညီငွေ (မိသားစုဝင်)", amount: 100000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "funeral_support_association_member", label: "နာရေးကူညီငွေ (ဆင်သေရွာအသင်းဝင်)", amount: 50000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "loan_disbursement", label: "ချေးငွေထုတ်ပေးငွေ", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "bank_charges", label: "ဘဏ်စရိတ်ပေးငွေ", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "general_expenses", label: "အထွေထွေအသုံးစရိတ်", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "other_expenses", label: "အခြားအသုံးစရိတ်", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "monthly_fee_rate", label: "လစဉ်ကြေးနှုန်းထား", amount: 2500, enabled: true, updatedAt: new Date().toISOString() },
+];
+
 export const ORG_POSITION_LABELS: Record<OrgPosition, string> = {
   patron: "နာယက",
   chairperson: "ဥက္ကဋ္ဌ",

@@ -16,6 +16,10 @@ import type {
   AccountSettings,
   UserAccount,
   MemberChangeRequest,
+  ExpenseClaim,
+  StandardAmountRule,
+  StandardAmountChangeRequest,
+  DisbursementMethod,
 } from "./types";
 import * as store from "./storage";
 
@@ -28,6 +32,9 @@ interface DataContextValue {
   loans: Loan[];
   users: UserAccount[];
   memberChangeRequests: MemberChangeRequest[];
+  expenseClaims: ExpenseClaim[];
+  standardAmountRules: StandardAmountRule[];
+  standardAmountChangeRequests: StandardAmountChangeRequest[];
   accountSettings: AccountSettings;
   loading: boolean;
   refreshData: () => Promise<void>;
@@ -63,6 +70,27 @@ interface DataContextValue {
   rejectMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
   withdrawMemberChangeRequest: (requestId: string, requesterUserId: string, note?: string) => Promise<void>;
   assignMemberChangeRequest: (requestId: string, assignedReviewerUserId: string | undefined, assignerUserId: string) => Promise<void>;
+  createExpenseClaim: (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => Promise<ExpenseClaim>;
+  approveExpenseClaim: (input: { claimId: string; approverUserId: string; approvedAmount: number; approvalNote?: string }) => Promise<void>;
+  rejectExpenseClaim: (input: { claimId: string; approverUserId: string; approvalNote: string }) => Promise<void>;
+  disburseExpenseClaim: (input: {
+    claimId: string;
+    disburserUserId: string;
+    method: DisbursementMethod;
+    disbursementDate: string;
+    voucherNumber?: string;
+    note?: string;
+  }) => Promise<void>;
+  createStandardAmountChangeRequest: (input: {
+    ruleKey: string;
+    ruleLabel: string;
+    requestedAmount: number;
+    reason: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => Promise<StandardAmountChangeRequest>;
+  approveStandardAmountChangeRequest: (requestId: string, approverUserId: string, approvalNote?: string) => Promise<void>;
+  rejectStandardAmountChangeRequest: (requestId: string, approverUserId: string, approvalNote?: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -83,6 +111,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [memberChangeRequests, setMemberChangeRequests] = useState<MemberChangeRequest[]>([]);
+  const [expenseClaims, setExpenseClaims] = useState<ExpenseClaim[]>([]);
+  const [standardAmountRules, setStandardAmountRules] = useState<StandardAmountRule[]>([]);
+  const [standardAmountChangeRequests, setStandardAmountChangeRequests] = useState<StandardAmountChangeRequest[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
     orgName: "My Organization",
     currency: "MMK",
@@ -95,7 +126,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const refreshData = useCallback(async () => {
     try {
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, ec, sar, sacr, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -104,6 +135,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getLoans(),
         store.getUsers(),
         store.getMemberChangeRequests(),
+        store.getExpenseClaims(),
+        store.getStandardAmountRules(),
+        store.getStandardAmountChangeRequests(),
         store.getAccountSettings(),
       ]);
       setMembers(m);
@@ -114,6 +148,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setLoans(l);
       setUsers(u);
       setMemberChangeRequests(r);
+      setExpenseClaims(ec);
+      setStandardAmountRules(sar);
+      setStandardAmountChangeRequests(sacr);
       if (s) setAccountSettings(s);
     } catch (error) {
       console.error("Refresh Error:", error);
@@ -261,6 +298,66 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData();
   };
 
+  const createExpenseClaim = async (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => {
+    const claim = await store.createExpenseClaim(input);
+    await refreshData();
+    return claim;
+  };
+
+  const approveExpenseClaim = async (input: {
+    claimId: string;
+    approverUserId: string;
+    approvedAmount: number;
+    approvalNote?: string;
+  }) => {
+    await store.approveExpenseClaim(input);
+    await refreshData();
+  };
+
+  const rejectExpenseClaim = async (input: {
+    claimId: string;
+    approverUserId: string;
+    approvalNote: string;
+  }) => {
+    await store.rejectExpenseClaim(input);
+    await refreshData();
+  };
+
+  const disburseExpenseClaim = async (input: {
+    claimId: string;
+    disburserUserId: string;
+    method: DisbursementMethod;
+    disbursementDate: string;
+    voucherNumber?: string;
+    note?: string;
+  }) => {
+    await store.disburseExpenseClaim(input);
+    await refreshData();
+  };
+
+  const createStandardAmountChangeRequest = async (input: {
+    ruleKey: string;
+    ruleLabel: string;
+    requestedAmount: number;
+    reason: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => {
+    const req = await store.createStandardAmountChangeRequest(input);
+    await refreshData();
+    return req;
+  };
+
+  const approveStandardAmountChangeRequest = async (requestId: string, approverUserId: string, approvalNote?: string) => {
+    await store.approveStandardAmountChangeRequest(requestId, approverUserId, approvalNote);
+    await refreshData();
+  };
+
+  const rejectStandardAmountChangeRequest = async (requestId: string, approverUserId: string, approvalNote?: string) => {
+    await store.rejectStandardAmountChangeRequest(requestId, approverUserId, approvalNote);
+    await refreshData();
+  };
+
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
@@ -298,7 +395,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, standardAmountRules, standardAmountChangeRequests, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -308,6 +405,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     updateAccountSettings,
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
+    createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
+    createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

@@ -451,6 +451,12 @@ export default function FinanceScreen() {
                 <Ionicons name="add" size={24} color="white" />
               </Pressable>
             )}
+            <Pressable
+              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+              onPress={() => router.push("/expense-claims" as any)}
+            >
+              <Ionicons name="document-text-outline" size={20} color={Colors.light.text} />
+            </Pressable>
           </View>
         </View>
         <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း - {scopeLabel}</Text>

@@ -47,6 +47,12 @@ export default function FloatingTabMenu() {
         enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
       },
       {
+        name: "ငွေတောင်းခံလွှာ",
+        icon: "document-text-outline",
+        route: "/expense-claims",
+        enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
+      },
+      {
         name: "အစီရင်ခံစာ",
         icon: "bar-chart-outline",
         route: "/reports",

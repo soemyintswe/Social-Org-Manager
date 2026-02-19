@@ -10,6 +10,11 @@ import {
   UserAccount,
   MemberChangeRequest,
   MemberChangeAction,
+  ExpenseClaim,
+  StandardAmountRule,
+  StandardAmountChangeRequest,
+  DEFAULT_STANDARD_AMOUNT_RULES,
+  DisbursementMethod,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 
@@ -24,6 +29,9 @@ const KEYS = {
   USERS: "@orghub_users",
   USER_PASSWORDS: "@orghub_user_passwords",
   MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
+  EXPENSE_CLAIMS: "@orghub_expense_claims",
+  STANDARD_AMOUNTS: "@orghub_standard_amounts",
+  STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
 };
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
@@ -427,6 +435,338 @@ export async function clearAllMembers(): Promise<void> {
 
 export async function clearAllData(): Promise<void> {
   await AsyncStorage.multiRemove(Object.values(KEYS));
+}
+
+function toYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function makeClaimNumber(existing: ExpenseClaim[]): string {
+  const today = new Date();
+  const ymd = toYmd(today).replace(/-/g, "");
+  const prefix = `EC-${ymd}-`;
+  let max = 0;
+  for (const item of existing) {
+    const value = String(item.claimNumber || "");
+    if (!value.startsWith(prefix)) continue;
+    const seq = Number(value.slice(prefix.length));
+    if (Number.isFinite(seq) && seq > max) max = seq;
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+
+async function pushSystemEvent(input: {
+  title: string;
+  description: string;
+  createdByUserId?: string;
+  createdByMemberId?: string;
+}) {
+  try {
+    const events = await getEvents();
+    const now = new Date();
+    const event: OrgEvent = {
+      id: generateId(),
+      title: input.title,
+      description: input.description,
+      date: toYmd(now),
+      time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+      location: "System",
+      attendeeIds: [],
+      createdAt: now.toISOString(),
+      createdByUserId: input.createdByUserId,
+      createdByMemberId: input.createdByMemberId,
+    };
+    await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify([event, ...events]));
+  } catch (error) {
+    console.log("pushSystemEvent failed", error);
+  }
+}
+
+function defaultStandardRules(): StandardAmountRule[] {
+  const now = new Date().toISOString();
+  return DEFAULT_STANDARD_AMOUNT_RULES.map((item) => ({ ...item, updatedAt: now }));
+}
+
+export async function getStandardAmountRules(): Promise<StandardAmountRule[]> {
+  const rules = await safeGet<StandardAmountRule[]>(KEYS.STANDARD_AMOUNTS, []);
+  if (!Array.isArray(rules) || rules.length === 0) {
+    const defaults = defaultStandardRules();
+    await AsyncStorage.setItem(KEYS.STANDARD_AMOUNTS, JSON.stringify(defaults));
+    return defaults;
+  }
+
+  const mergedByKey = new Map<string, StandardAmountRule>();
+  defaultStandardRules().forEach((item) => mergedByKey.set(item.key, item));
+  rules.forEach((item) => {
+    const key = String(item?.key || "").trim();
+    if (!key) return;
+    mergedByKey.set(key, {
+      ...mergedByKey.get(key),
+      ...item,
+      key,
+      label: String(item.label || mergedByKey.get(key)?.label || key),
+      amount: Number(item.amount || 0),
+      enabled: Boolean(item.enabled),
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    });
+  });
+  const merged = Array.from(mergedByKey.values());
+  await AsyncStorage.setItem(KEYS.STANDARD_AMOUNTS, JSON.stringify(merged));
+  return merged;
+}
+
+export async function getStandardAmountRuleByKey(key: string): Promise<StandardAmountRule | undefined> {
+  const rules = await getStandardAmountRules();
+  return rules.find((item) => item.key === key);
+}
+
+export async function getStandardAmountChangeRequests(): Promise<StandardAmountChangeRequest[]> {
+  const rows = await safeGet<StandardAmountChangeRequest[]>(KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function createStandardAmountChangeRequest(input: {
+  ruleKey: string;
+  ruleLabel: string;
+  requestedAmount: number;
+  reason: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+}): Promise<StandardAmountChangeRequest> {
+  const [rules, requests] = await Promise.all([getStandardAmountRules(), getStandardAmountChangeRequests()]);
+  const existingRule = rules.find((item) => item.key === input.ruleKey);
+  const request: StandardAmountChangeRequest = {
+    id: generateId(),
+    ruleKey: input.ruleKey,
+    ruleLabel: input.ruleLabel || existingRule?.label || input.ruleKey,
+    previousAmount: Number(existingRule?.amount || 0),
+    requestedAmount: Number(input.requestedAmount || 0),
+    reason: String(input.reason || "").trim(),
+    status: "pending_approval",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, JSON.stringify([request, ...requests]));
+  await pushSystemEvent({
+    title: `Amount change request: ${request.ruleLabel}`,
+    description: `${request.previousAmount.toLocaleString()} KS → ${request.requestedAmount.toLocaleString()} KS`,
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+  });
+  return request;
+}
+
+export async function approveStandardAmountChangeRequest(requestId: string, approverUserId: string, approvalNote?: string): Promise<void> {
+  const [rules, requests] = await Promise.all([getStandardAmountRules(), getStandardAmountChangeRequests()]);
+  const idx = requests.findIndex((item) => item.id === requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  if (requests[idx].status !== "pending_approval") throw new Error("request_not_pending");
+
+  const req = requests[idx];
+  const nextRules = [...rules];
+  const ruleIdx = nextRules.findIndex((item) => item.key === req.ruleKey);
+  if (ruleIdx === -1) {
+    nextRules.push({
+      key: req.ruleKey,
+      label: req.ruleLabel,
+      amount: req.requestedAmount,
+      enabled: false,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: approverUserId,
+    });
+  } else {
+    nextRules[ruleIdx] = {
+      ...nextRules[ruleIdx],
+      amount: req.requestedAmount,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: approverUserId,
+    };
+  }
+
+  requests[idx] = {
+    ...req,
+    status: "approved",
+    approverUserId,
+    approvalNote: approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+  };
+
+  await AsyncStorage.multiSet([
+    [KEYS.STANDARD_AMOUNTS, JSON.stringify(nextRules)],
+    [KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, JSON.stringify(requests)],
+  ]);
+
+  await pushSystemEvent({
+    title: `Amount updated: ${req.ruleLabel}`,
+    description: `${req.previousAmount.toLocaleString()} KS → ${req.requestedAmount.toLocaleString()} KS`,
+    createdByUserId: approverUserId,
+  });
+}
+
+export async function rejectStandardAmountChangeRequest(requestId: string, approverUserId: string, approvalNote?: string): Promise<void> {
+  const requests = await getStandardAmountChangeRequests();
+  const idx = requests.findIndex((item) => item.id === requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  if (requests[idx].status !== "pending_approval") throw new Error("request_not_pending");
+  requests[idx] = {
+    ...requests[idx],
+    status: "rejected",
+    approverUserId,
+    approvalNote: approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, JSON.stringify(requests));
+}
+
+export async function getExpenseClaims(): Promise<ExpenseClaim[]> {
+  const rows = await safeGet<ExpenseClaim[]>(KEYS.EXPENSE_CLAIMS, []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function createExpenseClaim(input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">): Promise<ExpenseClaim> {
+  const claims = await getExpenseClaims();
+  const now = new Date().toISOString();
+  const claim: ExpenseClaim = {
+    id: generateId(),
+    claimNumber: makeClaimNumber(claims),
+    claimDate: input.claimDate || toYmd(new Date()),
+    expenseCategory: String(input.expenseCategory || "other_expenses"),
+    expenseCategoryLabel: String(input.expenseCategoryLabel || input.expenseCategory || "Other"),
+    claimantType: input.claimantType,
+    claimantMemberId: input.claimantMemberId,
+    relatedMemberId: input.relatedMemberId,
+    relatedMemberName: input.relatedMemberName,
+    claimantName: String(input.claimantName || "").trim(),
+    claimantAddress: input.claimantAddress?.trim() || undefined,
+    familyMemberName: input.familyMemberName?.trim() || undefined,
+    familyRelation: input.familyRelation?.trim() || undefined,
+    relationDescription: input.relationDescription?.trim() || undefined,
+    nrc: input.nrc?.trim() || undefined,
+    phone: input.phone?.trim() || undefined,
+    reason: String(input.reason || "").trim(),
+    linkedEventId: input.linkedEventId?.trim() || undefined,
+    linkedEventTitle: input.linkedEventTitle?.trim() || undefined,
+    requestedAmount: Number(input.requestedAmount || 0),
+    approvedAmount: undefined,
+    status: "pending_approval",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify([claim, ...claims]));
+  await pushSystemEvent({
+    title: `Expense Claim Submitted (${claim.claimNumber})`,
+    description: `${claim.claimantName} - ${claim.requestedAmount.toLocaleString()} KS (${claim.expenseCategoryLabel})`,
+    createdByUserId: claim.createdByUserId,
+    createdByMemberId: claim.createdByMemberId,
+  });
+  return claim;
+}
+
+export async function approveExpenseClaim(input: {
+  claimId: string;
+  approverUserId: string;
+  approvedAmount: number;
+  approvalNote?: string;
+}): Promise<void> {
+  const claims = await getExpenseClaims();
+  const idx = claims.findIndex((item) => item.id === input.claimId);
+  if (idx === -1) throw new Error("claim_not_found");
+  if (claims[idx].status !== "pending_approval") throw new Error("claim_not_pending");
+  claims[idx] = {
+    ...claims[idx],
+    status: "approved",
+    approvedAmount: Number(input.approvedAmount || 0),
+    approverUserId: input.approverUserId,
+    approvalNote: input.approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(claims));
+  await pushSystemEvent({
+    title: `Expense Claim Approved (${claims[idx].claimNumber})`,
+    description: `${claims[idx].approvedAmount?.toLocaleString() || 0} KS approved`,
+    createdByUserId: input.approverUserId,
+  });
+}
+
+export async function rejectExpenseClaim(input: {
+  claimId: string;
+  approverUserId: string;
+  approvalNote: string;
+}): Promise<void> {
+  const claims = await getExpenseClaims();
+  const idx = claims.findIndex((item) => item.id === input.claimId);
+  if (idx === -1) throw new Error("claim_not_found");
+  if (claims[idx].status !== "pending_approval") throw new Error("claim_not_pending");
+  claims[idx] = {
+    ...claims[idx],
+    status: "rejected",
+    approverUserId: input.approverUserId,
+    approvalNote: input.approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(claims));
+  await pushSystemEvent({
+    title: `Expense Claim Rejected (${claims[idx].claimNumber})`,
+    description: claims[idx].approvalNote || "Claim rejected",
+    createdByUserId: input.approverUserId,
+  });
+}
+
+export async function disburseExpenseClaim(input: {
+  claimId: string;
+  disburserUserId: string;
+  method: DisbursementMethod;
+  disbursementDate: string;
+  voucherNumber?: string;
+  note?: string;
+}): Promise<void> {
+  const claims = await getExpenseClaims();
+  const idx = claims.findIndex((item) => item.id === input.claimId);
+  if (idx === -1) throw new Error("claim_not_found");
+  const claim = claims[idx];
+  if (claim.status !== "approved") throw new Error("claim_not_approved");
+  const amount = Number(claim.approvedAmount || claim.requestedAmount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("invalid_approved_amount");
+
+  const txn = await addTransaction({
+    memberId: claim.claimantMemberId || undefined,
+    payerPayee: claim.claimantName,
+    amount,
+    type: "expense",
+    category: claim.expenseCategory,
+    paymentMethod: input.method,
+    date: input.disbursementDate,
+    notes: claim.reason,
+    receiptNumber: input.voucherNumber?.trim() || claim.claimNumber,
+    categoryLabel: claim.expenseCategoryLabel,
+  });
+
+  claims[idx] = {
+    ...claim,
+    status: "disbursed",
+    disburserUserId: input.disburserUserId,
+    disbursementMethod: input.method,
+    disbursementDate: input.disbursementDate,
+    voucherNumber: input.voucherNumber?.trim() || undefined,
+    disbursementNote: input.note?.trim() || undefined,
+    disbursedAt: new Date().toISOString(),
+    linkedTransactionId: txn.id,
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(claims));
+  await pushSystemEvent({
+    title: `Expense Disbursed (${claim.claimNumber})`,
+    description: `${amount.toLocaleString()} KS • ${input.method.toUpperCase()}`,
+    createdByUserId: input.disburserUserId,
+  });
 }
 
 // --- Events ---

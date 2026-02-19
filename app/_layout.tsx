@@ -27,6 +27,10 @@ function RootLayoutNav() {
     const inLogin = (segments[0] as string) === "sign-in";
     if (!isAuthenticated && !inLogin) {
       router.replace("/sign-in" as any);
+      return;
+    }
+    if (isAuthenticated && inLogin) {
+      router.replace("/" as any);
     }
   }, [isAuthenticated, loading, segments]);
 
@@ -54,6 +58,7 @@ function RootLayoutNav() {
       <Stack.Screen name="members" options={{ headerShown: false }} />
       <Stack.Screen name="events" options={{ headerShown: false }} />
       <Stack.Screen name="loans" options={{ headerShown: false }} />
+      <Stack.Screen name="expense-claims" options={{ headerShown: false }} />
     </Stack>
   );
 }

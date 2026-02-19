@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -91,6 +91,7 @@ const PRESET_TOPICS = [
   "မင်္ဂလာပွဲတက်ရောက်ရန်ဖိတ်ကြားခြင်း",
   "ကျန်းမာရေးအခြေအနေအကြောင်းကြားခြင်း",
   "နာရေး အကြောင်းကြားခြင်း",
+  "ပညာရေးဆိုင်ရာသတင်းပေးပို့ခြင်း",
   "အခြားကိစ္စ",
 ] as const;
 const PRESET_RELATIONS = ["ကိုယ်တိုင်", "ဖခင်", "မိခင်", "သား", "သမီး", "အတူနေမိသားစုဝင်"] as const;
@@ -162,7 +163,16 @@ function getTopicColor(topic?: string): string {
   return "#0EA5A4";
 }
 
+function mapClaimCategoryToTopic(categoryId?: string): string {
+  const id = String(categoryId || "");
+  if (id === "health_support") return "ကျန်းမာရေးအခြေအနေအကြောင်းကြားခြင်း";
+  if (id === "funeral_support") return "နာရေး အကြောင်းကြားခြင်း";
+  if (id === "education_support") return "ပညာရေးဆိုင်ရာသတင်းပေးပို့ခြင်း";
+  return "";
+}
+
 export default function EventsScreen() {
+  const params = useLocalSearchParams<{ source?: string; claimCategory?: string }>();
   const insets = useSafeAreaInsets();
   const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
   const { can, currentUser } = useAuth();
@@ -176,6 +186,7 @@ export default function EventsScreen() {
   const canCreateEvent = canCreateAllEvent || canCreateOwnEvent;
 
   const [modalVisible, setModalVisible] = useState(false);
+  const [claimPrefillApplied, setClaimPrefillApplied] = useState(false);
   const [topicPickerVisible, setTopicPickerVisible] = useState(false);
   const [relationPickerVisible, setRelationPickerVisible] = useState(false);
   const [conditionPickerVisible, setConditionPickerVisible] = useState(false);
@@ -261,6 +272,21 @@ export default function EventsScreen() {
   );
   const isHealthNotice = topic.includes("ကျန်းမာရေး");
   const isFuneralNotice = topic.includes("နာရေး");
+  const launchedFromClaim = String(params?.source || "") === "expense_claim";
+  const claimPrefillTopic = mapClaimCategoryToTopic(String(params?.claimCategory || ""));
+
+  useEffect(() => {
+    if (!launchedFromClaim || claimPrefillApplied) return;
+    if (!canCreateEvent) {
+      Alert.alert("ခွင့်မပြုပါ", "သတင်းအသစ်တင်ခွင့် မရှိပါ။");
+      setClaimPrefillApplied(true);
+      return;
+    }
+    resetForm();
+    if (claimPrefillTopic) setTopic(claimPrefillTopic);
+    setModalVisible(true);
+    setClaimPrefillApplied(true);
+  }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic]);
 
   useEffect(() => {
     let mounted = true;
@@ -754,6 +780,9 @@ export default function EventsScreen() {
 
     setModalVisible(false);
     resetForm();
+    if (launchedFromClaim && !editingId) {
+      router.replace("/expense-claims" as any);
+    }
   };
 
   const handleDelete = async (id: string) => {
