@@ -17,7 +17,9 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { pullLanSnapshotToLocal, pushLanSnapshotFromLocal } from "@/lib/storage";
+import { checkLanSyncHealth, pullLanSnapshotToLocal, pushLanSnapshotFromLocal } from "@/lib/storage";
+
+const DEFAULT_LAN_SYNC_URL = "http://192.168.99.9:5000";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -38,7 +40,7 @@ export default function AccountSettingsScreen() {
   const [resetIdentifier, setResetIdentifier] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
-  const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || "");
+  const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
   const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
   const [syncing, setSyncing] = useState(false);
 
@@ -52,19 +54,20 @@ export default function AccountSettingsScreen() {
   };
 
   React.useEffect(() => {
-    setSyncServerUrl(accountSettings.syncServerUrl || "");
+    setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
     setSyncEnabled(accountSettings.syncEnabled !== false);
   }, [accountSettings.syncServerUrl, accountSettings.syncEnabled]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
       await updateAccountSettings({
         ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
         openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",
-        syncServerUrl: syncServerUrl.trim(),
+        syncServerUrl: normalizedUrl,
         syncEnabled,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -173,7 +176,7 @@ export default function AccountSettingsScreen() {
     if (syncing) return;
     setSyncing(true);
     try {
-      const normalizedUrl = normalizeUrl(syncServerUrl);
+      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
       await updateAccountSettings({
         ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
@@ -183,16 +186,14 @@ export default function AccountSettingsScreen() {
         syncEnabled,
       });
       if (syncEnabled && normalizedUrl) {
-        try {
-          const healthRes = await fetch(`${normalizedUrl}/api/sync/health`);
-          if (!healthRes.ok) {
-            Alert.alert("Sync Error", `Server Health Check failed (${healthRes.status}). URL: ${normalizedUrl}`);
-            return;
-          }
-        } catch {
-          Alert.alert("Sync Error", `Server မချိတ်ဆက်နိုင်ပါ။ URL: ${normalizedUrl}\n\nComputer server run နေ/မနေ၊ LAN တူ/မတူ စစ်ပါ။`);
+        const health = await checkLanSyncHealth();
+        if (!health.ok) {
+          Alert.alert(
+            "Sync Error",
+            `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${normalizedUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}\n\nComputer server run နေ/မနေ၊ Phone/Computer Wi-Fi တူ/မတူ၊ firewall ကို စစ်ပါ။`
+          );
           return;
-        }
+        }        
       }
       const pulled = await pullLanSnapshotToLocal();
       const pushed = await pushLanSnapshotFromLocal();

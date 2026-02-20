@@ -34,6 +34,7 @@ const KEYS = {
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
 };
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
+const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || "http://192.168.99.9:5000");
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
 
@@ -903,7 +904,7 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     openingBalanceBank: 0,
     currency: "MMK",
     asOfDate: new Date().toISOString(),
-    syncServerUrl: "",
+    syncServerUrl: DEFAULT_SYNC_SERVER_URL,
     syncEnabled: true,
   });
 }
@@ -922,19 +923,33 @@ function normalizeSyncServerUrl(raw: string): string {
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
   const url = normalizeSyncServerUrl(
-    settings.syncServerUrl || String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || "")
+    settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL
   );
   const enabled = settings.syncEnabled !== false && !!url;
   return { url, enabled };
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 6000): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 8000): Promise<Response> {
+  return await Promise.race([
+    fetch(input, init),
+    new Promise<Response>((_, reject) => {
+      const timer = setTimeout(() => {
+        clearTimeout(timer);
+        reject(new Error("timeout"));
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string; reason?: string; status?: number }> {
   try {
-    return await fetch(input, { ...(init || {}), signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+    const { url, enabled } = await resolveSyncServerUrl();
+    if (!enabled) return { ok: false, url, reason: "disabled_or_empty_url" };
+    const res = await fetchWithTimeout(`${url}/api/sync/health`, { method: "GET" });
+    if (!res.ok) return { ok: false, url, status: res.status, reason: "health_http_error" };
+    return { ok: true, url, status: res.status };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "health_fetch_failed") };
   }
 }
 
