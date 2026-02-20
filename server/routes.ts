@@ -9,8 +9,41 @@ type SyncSnapshot = {
   data: Record<string, string>;
 };
 
+type AppUpdateConfig = {
+  latestVersion: string;
+  minimumVersion?: string;
+  downloadUrl: string;
+  notes?: string;
+  force?: boolean;
+  publishedAt?: string;
+};
+
 function getSnapshotFilePath(): string {
   return path.resolve(process.cwd(), "server", "data", "sync-snapshot.json");
+}
+
+function getAppUpdateConfigPath(): string {
+  return path.resolve(process.cwd(), "server", "config", "app-update.json");
+}
+
+function parseVersion(version: string): number[] {
+  return String(version || "")
+    .split(".")
+    .map((part) => Number(String(part).replace(/[^\d]/g, "")))
+    .filter((n) => Number.isFinite(n));
+}
+
+function compareVersion(left: string, right: string): number {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  const max = Math.max(a.length, b.length);
+  for (let i = 0; i < max; i += 1) {
+    const av = a[i] || 0;
+    const bv = b[i] || 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
 }
 
 function readSnapshot(): SyncSnapshot | null {
@@ -59,6 +92,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
     writeSnapshot(snapshot);
     return res.json({ ok: true, updatedAt: snapshot.updatedAt });
+  });
+
+  app.get("/api/app-update", (req, res) => {
+    try {
+      const configPath = getAppUpdateConfigPath();
+      if (!fs.existsSync(configPath)) {
+        return res.status(404).json({ message: "update_config_not_found" });
+      }
+      const raw = fs.readFileSync(configPath, "utf-8");
+      const config = JSON.parse(raw) as AppUpdateConfig;
+      if (!config || !config.latestVersion || !config.downloadUrl) {
+        return res.status(500).json({ message: "invalid_update_config" });
+      }
+
+      const currentVersion = String(req.query.version || "").trim();
+      const hasUpdate = currentVersion
+        ? compareVersion(config.latestVersion, currentVersion) > 0
+        : true;
+      const mustUpdate = !!(
+        config.minimumVersion &&
+        currentVersion &&
+        compareVersion(config.minimumVersion, currentVersion) > 0
+      );
+
+      return res.json({
+        ok: true,
+        latestVersion: config.latestVersion,
+        minimumVersion: config.minimumVersion || "",
+        downloadUrl: config.downloadUrl,
+        notes: config.notes || "",
+        force: Boolean(config.force || mustUpdate),
+        hasUpdate,
+        publishedAt: config.publishedAt || "",
+      });
+    } catch {
+      return res.status(500).json({ message: "app_update_check_failed" });
+    }
   });
 
   const httpServer = createServer(app);

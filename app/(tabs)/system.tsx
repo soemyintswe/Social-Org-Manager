@@ -3,10 +3,12 @@ import { StyleSheet, Text, View, Pressable, Alert, Platform, ScrollView } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
+import * as Linking from "expo-linking";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { clearAllData } from "@/lib/storage";
+import { checkForAppUpdate, getCurrentAppVersion } from "@/lib/app-update";
 import AccessDenied from "@/components/AccessDenied";
 
 export default function SystemScreen() {
@@ -61,6 +63,33 @@ export default function SystemScreen() {
     );
   };
 
+  const handleCheckForUpdate = async () => {
+    const info = await checkForAppUpdate();
+    if (!info.ok) {
+      Alert.alert("Update Check", `Update စစ်ဆေးရာတွင် မအောင်မြင်ပါ။\nReason: ${info.reason || "unknown"}`);
+      return;
+    }
+    if (!info.hasUpdate) {
+      Alert.alert("Update Check", `အသစ်မရှိသေးပါ။\nCurrent Version: ${getCurrentAppVersion()}`);
+      return;
+    }
+    Alert.alert(
+      "Update Available",
+      `Current: ${getCurrentAppVersion()}\nLatest: ${info.latestVersion}\n\n${info.notes || ""}`,
+      [
+        { text: "Later", style: "cancel" },
+        {
+          text: "Update Now",
+          onPress: () => {
+            if (info.downloadUrl) {
+              void Linking.openURL(info.downloadUrl);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <ScrollView
       style={[styles.container, { paddingTop: insets.top + 20 }]}
@@ -85,6 +114,20 @@ export default function SystemScreen() {
         </Pressable>
 
         <Pressable
+          style={[styles.menuItem, { backgroundColor: "#2563EB" }]}
+          onPress={() => void handleCheckForUpdate()}
+        >
+          <View style={styles.iconBox}>
+            <Ionicons name="download-outline" size={24} color="#fff" />
+          </View>
+          <View style={styles.menuTextContainer}>
+            <Text style={styles.menuTitle}>Check App Update</Text>
+            <Text style={styles.menuDesc}>Latest version ရှိ/မရှိ စစ်ဆေးမည်</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
+        </Pressable>
+
+        <Pressable
           style={[styles.menuItem, { backgroundColor: "#EF4444" }]}
           onPress={handleSystemReset}
         >
@@ -103,7 +146,7 @@ export default function SystemScreen() {
         <Text style={styles.sectionHeader}>System Information</Text>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>App Version</Text>
-          <Text style={styles.infoValue}>1.0.0 (Beta)</Text>
+          <Text style={styles.infoValue}>{getCurrentAppVersion()}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Developer</Text>

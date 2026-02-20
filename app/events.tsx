@@ -81,6 +81,16 @@ interface OrgEventNotice {
   funeralMemorialMapUrl?: string;
   funeralMemorialDate?: string;
   funeralMemorialTime?: string;
+  readBy?: Record<string, { userId: string; memberId?: string; displayName?: string; readAt: string }>;
+  reactions?: Record<string, "like" | "love" | "sad">;
+  comments?: Array<{
+    id: string;
+    userId: string;
+    memberId?: string;
+    displayName?: string;
+    message: string;
+    createdAt: string;
+  }>;
 }
 
 const CUSTOM_TOPIC_KEY = "@org_notice_custom_topics";
@@ -161,6 +171,17 @@ function getTopicColor(topic?: string): string {
   if (topic.includes("နာရေး")) return "#EF4444";
   if (topic.includes("အခြား")) return "#F59E0B";
   return "#0EA5A4";
+}
+
+function countReactions(reactions?: Record<string, "like" | "love" | "sad">): { like: number; love: number; sad: number } {
+  const result = { like: 0, love: 0, sad: 0 };
+  if (!reactions) return result;
+  Object.values(reactions).forEach((r) => {
+    if (r === "like") result.like += 1;
+    if (r === "love") result.love += 1;
+    if (r === "sad") result.sad += 1;
+  });
+  return result;
 }
 
 function mapClaimCategoryToTopic(categoryId?: string): string {
@@ -757,6 +778,20 @@ export default function EventsScreen() {
       senderTime: formatHm(now),
       createdByUserId: currentUser?.id,
       createdByMemberId: currentUser?.memberId,
+      readBy: editingId
+        ? undefined
+        : (currentUser?.id
+            ? {
+                [currentUser.id]: {
+                  userId: currentUser.id,
+                  memberId: currentUser.memberId,
+                  displayName: currentUser.displayName,
+                  readAt: now.toISOString(),
+                },
+              }
+            : {}),
+      reactions: editingId ? undefined : {},
+      comments: editingId ? undefined : [],
     };
 
     if (editingId) {
@@ -769,7 +804,13 @@ export default function EventsScreen() {
         Alert.alert("ခွင့်မပြုပါ", "ပြင်ဆင်ခွင့် မရှိပါ။");
         return;
       }
-      await editEvent(editingId, { ...existing, ...payload });
+      await editEvent(editingId, {
+        ...existing,
+        ...payload,
+        readBy: existing.readBy || {},
+        reactions: existing.reactions || {},
+        comments: existing.comments || [],
+      });
     } else {
       if (!canCreateEvent) {
         Alert.alert("ခွင့်မပြုပါ", "သတင်းအသစ်တင်ခွင့် မရှိပါ။");
@@ -838,6 +879,9 @@ export default function EventsScreen() {
         renderItem={({ item }: { item: OrgEventNotice }) => {
           const topicColor = getTopicColor(item.topic || item.title);
           const primaryImage = item.images?.[0] || item.image;
+          const reactionCounts = countReactions(item.reactions);
+          const readCount = Object.keys(item.readBy || {}).length;
+          const commentCount = (item.comments || []).length;
           return (
             <Pressable style={styles.card} onPress={() => router.push({ pathname: "/event-detail", params: { id: item.id } } as any)}>
               {primaryImage ? <Image source={{ uri: primaryImage }} style={styles.cardImage} resizeMode="cover" /> : null}
@@ -856,6 +900,9 @@ export default function EventsScreen() {
                 <Text style={styles.desc} numberOfLines={3}>{item.detail || item.description}</Text>
                 <Text style={styles.metaLine}>
                   ပေးပို့သူ: {item.senderName || "-"} ({item.senderMemberId || "-"})
+                </Text>
+                <Text style={styles.metaLine}>
+                  ဖတ်ရှု့ပြီး: {readCount} | 💬 {commentCount} | 👍 {reactionCounts.like} ❤️ {reactionCounts.love} 😢 {reactionCounts.sad}
                 </Text>
               </View>
               <View style={styles.actionRow}>

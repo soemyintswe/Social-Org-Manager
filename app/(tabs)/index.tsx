@@ -384,6 +384,73 @@ export default function DashboardScreen() {
     scheduleBirthdayNotification();
   }, [upcomingBirthdays]);
 
+  // Schedule Event Notifications for newly arrived events (sync-friendly, per-user local delivery)
+  useEffect(() => {
+    const scheduleEventNotifications = async () => {
+      const isExpoGo = Constants.appOwnership === 'expo';
+      if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
+      if (!currentUser?.id) return;
+      if (!Array.isArray(events) || events.length === 0) return;
+      try {
+        const Notifications = require('expo-notifications');
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        const key = `@event_notification_seen_ids_${currentUser.id}`;
+        const existingRaw = await AsyncStorage.getItem(key);
+        const existingIds = new Set<string>(existingRaw ? JSON.parse(existingRaw) : []);
+        if (!existingRaw) {
+          // First run: baseline only, do not spam old events.
+          const baseline = events.map((e: any) => String(e?.id || "")).filter(Boolean);
+          await AsyncStorage.setItem(key, JSON.stringify(baseline));
+          return;
+        }
+
+        const { status } = await Notifications.getPermissionsAsync();
+        let finalStatus = status;
+        if (status !== 'granted') {
+          const req = await Notifications.requestPermissionsAsync();
+          finalStatus = req.status;
+        }
+        if (finalStatus !== "granted") return;
+
+        let changed = false;
+        const sorted = [...events].sort((a: any, b: any) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
+        for (const item of sorted) {
+          const eventId = String(item?.id || "");
+          if (!eventId || existingIds.has(eventId)) continue;
+          if (item?.createdByUserId && item.createdByUserId === currentUser.id) {
+            existingIds.add(eventId);
+            changed = true;
+            continue;
+          }
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: `📢 ${item?.topic || item?.title || "Event အသစ်"}`,
+              body: String(item?.summary || item?.description || "အသစ်တင်ထားသော event ကိုဖတ်ရှုပါ"),
+            },
+            trigger: null,
+          });
+          existingIds.add(eventId);
+          changed = true;
+        }
+        if (changed) {
+          await AsyncStorage.setItem(key, JSON.stringify(Array.from(existingIds)));
+        }
+      } catch (error) {
+        console.log("Event notification scheduling failed:", error);
+      }
+    };
+    void scheduleEventNotifications();
+  }, [events, currentUser?.id]);
+
   const handleSendWish = (phone: string, name: string, secondaryPhone?: string) => {
     const { primaryPhone, secondaryPhone: fallbackPhone } = splitPhoneNumbers(phone, secondaryPhone);
     const targetPhone = primaryPhone || fallbackPhone;
