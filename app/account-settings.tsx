@@ -44,6 +44,13 @@ export default function AccountSettingsScreen() {
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
+  const normalizeUrl = (raw: string): string => {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return "";
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    return withProtocol.replace(/\/+$/, "");
+  };
+
   React.useEffect(() => {
     setSyncServerUrl(accountSettings.syncServerUrl || "");
     setSyncEnabled(accountSettings.syncEnabled !== false);
@@ -166,6 +173,27 @@ export default function AccountSettingsScreen() {
     if (syncing) return;
     setSyncing(true);
     try {
+      const normalizedUrl = normalizeUrl(syncServerUrl);
+      await updateAccountSettings({
+        ...accountSettings,
+        openingBalanceCash: accountSettings.openingBalanceCash,
+        openingBalanceBank: accountSettings.openingBalanceBank,
+        currency: accountSettings.currency || "MMK",
+        syncServerUrl: normalizedUrl,
+        syncEnabled,
+      });
+      if (syncEnabled && normalizedUrl) {
+        try {
+          const healthRes = await fetch(`${normalizedUrl}/api/sync/health`);
+          if (!healthRes.ok) {
+            Alert.alert("Sync Error", `Server Health Check failed (${healthRes.status}). URL: ${normalizedUrl}`);
+            return;
+          }
+        } catch {
+          Alert.alert("Sync Error", `Server မချိတ်ဆက်နိုင်ပါ။ URL: ${normalizedUrl}\n\nComputer server run နေ/မနေ၊ LAN တူ/မတူ စစ်ပါ။`);
+          return;
+        }
+      }
       const pulled = await pullLanSnapshotToLocal();
       const pushed = await pushLanSnapshotFromLocal();
       Alert.alert("Sync", `Pull: ${pulled ? "OK" : "Skip/Fail"}\nPush: ${pushed ? "OK" : "Skip/Fail"}`);
