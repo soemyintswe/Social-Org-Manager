@@ -1,8 +1,8 @@
 ﻿{
-  "latestVersion": "1.1.1",
-  "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.0-202602210059.apk?raw=1",
-  "notes": "Test update prompt for in-app update flow.",
-  "force": true,
-  "publishedAt": "2026-02-20T18:45:00Z"
+    "latestVersion":  "1.1.1",
+    "minimumVersion":  "1.0.0",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.1-202602210209.apk?raw=1",
+    "notes":  "Version 1.1.1 release with app update flow enabled.",
+    "force":  false,
+    "publishedAt":  "2026-02-20T19:39:37Z"
 }
