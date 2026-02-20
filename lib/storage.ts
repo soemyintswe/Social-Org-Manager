@@ -1,4 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import {
   Member,
   OrgEvent,
@@ -920,6 +923,53 @@ function normalizeSyncServerUrl(raw: string): string {
   return withProtocol.replace(/\/+$/, "");
 }
 
+function parseImageDataUrl(value: string): { mime: string; base64: string } | null {
+  const matched = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i);
+  if (!matched) return null;
+  return { mime: matched[1], base64: matched[2] };
+}
+
+async function compressImageDataUrl(value: string): Promise<string> {
+  const looksLikeImageDataUrl = /^data:image\//i.test(value);
+  if (!looksLikeImageDataUrl) return value;
+  if (value.length <= 4096) return value;
+  if (Platform.OS === "web") return value;
+
+  const parsed = parseImageDataUrl(value);
+  if (!parsed) return value;
+
+  const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+  if (!baseDir) return value;
+
+  const isPng = /png/i.test(parsed.mime);
+  const srcExt = isPng ? "png" : "jpg";
+  const tempUri = `${baseDir}sync_img_${Date.now()}_${Math.random().toString(36).slice(2)}.${srcExt}`;
+
+  try {
+    await FileSystem.writeAsStringAsync(tempUri, parsed.base64, {
+      // @ts-ignore
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const result = await ImageManipulator.manipulateAsync(
+      tempUri,
+      [{ resize: { width: 768 } }],
+      {
+        compress: 0.58,
+        format: ImageManipulator.SaveFormat.JPEG,
+        base64: true,
+      }
+    );
+    if (!result?.base64) return value;
+    return `data:image/jpeg;base64,${result.base64}`;
+  } catch {
+    return value;
+  } finally {
+    try {
+      await FileSystem.deleteAsync(tempUri, { idempotent: true });
+    } catch {}
+  }
+}
+
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
   const url = normalizeSyncServerUrl(
@@ -941,11 +991,43 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, ti
   ]);
 }
 
+async function compressLargeDataUrlDeep(input: unknown): Promise<unknown> {
+  if (Array.isArray(input)) {
+    return await Promise.all(input.map((row) => compressLargeDataUrlDeep(row)));
+  }
+  if (!input || typeof input !== "object") return input;
+
+  const obj = input as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === "string") {
+      next[key] = await compressImageDataUrl(value);
+      continue;
+    }
+    next[key] = await compressLargeDataUrlDeep(value);
+  }
+  return next;
+}
+
+export async function sanitizeExportForLanSync(data: Record<string, string>): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(data)) {
+    try {
+      const parsed = JSON.parse(raw);
+      const cleaned = await compressLargeDataUrlDeep(parsed);
+      result[key] = JSON.stringify(cleaned);
+    } catch {
+      result[key] = raw;
+    }
+  }
+  return result;
+}
+
 export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string; reason?: string; status?: number }> {
   try {
     const { url, enabled } = await resolveSyncServerUrl();
     if (!enabled) return { ok: false, url, reason: "disabled_or_empty_url" };
-    const res = await fetchWithTimeout(`${url}/api/sync/health`, { method: "GET" });
+    const res = await fetchWithTimeout(`${url}/api/sync/health`, { method: "GET" }, 12000);
     if (!res.ok) return { ok: false, url, status: res.status, reason: "health_http_error" };
     return { ok: true, url, status: res.status };
   } catch (e: any) {
@@ -953,12 +1035,20 @@ export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string;
   }
 }
 
-export async function pushLanSnapshotFromLocal(): Promise<boolean> {
+export type LanSyncResult = {
+  ok: boolean;
+  changed?: boolean;
+  reason?: string;
+  status?: number;
+  url?: string;
+};
+
+export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult> {
   try {
     const { url, enabled } = await resolveSyncServerUrl();
-    if (!enabled) return false;
+    if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
     const raw = await exportData();
-    const data = JSON.parse(raw) as Record<string, string>;
+    const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
     const payload = {
       updatedAt: new Date().toISOString(),
       source: "mobile",
@@ -968,34 +1058,52 @@ export async function pushLanSnapshotFromLocal(): Promise<boolean> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
-    return res.ok;
-  } catch {
-    return false;
+    }, 20000);
+    if (!res.ok) return { ok: false, reason: "push_http_error", status: res.status, url };
+    return { ok: true, changed: true, reason: "pushed", status: res.status, url };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "push_failed") };
   }
 }
 
-export async function pullLanSnapshotToLocal(): Promise<boolean> {
+export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
   try {
     const { url, enabled } = await resolveSyncServerUrl();
-    if (!enabled) return false;
-    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, { method: "GET" });
-    if (!res.ok) return false;
+    if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
+    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
+    if (res.status === 404) {
+      return { ok: true, changed: false, reason: "snapshot_not_found", status: res.status, url };
+    }
+    if (!res.ok) return { ok: false, reason: "pull_http_error", status: res.status, url };
     const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string> };
-    if (!payload || typeof payload !== "object" || !payload.data) return false;
+    if (!payload || typeof payload !== "object" || !payload.data) {
+      return { ok: false, reason: "invalid_snapshot_payload", url };
+    }
 
     const incomingUpdatedAt = String(payload.updatedAt || "");
     const lastApplied = String((await AsyncStorage.getItem(SYNC_LAST_SERVER_UPDATED_AT_KEY)) || "");
-    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) return false;
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
+      return { ok: true, changed: false, reason: "already_applied", url };
+    }
 
     const merged = await mergeData(JSON.stringify(payload.data));
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(SYNC_LAST_SERVER_UPDATED_AT_KEY, incomingUpdatedAt);
     }
-    return merged;
-  } catch {
-    return false;
+    return { ok: true, changed: merged, reason: merged ? "pulled_applied" : "pulled_no_change", url };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "pull_failed") };
   }
+}
+
+export async function pushLanSnapshotFromLocal(): Promise<boolean> {
+  const result = await pushLanSnapshotFromLocalDetailed();
+  return result.ok;
+}
+
+export async function pullLanSnapshotToLocal(): Promise<boolean> {
+  const result = await pullLanSnapshotToLocalDetailed();
+  return result.ok && !!result.changed;
 }
 
 // --- Users ---

@@ -9,7 +9,6 @@ import {
   Linking,
   Platform,
   Alert,
-  ToastAndroid,
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
 import { default as Constants } from 'expo-constants';
@@ -134,39 +133,53 @@ export default function DashboardScreen() {
 
   const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
 
-  // Calculate Member Gender Stats based on Name Prefixes
+  const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
+    const name = String(rawName || "").trim();
+    if (!name) return "other";
+    const n = name.toLowerCase();
+    if (
+      name.startsWith("ဆရာတော်") ||
+      name.startsWith("ဦး") ||
+      name.startsWith("ကို") ||
+      name.startsWith("မောင်") ||
+      name.startsWith("ကိုရင်") ||
+      name.startsWith("ဦးဇင်း") ||
+      n.startsWith("u ") ||
+      n.startsWith("ko ") ||
+      n.startsWith("mg ")
+    ) return "male";
+    if (
+      name.startsWith("ဒေါ်") ||
+      name.startsWith("မ") ||
+      name.startsWith("မိ") ||
+      name.startsWith("သီလရှင်") ||
+      name.startsWith("ဆရာလေး") ||
+      n.startsWith("daw ") ||
+      n.startsWith("ma ")
+    ) return "female";
+    return "other";
+  };
+
+  // Calculate Member Gender Stats
   const memberStats = useMemo(() => {
     let male = 0;
     let female = 0;
+    let other = 0;
     (members || []).forEach((m: any) => {
-      const name = (m.name || "").trim();
-      // Male prefixes
-      if (
-        name.startsWith("ဦး") || 
-        name.startsWith("ကို") || 
-        name.startsWith("မောင်") || 
-        name.startsWith("ဆရာတော်") || 
-        name.startsWith("ကိုရင်") || 
-        name.startsWith("ဦးဇင်း") || 
-        name.toLowerCase().startsWith("u ") || 
-        name.toLowerCase().startsWith("ko ") || 
-        name.toLowerCase().startsWith("mg ")
-      ) {
+      const explicit = String(m?.gender || "").trim().toLowerCase();
+      const resolved =
+        explicit === "male" || explicit === "female" || explicit === "other"
+          ? explicit
+          : inferGenderFromName(m?.name || "");
+      if (resolved === "male") {
         male++;
-      } 
-      // Female prefixes
-      else if (
-        name.startsWith("ဒေါ်") || 
-        name.startsWith("မ") || 
-        name.startsWith("ဆရာလေး") || 
-        name.startsWith("သီလရှင်") || 
-        name.toLowerCase().startsWith("daw ") || 
-        name.toLowerCase().startsWith("ma ")
-      ) {
+      } else if (resolved === "female") {
         female++;
+      } else {
+        other++;
       }
     });
-    return { male, female, total: members?.length || 0 };
+    return { male, female, other, total: members?.length || 0 };
   }, [members]);
 
   // Calculate Balances locally to include Transfer logic
@@ -211,9 +224,7 @@ export default function DashboardScreen() {
           const dataString = typeof data === 'string' ? data : JSON.stringify(data);
           const fileUri = FileSystem.documentDirectory + 'auto_backup.json';
           await FileSystem.writeAsStringAsync(fileUri, dataString);
-          if (Platform.OS === 'android') {
-            ToastAndroid.show("Auto Backup Saved", ToastAndroid.SHORT);
-          }
+          // Keep auto backup silent to avoid frequent toast spam during normal usage.
         }
       } catch (e) {
         console.error("Auto backup failed", e);
@@ -418,6 +429,7 @@ export default function DashboardScreen() {
               <View style={{ marginTop: 4, flexDirection: 'row', gap: 8 }}>
                 <Text style={styles.subBalanceText}>ကျား: {memberStats.male}</Text>
                 <Text style={styles.subBalanceText}>မ: {memberStats.female}</Text>
+                <Text style={styles.subBalanceText}>အခြား: {memberStats.other}</Text>
               </View>
             </View>
           } 

@@ -52,6 +52,7 @@ function RootLayoutNav() {
       <Stack.Screen name="qr-scanner" options={{ headerShown: false, presentation: "fullScreenModal" }} />
       <Stack.Screen name="member-card" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="data-management" options={{ headerShown: false }} />
+      <Stack.Screen name="phone-transfer" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="member-data-management" options={{ headerShown: false }} />
       <Stack.Screen name="import-members" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />

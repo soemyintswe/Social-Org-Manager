@@ -19,6 +19,7 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import {
+  MEMBER_GENDER_LABELS,
   MEMBER_STATUS_LABELS,
   MEMBER_STATUS_VALUES,
   normalizeMemberStatus,
@@ -43,7 +44,7 @@ export default function MembersScreen() {
   const [sortBy, setSortBy] = useState<SortOption>("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [filterStatus, setFilterStatus] = useState<"all" | MemberStatus>("all");
-  const [filterGender, setFilterGender] = useState<"all" | "male" | "female">("all");
+  const [filterGender, setFilterGender] = useState<"all" | "male" | "female" | "other">("all");
   const [filterAge, setFilterAge] = useState<"all" | "18-60" | "60-75" | "over75" | "upcoming" | "custom" | "unknown">("all");
   const [showSortModal, setShowSortModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -129,6 +130,33 @@ export default function MembersScreen() {
     return null;
   }, []);
 
+  const inferGenderFromName = useCallback((rawName: string): "male" | "female" | "other" => {
+    const name = String(rawName || "").trim();
+    if (!name) return "other";
+    const n = name.toLowerCase();
+    if (
+      name.startsWith("ဆရာတော်") ||
+      name.startsWith("ဦး") ||
+      name.startsWith("ကို") ||
+      name.startsWith("မောင်") ||
+      name.startsWith("ကိုရင်") ||
+      name.startsWith("ဦးဇင်း") ||
+      n.startsWith("u ") ||
+      n.startsWith("ko ") ||
+      n.startsWith("mg ")
+    ) return "male";
+    if (
+      name.startsWith("ဒေါ်") ||
+      name.startsWith("မ") ||
+      name.startsWith("မိ") ||
+      name.startsWith("သီလရှင်") ||
+      name.startsWith("ဆရာလေး") ||
+      n.startsWith("daw ") ||
+      n.startsWith("ma ")
+    ) return "female";
+    return "other";
+  }, []);
+
   const sortedMembers = useMemo(() => {
     let data: MemberListItem[] = [...sourceMembers];
 
@@ -161,29 +189,11 @@ export default function MembersScreen() {
 
     if (filterGender !== "all") {
       data = data.filter((m) => {
-        const name = (m.name || "").trim();
-        const isMale = 
-          name.startsWith("ဦး") || 
-          name.startsWith("ကို") || 
-          name.startsWith("မောင်") || 
-          name.startsWith("ဆရာတော်") || 
-          name.startsWith("ကိုရင်") || 
-          name.startsWith("ဦးဇင်း") || 
-          name.toLowerCase().startsWith("u ") || 
-          name.toLowerCase().startsWith("ko ") || 
-          name.toLowerCase().startsWith("mg ");
-        
-        const isFemale = 
-          name.startsWith("ဒေါ်") || 
-          name.startsWith("မ") || 
-          name.startsWith("ဆရာလေး") || 
-          name.startsWith("သီလရှင်") || 
-          name.toLowerCase().startsWith("daw ") || 
-          name.toLowerCase().startsWith("ma ");
-
-        if (filterGender === "male") return isMale;
-        if (filterGender === "female") return isFemale;
-        return true;
+        const explicit = String((m as any)?.gender || "").toLowerCase();
+        const gender = (explicit === "male" || explicit === "female" || explicit === "other")
+          ? explicit
+          : inferGenderFromName(m.name || "");
+        return gender === filterGender;
       });
     }
 
@@ -236,7 +246,7 @@ export default function MembersScreen() {
           return 0;
       }
     });
-  }, [sourceMembers, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate]);
+  }, [sourceMembers, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate, inferGenderFromName]);
 
   const getAvatarLabel = (name: string) => {
     if (!name) return "?";
@@ -421,6 +431,13 @@ export default function MembersScreen() {
                 <Text style={[styles.metaText, { marginLeft: 8 }]}>
                   {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || item.status)]}
                 </Text>
+                <Text style={[styles.metaText, { marginLeft: 8 }]}>
+                  {MEMBER_GENDER_LABELS[
+                    ((item as any).gender === "male" || (item as any).gender === "female" || (item as any).gender === "other")
+                      ? (item as any).gender
+                      : inferGenderFromName(item.name || "")
+                  ]}
+                </Text>
                 {sortBy !== 'age' && (() => {
                   const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
                   return <Text style={[styles.metaText, { marginLeft: 8 }]}>အသက်: {age !== null ? `${age} နှစ်` : "မသိပါ။"}</Text>;
@@ -548,6 +565,9 @@ export default function MembersScreen() {
                 </Pressable>
                 <Pressable style={[styles.statusChip, filterGender === "female" && styles.statusChipActive]} onPress={() => setFilterGender("female")}>
                   <Text style={[styles.statusChipText, filterGender === "female" && styles.statusChipTextActive]}>အမျိုးသမီး</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterGender === "other" && styles.statusChipActive]} onPress={() => setFilterGender("other")}>
+                  <Text style={[styles.statusChipText, filterGender === "other" && styles.statusChipTextActive]}>အခြား</Text>
                 </Pressable>
               </View>
 

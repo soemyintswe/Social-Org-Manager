@@ -3,6 +3,7 @@
 export interface Member {
   id: string;
   name: string;
+  gender?: MemberGender;
   dob?: string;
   nrc?: string;
   phone: string;
@@ -24,6 +25,14 @@ export interface Member {
   statusNote?: string;
   profileImage?: string;
 }
+
+export type MemberGender = "male" | "female" | "other";
+export const MEMBER_GENDER_VALUES: MemberGender[] = ["male", "female", "other"];
+export const MEMBER_GENDER_LABELS: Record<MemberGender, string> = {
+  male: "ကျား",
+  female: "မ",
+  other: "အခြား",
+};
 
 export interface OrgEvent {
   id: string;

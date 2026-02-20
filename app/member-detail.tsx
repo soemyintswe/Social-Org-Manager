@@ -20,7 +20,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { CATEGORY_LABELS, ORG_POSITION_LABELS, OrgPosition, MEMBER_STATUS_LABELS, MemberStatus, MEMBER_STATUS_VALUES } from "@/lib/types";
+import { CATEGORY_LABELS, ORG_POSITION_LABELS, OrgPosition, MEMBER_GENDER_LABELS, MEMBER_STATUS_LABELS, MemberStatus, MEMBER_STATUS_VALUES } from "@/lib/types";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -37,6 +37,33 @@ const getAvatarLabel = (name: string) => {
     }
   }
   return text.charAt(0).toUpperCase();
+};
+
+const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
+  const name = String(rawName || "").trim();
+  if (!name) return "other";
+  const n = name.toLowerCase();
+  if (
+    name.startsWith("ဆရာတော်") ||
+    name.startsWith("ဦး") ||
+    name.startsWith("ကို") ||
+    name.startsWith("မောင်") ||
+    name.startsWith("ကိုရင်") ||
+    name.startsWith("ဦးဇင်း") ||
+    n.startsWith("u ") ||
+    n.startsWith("ko ") ||
+    n.startsWith("mg ")
+  ) return "male";
+  if (
+    name.startsWith("ဒေါ်") ||
+    name.startsWith("မ") ||
+    name.startsWith("မိ") ||
+    name.startsWith("သီလရှင်") ||
+    name.startsWith("ဆရာလေး") ||
+    n.startsWith("daw ") ||
+    n.startsWith("ma ")
+  ) return "female";
+  return "other";
 };
 
 function InfoRow({ icon, label, value }: {
@@ -214,7 +241,7 @@ export default function MemberDetailScreen() {
       if (editMemberId.trim() !== member.id) {
         router.replace({ pathname: "/member-detail", params: { id: editMemberId.trim() } } as any);
       }
-    } catch (err) {
+    } catch {
       Alert.alert("Error", "Could not update member");
     } finally {
       setSaving(false);
@@ -265,6 +292,9 @@ export default function MemberDetailScreen() {
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
   const canViewFinanceSelf = can("finance.view_self") && currentUser?.memberId === member.id;
   const canViewFinanceSection = canViewFinanceDetail || canViewFinanceSelf;
+  const resolvedGender = ((member as any).gender === "male" || (member as any).gender === "female" || (member as any).gender === "other")
+    ? (member as any).gender
+    : inferGenderFromName(member.name || "");
 
   return (
     <KeyboardAvoidingView 
@@ -319,6 +349,9 @@ export default function MemberDetailScreen() {
 
             <Text style={styles.editLabel}>Full Name</Text>
             <TextInput style={styles.editInput} value={editName} onChangeText={setEditName} />
+
+            <Text style={styles.editLabel}>Gender</Text>
+            <TextInput style={styles.editInput} value={MEMBER_GENDER_LABELS[resolvedGender]} editable={false} />
 
             <Text style={styles.editLabel}>Position</Text>
             <Pressable style={styles.dropdown} onPress={() => setShowPositionPicker(true)}>
@@ -411,6 +444,7 @@ export default function MemberDetailScreen() {
                 label="အခြေအနေ" 
                 value={statusLabel} 
               />
+              <InfoRow icon="male-female-outline" label="ကျား / မ / အခြား" value={MEMBER_GENDER_LABELS[resolvedGender]} />
               <InfoRow icon="ribbon-outline" label="ရာထူး" value={ORG_POSITION_LABELS[(member.orgPosition || "member") as OrgPosition]} />
               <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
               {member.status !== 'active' && <InfoRow icon="calendar-outline" label="ရက်စွဲ" value={member.statusDate || member.resignDate} />}

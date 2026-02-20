@@ -17,7 +17,11 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { checkLanSyncHealth, pullLanSnapshotToLocal, pushLanSnapshotFromLocal } from "@/lib/storage";
+import {
+  checkLanSyncHealth,
+  pullLanSnapshotToLocalDetailed,
+  pushLanSnapshotFromLocalDetailed,
+} from "@/lib/storage";
 
 const DEFAULT_LAN_SYNC_URL = "http://192.168.99.9:5000";
 
@@ -195,9 +199,23 @@ export default function AccountSettingsScreen() {
           return;
         }        
       }
-      const pulled = await pullLanSnapshotToLocal();
-      const pushed = await pushLanSnapshotFromLocal();
-      Alert.alert("Sync", `Pull: ${pulled ? "OK" : "Skip/Fail"}\nPush: ${pushed ? "OK" : "Skip/Fail"}`);
+      const pull = await pullLanSnapshotToLocalDetailed();
+
+      let pushLine = "Push: Skip";
+      if (!pull.ok) {
+        pushLine = "Push: Skip (pull fail)";
+      } else {
+        const push = await pushLanSnapshotFromLocalDetailed();
+        pushLine = push.ok
+          ? "Push: OK"
+          : `Push: Fail (${push.reason || "unknown"}${push.status ? `/${push.status}` : ""})`;
+      }
+
+      const pullLine = pull.ok
+        ? `Pull: ${pull.changed ? "OK" : `Skip (${pull.reason || "no_change"})`}`
+        : `Pull: Fail (${pull.reason || "unknown"}${pull.status ? `/${pull.status}` : ""})`;
+
+      Alert.alert("Sync", `${pullLine}\n${pushLine}`);
     } finally {
       setSyncing(false);
     }
@@ -265,6 +283,17 @@ export default function AccountSettingsScreen() {
           >
             <Ionicons name="server-outline" size={20} color={Colors.light.text} />
             <Text style={styles.dataManagementText}>System & Data Management (Backup/Restore)</Text>
+            <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+          </Pressable>
+        )}
+
+        {canManageSystem && (
+          <Pressable
+            style={styles.dataManagementBtn}
+            onPress={() => router.push("/phone-transfer")}
+          >
+            <Ionicons name="phone-portrait-outline" size={20} color={Colors.light.text} />
+            <Text style={styles.dataManagementText}>Phone-to-Phone Transfer (Nearby/QR)</Text>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
           </Pressable>
         )}

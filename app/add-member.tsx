@@ -22,7 +22,16 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { ORG_POSITION_LABELS, OrgPosition, MemberStatus, MEMBER_STATUS_VALUES, MEMBER_STATUS_LABELS } from "@/lib/types";
+import {
+  ORG_POSITION_LABELS,
+  OrgPosition,
+  MemberStatus,
+  MemberGender,
+  MEMBER_STATUS_VALUES,
+  MEMBER_STATUS_LABELS,
+  MEMBER_GENDER_VALUES,
+  MEMBER_GENDER_LABELS,
+} from "@/lib/types";
 import AccessDenied from "@/components/AccessDenied";
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
 const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
@@ -44,6 +53,37 @@ const getAvatarLabel = (name: string) => {
   return text.charAt(0).toUpperCase();
 };
 
+const inferGenderFromName = (rawName: string): MemberGender => {
+  const name = String(rawName || "").trim();
+  if (!name) return "other";
+  const n = name.toLowerCase();
+  if (
+    name.startsWith("ဆရာတော်") ||
+    name.startsWith("ဦး") ||
+    name.startsWith("ကို") ||
+    name.startsWith("မောင်") ||
+    name.startsWith("ကိုရင်") ||
+    name.startsWith("ဦးဇင်း") ||
+    n.startsWith("u ") ||
+    n.startsWith("ko ") ||
+    n.startsWith("mg ")
+  ) {
+    return "male";
+  }
+  if (
+    name.startsWith("ဒေါ်") ||
+    name.startsWith("မ") ||
+    name.startsWith("မိ") ||
+    name.startsWith("သီလရှင်") ||
+    name.startsWith("ဆရာလေး") ||
+    n.startsWith("daw ") ||
+    n.startsWith("ma ")
+  ) {
+    return "female";
+  }
+  return "other";
+};
+
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
   const { members, addMember, updateMember, createMemberChangeRequest, transactions, loans, groups, updateTransaction, updateLoan, updateGroup } = useData() as any;
@@ -56,6 +96,7 @@ export default function AddMemberScreen() {
   // Form States
   const [name, setName] = useState("");
   const [memberId, setMemberId] = useState("");
+  const [gender, setGender] = useState<MemberGender>("other");
   const [phone, setPhone] = useState("");
   const [nrc, setNrc] = useState("");
   const [dob, setDob] = useState("");
@@ -79,6 +120,7 @@ export default function AddMemberScreen() {
       if (member) {
         setName(member.name);
         setMemberId(member.id);
+        setGender(member.gender || inferGenderFromName(member.name || ""));
         setPhone(member.phone);
         // @ts-ignore - nrc နှင့် dob က type ထဲမှာ မပါခဲ့ရင် error မတက်စေရန်
         setNrc(member.nrc || "");
@@ -112,7 +154,7 @@ export default function AddMemberScreen() {
           : result.assets[0].uri;
         setProfileImage(source);
       }
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "ပုံရွေးချယ်၍ မရပါ။");
     }
   };
@@ -161,6 +203,7 @@ export default function AddMemberScreen() {
       const memberData: any = {
         id: memberId,
         name: name.trim(),
+        gender,
         phone: phone.trim(),
         nrc: nrc.trim(),
         dob: dob.trim(),
@@ -342,6 +385,23 @@ export default function AddMemberScreen() {
             onChangeText={setName}
             placeholderTextColor={Colors.light.textSecondary}
           />
+
+          <Text style={styles.label}>ကျား / မ / အခြား</Text>
+          <View style={styles.statusRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {MEMBER_GENDER_VALUES.map((g) => (
+                <Pressable
+                  key={g}
+                  style={[styles.statusChip, gender === g ? styles.statusChipActive : undefined]}
+                  onPress={() => setGender(g)}
+                >
+                  <Text style={[styles.statusChipText, gender === g ? styles.statusChipTextActive : undefined]}>
+                    {MEMBER_GENDER_LABELS[g]}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
 
           <Text style={styles.label}>ဖုန်းနံပါတ်</Text>
           <TextInput
