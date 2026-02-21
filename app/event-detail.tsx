@@ -60,14 +60,18 @@ interface OrgEventNotice {
   funeralMemorialTime?: string;
   readBy?: Record<string, { userId: string; memberId?: string; displayName?: string; readAt: string }>;
   reactions?: Record<string, "like" | "love" | "sad">;
-  comments?: Array<{
+  comments?: {
     id: string;
     userId: string;
     memberId?: string;
     displayName?: string;
     message: string;
     createdAt: string;
-  }>;
+    replyToCommentId?: string;
+    replyToUserId?: string;
+    replyToDisplayName?: string;
+    mentionUserIds?: string[];
+  }[];
 }
 
 function getTopicColor(topic?: string): string {
@@ -86,6 +90,11 @@ export default function EventDetailScreen() {
   const { currentUser } = useAuth();
   const { members, users, events, editEvent } = useData() as any;
   const [commentText, setCommentText] = useState("");
+  const [replyTarget, setReplyTarget] = useState<{
+    commentId: string;
+    userId: string;
+    displayName?: string;
+  } | null>(null);
 
   const actorUserId = String(currentUser?.id || "");
   const actorDisplayName = String(currentUser?.displayName || "");
@@ -167,6 +176,7 @@ export default function EventDetailScreen() {
     if (!msg || !actorUserId || !event) return;
     setCommentText("");
     const comments = event.comments || [];
+    const mentionUserIds = replyTarget?.userId ? [replyTarget.userId] : [];
     await editEvent(String(id), {
       comments: [
         ...comments,
@@ -177,9 +187,14 @@ export default function EventDetailScreen() {
           displayName: actorDisplayName || undefined,
           message: msg,
           createdAt: new Date().toISOString(),
+          replyToCommentId: replyTarget?.commentId,
+          replyToUserId: replyTarget?.userId,
+          replyToDisplayName: replyTarget?.displayName,
+          mentionUserIds,
         },
       ],
     });
+    setReplyTarget(null);
   };
 
   if (loading) {
@@ -323,12 +338,20 @@ export default function EventDetailScreen() {
 
           <View style={styles.scheduleBox}>
             <Text style={styles.scheduleTitle}>Comments</Text>
+            {replyTarget && (
+              <View style={styles.replyBox}>
+                <Text style={styles.replyText}>Reply to: {replyTarget.displayName || replyTarget.userId}</Text>
+                <Pressable onPress={() => setReplyTarget(null)}>
+                  <Text style={styles.replyCancel}>Cancel</Text>
+                </Pressable>
+              </View>
+            )}
             <View style={styles.commentInputRow}>
               <TextInput
                 style={styles.commentInput}
                 value={commentText}
                 onChangeText={setCommentText}
-                placeholder="မှတ်ချက်ရေးပါ..."
+                placeholder={replyTarget ? "Reply ကိုရေးပါ..." : "မှတ်ချက်ရေးပါ..."}
               />
               <Pressable style={styles.commentSendBtn} onPress={() => void handleSendComment()}>
                 <Ionicons name="send" size={16} color="#fff" />
@@ -340,8 +363,23 @@ export default function EventDetailScreen() {
               (event.comments || []).map((comment) => (
                 <View key={comment.id} style={styles.commentItem}>
                   <Text style={styles.commentAuthor}>{comment.displayName || comment.memberId || comment.userId}</Text>
+                  {comment.replyToDisplayName ? (
+                    <Text style={styles.commentReplyTo}>Reply to: {comment.replyToDisplayName}</Text>
+                  ) : null}
                   <Text style={styles.commentBody}>{comment.message}</Text>
                   <Text style={styles.commentDate}>{new Date(comment.createdAt).toLocaleString()}</Text>
+                  {comment.userId !== actorUserId && (
+                    <Pressable
+                      style={styles.replyBtn}
+                      onPress={() => setReplyTarget({
+                        commentId: comment.id,
+                        userId: comment.userId,
+                        displayName: comment.displayName || comment.memberId || comment.userId,
+                      })}
+                    >
+                      <Text style={styles.replyBtnText}>Reply</Text>
+                    </Pressable>
+                  )}
                 </View>
               ))
             )}
@@ -436,9 +474,26 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.light.border,
   },
+  replyBox: {
+    borderWidth: 1,
+    borderColor: "#BAE6FD",
+    backgroundColor: "#EFF6FF",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  replyText: { fontSize: 12, color: "#1D4ED8", fontFamily: "Inter_600SemiBold" },
+  replyCancel: { fontSize: 12, color: "#DC2626", fontFamily: "Inter_600SemiBold" },
   commentAuthor: { fontSize: 12, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  commentReplyTo: { fontSize: 11, color: "#1D4ED8", marginTop: 2 },
   commentBody: { fontSize: 13, color: Colors.light.text, marginTop: 2 },
   commentDate: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 2 },
+  replyBtn: { alignSelf: "flex-start", marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: "#EEF2FF" },
+  replyBtnText: { fontSize: 11, color: "#3730A3", fontFamily: "Inter_600SemiBold" },
   readRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
   errorText: { fontSize: 16, color: Colors.light.textSecondary, marginBottom: 10 },
   backButton: { padding: 10 },

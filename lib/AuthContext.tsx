@@ -85,9 +85,46 @@ function normalizePhoneForLookup(rawValue: string): string {
   return normalizeText(rawValue).replace(/[^\d]/g, "");
 }
 
+const NAME_PREFIXES = [
+  "ဆရာတော်",
+  "ဦးဇင်း",
+  "ကိုရင်",
+  "ဦး",
+  "ဒေါ်",
+  "ကို",
+  "မောင်",
+  "မိ",
+  "မ",
+  "သီလရှင်",
+  "ဆရာလေး",
+  "u ",
+  "daw ",
+  "ko ",
+  "mg ",
+  "ma ",
+];
+
+function normalizeNameForLookup(rawValue: string): string {
+  let value = normalizeIdentifier(rawValue).replace(/\s+/g, " ").trim();
+  if (!value) return "";
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of NAME_PREFIXES) {
+      if (value.startsWith(prefix)) {
+        value = value.slice(prefix.length).trim();
+        changed = true;
+      }
+    }
+  }
+  return value.replace(/\s+/g, "");
+}
+
 function resolveUserByIdentifier(users: UserAccount[], members: Member[], identifier: string): UserAccount | undefined {
   const needle = normalizeIdentifier(identifier);
   if (!needle) return undefined;
+  const needleName = normalizeNameForLookup(identifier);
 
   return users.find((user) => {
     if (!user.isActive) return false;
@@ -106,6 +143,8 @@ function resolveUserByIdentifier(users: UserAccount[], members: Member[], identi
     const memberIdCandidate = normalizeIdentifier(member.id);
     const emailCandidate = normalizeIdentifier(member.email || "");
     const aliasCandidate = normalizeIdentifier(buildMemberUsername(member.id));
+    const memberNameCandidate = normalizeNameForLookup(member.name || "");
+    const userDisplayNameCandidate = normalizeNameForLookup(user.displayName || "");
     const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
     const phoneCandidates = [primaryPhone, secondaryPhone]
       .filter(Boolean)
@@ -116,6 +155,11 @@ function resolveUserByIdentifier(users: UserAccount[], members: Member[], identi
       needle === memberIdCandidate ||
       (emailCandidate && needle === emailCandidate) ||
       (aliasCandidate && needle === aliasCandidate) ||
+      (!!needleName && (
+        needleName === memberNameCandidate ||
+        needleName === userDisplayNameCandidate ||
+        needleName === normalizeNameForLookup(memberIdCandidate)
+      )) ||
       (!!needlePhone && phoneCandidates.includes(needlePhone))
     );
   });

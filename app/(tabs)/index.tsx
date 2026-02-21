@@ -509,6 +509,92 @@ export default function DashboardScreen() {
     void scheduleEventNotifications();
   }, [events, currentUser?.id]);
 
+  useEffect(() => {
+    const scheduleCommentMentionNotifications = async () => {
+      const isExpoGo = Constants.appOwnership === 'expo';
+      if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
+      if (!currentUser?.id) return;
+      if (!Array.isArray(events) || events.length === 0) return;
+      try {
+        const Notifications = require('expo-notifications');
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        const key = `@comment_notification_seen_ids_${currentUser.id}`;
+        const existingRaw = await AsyncStorage.getItem(key);
+        const seen = new Set<string>(existingRaw ? JSON.parse(existingRaw) : []);
+
+        const allCommentKeys: string[] = [];
+        for (const eventItem of events as any[]) {
+          const eventId = String(eventItem?.id || "");
+          const comments = Array.isArray(eventItem?.comments) ? eventItem.comments : [];
+          for (const comment of comments) {
+            const commentId = String(comment?.id || "");
+            if (!eventId || !commentId) continue;
+            allCommentKeys.push(`${eventId}:${commentId}`);
+          }
+        }
+        if (!existingRaw) {
+          await AsyncStorage.setItem(key, JSON.stringify(allCommentKeys));
+          return;
+        }
+
+        const { status } = await Notifications.getPermissionsAsync();
+        let finalStatus = status;
+        if (status !== 'granted') {
+          const req = await Notifications.requestPermissionsAsync();
+          finalStatus = req.status;
+        }
+        if (finalStatus !== "granted") return;
+
+        let changed = false;
+        const orderedEvents = [...(events as any[])].sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
+        for (const eventItem of orderedEvents) {
+          const eventId = String(eventItem?.id || "");
+          const eventTitle = String(eventItem?.topic || eventItem?.title || "သတင်း");
+          const comments = Array.isArray(eventItem?.comments) ? [...eventItem.comments] : [];
+          comments.sort((a: any, b: any) => new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime());
+          for (const comment of comments) {
+            const commentId = String(comment?.id || "");
+            if (!eventId || !commentId) continue;
+            const marker = `${eventId}:${commentId}`;
+            if (seen.has(marker)) continue;
+
+            const byMe = String(comment?.userId || "") === String(currentUser.id || "");
+            const mentionIds = Array.isArray(comment?.mentionUserIds) ? comment.mentionUserIds.map((v: any) => String(v)) : [];
+            const mentionedMe = mentionIds.includes(String(currentUser.id));
+            const replyToMe = String(comment?.replyToUserId || "") === String(currentUser.id || "");
+            if (!byMe && (mentionedMe || replyToMe)) {
+              const author = String(comment?.displayName || comment?.memberId || "တစ်ဦး");
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title: `💬 ${author} က သင့်ကို reply/tag လုပ်ထားသည်`,
+                  body: `${eventTitle} - ${String(comment?.message || "").slice(0, 80)}`,
+                },
+                trigger: null,
+              });
+            }
+            seen.add(marker);
+            changed = true;
+          }
+        }
+        if (changed) {
+          await AsyncStorage.setItem(key, JSON.stringify(Array.from(seen)));
+        }
+      } catch (error) {
+        console.log("Comment notification scheduling failed:", error);
+      }
+    };
+    void scheduleCommentMentionNotifications();
+  }, [events, currentUser?.id]);
+
   const handleSendWish = (phone: string, name: string, secondaryPhone?: string) => {
     const { primaryPhone, secondaryPhone: fallbackPhone } = splitPhoneNumbers(phone, secondaryPhone);
     const targetPhone = primaryPhone || fallbackPhone;
@@ -640,6 +726,7 @@ export default function DashboardScreen() {
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
       <View style={styles.quickActions}>
+        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} />
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
         {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
@@ -649,7 +736,6 @@ export default function DashboardScreen() {
         <QuickAction icon="cash-outline" label="ချေးငွေဆပ်ရန်" onPress={() => openPaymentRequest("loan_repayment")} />
         <QuickAction icon="trending-up-outline" label="အတိုးဆပ်ရန်" onPress={() => openPaymentRequest("interest_income")} />
         <QuickAction icon="document-text-outline" label="ငွေတောင်းခံရန်" onPress={() => router.push("/expense-claims" as any)} />
-        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} />
       </View>
 
       {recentEvents.length > 0 && (

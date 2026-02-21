@@ -1,8 +1,8 @@
 ﻿{
-    "latestVersion":  "1.1.6",
+    "latestVersion":  "1.1.7",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.6-202602212002.apk?raw=1",
-    "notes":  "Version 1.1.6: full backup/sync key coverage, Dashboard Sync Now, and LAN sync fixes for event reactions/comments/read-state.",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.7-202602212143.apk?raw=1",
+    "notes":  "Version 1.1.7: comment sync race fix, comment reply/tag support with notifications, full-name login, and Sync Now moved to top.",
     "force":  false,
-    "publishedAt":  "2026-02-21T13:02:00Z"
+    "publishedAt":  "2026-02-21T14:43:00Z"
 }

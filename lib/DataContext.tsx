@@ -170,11 +170,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
   });
   const [loading, setLoading] = useState(true);
   const bootstrappedRef = useRef(false);
+  const lastLocalMutationAtRef = useRef(0);
+  const LOCAL_PULL_GUARD_MS = 12000;
 
   const refreshData = useCallback(async (options?: { skipPull?: boolean }) => {
     try {
       if (!options?.skipPull) {
         await store.pullLanSnapshotToLocal();
+      } else {
+        lastLocalMutationAtRef.current = Date.now();
       }
       await store.seedDefaultAdminUser();
       const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, s] = await Promise.all([
@@ -246,6 +250,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const timer = setInterval(() => {
       void (async () => {
+        const elapsed = Date.now() - lastLocalMutationAtRef.current;
+        if (elapsed < LOCAL_PULL_GUARD_MS) return;
         const changed = await store.pullLanSnapshotToLocal();
         if (changed) {
           await refreshData({ skipPull: true });
@@ -273,19 +279,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const addEvent = async (e: Omit<OrgEvent, "id">) => {
+    lastLocalMutationAtRef.current = Date.now();
     const newEvent = await store.addEvent(e);
     await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
     return newEvent;
   };
 
   const editEvent = async (id: string, u: Partial<OrgEvent>) => {
+    lastLocalMutationAtRef.current = Date.now();
     await store.updateEvent(id, u);
     await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
   };
 
   const removeEvent = async (id: string) => {
+    lastLocalMutationAtRef.current = Date.now();
     await store.deleteEvent(id);
     await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
   };
 
   const addGroup = async (g: Omit<Group, "id">) => {

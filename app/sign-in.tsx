@@ -86,7 +86,7 @@ export default function SignInScreen() {
     if (!isUserValid) {
       setPasswordTouched(false);
       setPasswordValid(null);
-      Alert.alert("Username မမှန်ကန်ပါ", "Member ID / ID### / Phone / Email / Admin ကို မှန်ကန်စွာထည့်ပါ။");
+      Alert.alert("Username မမှန်ကန်ပါ", "Member ID / ID### / Name / Phone / Email / Admin ကို မှန်ကန်စွာထည့်ပါ။");
       return;
     }
     setIsSigningIn(true);
@@ -127,7 +127,7 @@ export default function SignInScreen() {
             </View>
             <Text style={styles.appName}>Social Org Manager</Text>
             <Text style={styles.title}>User Login</Text>
-            <Text style={styles.subtitle}>Member ID / Phone / Email / ID### ဖြင့် ဝင်ရောက်နိုင်သည်</Text>
+            <Text style={styles.subtitle}>Member ID / Full Name / Phone / Email / ID### ဖြင့် ဝင်ရောက်နိုင်သည်</Text>
           </LinearGradient>
 
           <View style={styles.formCard}>
@@ -139,7 +139,7 @@ export default function SignInScreen() {
                 setUsernameTouched(false);
                 setUsernameValid(null);
               }}
-              placeholder="ဥပမာ - ID001 / ရဆသ-001 / 09xxxxxxxxx / mail@example.com / Admin"
+              placeholder="ဥပမာ - ID001 / ဦးစိုးမြင့်ဆွေ / စိုးမြင့်ဆွေ / 09xxxxxxxxx / mail@example.com / Admin"
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="next"
@@ -200,6 +200,7 @@ export default function SignInScreen() {
             <View style={styles.hintCard}>
               <Text style={styles.hintTitle}>Default Credentials</Text>
               <Text style={styles.hintText}>Member ID: ရဆသ-001 ဆိုရင် Username = ID001, Password = 001</Text>
+              <Text style={styles.hintText}>Name Login: ဦးစိုးမြင့်ဆွေ / စိုးမြင့်ဆွေ လည်းအသုံးပြုနိုင်သည်</Text>
               <Text style={styles.hintText}>Admin Account: Username = Admin, Password = Admin</Text>
             </View>
           </View>
