@@ -25,6 +25,7 @@ export default function TabLayout() {
         <Tabs.Screen name="index" />
         <Tabs.Screen name="finance" />
         <Tabs.Screen name="reports" />
+        <Tabs.Screen name="system" />
       </Tabs>
       <FloatingTabMenu />
     </View>

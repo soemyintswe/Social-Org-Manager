@@ -71,10 +71,10 @@ export default function FloatingTabMenu() {
         enabled: can("reports.view_all") || can("reports.view_summary"),
       },
       {
-        name: "စနစ်ပိုင်းဆိုင်ရာ",
+        name: "System Information",
         icon: "settings-outline",
-        route: "/data-management",
-        enabled: can("system.manage"),
+        route: "/system",
+        enabled: true,
       },
     {
         name: "ချိန်ညှိရန်",
