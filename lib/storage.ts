@@ -40,6 +40,44 @@ const KEYS = {
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
 };
+
+const EXTRA_SHARED_KEYS = [
+  "@custom_categories",
+  "@org_notice_custom_topics",
+  "@org_notice_custom_relations",
+  "@org_notice_custom_conditions",
+] as const;
+
+const BACKUP_EXCLUDED_KEYS = new Set<string>([
+  "@orghub_auth_session",
+  "@orghub_login_guard",
+  "@orghub_sync_last_server_updated_at",
+  "@orghub_expense_claim_draft",
+  "@member_change_last_seen_at",
+  "@auto_backup_enabled",
+  "@last_birthday_notification",
+  "@app_update_last_checked_at",
+  "@app_update_skipped_version",
+]);
+
+function isSharedBackupKey(key: string): boolean {
+  if (!key) return false;
+  if (BACKUP_EXCLUDED_KEYS.has(key)) return false;
+  if (key.startsWith("@event_notification_seen_ids_")) return false;
+  if (Object.values(KEYS).includes(key as any)) return true;
+  if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
+  return false;
+}
+
+async function getAllSharedBackupKeys(): Promise<string[]> {
+  try {
+    const all = await AsyncStorage.getAllKeys();
+    const dynamic = all.filter((key) => isSharedBackupKey(String(key || "")));
+    if (dynamic.length > 0) return dynamic;
+  } catch {}
+  return [...Object.values(KEYS), ...EXTRA_SHARED_KEYS];
+}
+
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
 const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || "http://192.168.99.9:5000");
 
@@ -443,7 +481,10 @@ export async function clearAllMembers(): Promise<void> {
 }
 
 export async function clearAllData(): Promise<void> {
-  await AsyncStorage.multiRemove(Object.values(KEYS));
+  const keys = await getAllSharedBackupKeys();
+  if (keys.length > 0) {
+    await AsyncStorage.multiRemove(keys);
+  }
 }
 
 function toYmd(date: Date): string {
@@ -1347,7 +1388,7 @@ export async function deleteUserAccount(id: string) {
 
 // Backup Data (Export All)
 export async function exportData(): Promise<string> {
-  const keys = Object.values(KEYS);
+  const keys = await getAllSharedBackupKeys();
   const result = await AsyncStorage.multiGet(keys);
   const exportObj: Record<string, string> = {};
   
@@ -1366,8 +1407,8 @@ export async function restoreData(jsonString: string): Promise<boolean> {
     const exportObj = JSON.parse(jsonString);
     const pairs: [string, string][] = [];
     
-    Object.values(KEYS).forEach((key) => {
-      if (exportObj[key]) {
+    Object.keys(exportObj || {}).forEach((key) => {
+      if (isSharedBackupKey(key) && typeof exportObj[key] === "string") {
         pairs.push([key, exportObj[key]]);
       }
     });
@@ -1423,11 +1464,53 @@ function mergeRecordsById<T extends { id?: string }>(existing: T[], incoming: T[
   return result;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeArrayItemKey(value: unknown): string {
+  if (isPlainObject(value)) {
+    const id = String((value as any).id || "").trim();
+    if (id) return `id:${id}`;
+  }
+  try {
+    return `json:${JSON.stringify(value)}`;
+  } catch {
+    return `str:${String(value)}`;
+  }
+}
+
+function mergeArrayValues(existing: unknown[], incoming: unknown[]): unknown[] {
+  const allWithId =
+    existing.concat(incoming).every((row) => {
+      if (!isPlainObject(row)) return false;
+      return String((row as any).id || "").trim().length > 0;
+    });
+  if (allWithId) {
+    return mergeRecordsById(existing as any[], incoming as any[]);
+  }
+
+  const map = new Map<string, unknown>();
+  for (const row of existing) map.set(normalizeArrayItemKey(row), row);
+  for (const row of incoming) map.set(normalizeArrayItemKey(row), row);
+  return Array.from(map.values());
+}
+
+function mergeStorageValues(existingValue: unknown, incomingValue: unknown): unknown {
+  if (Array.isArray(existingValue) && Array.isArray(incomingValue)) {
+    return mergeArrayValues(existingValue, incomingValue);
+  }
+  if (isPlainObject(existingValue) && isPlainObject(incomingValue)) {
+    return { ...existingValue, ...incomingValue };
+  }
+  return incomingValue;
+}
+
 export async function mergeData(jsonString: string): Promise<boolean> {
   try {
     const exportObj = JSON.parse(jsonString) as Record<string, unknown>;
 
-    const keys = Object.values(KEYS);
+    const keys = Object.keys(exportObj || {}).filter((key) => isSharedBackupKey(key));
     let changed = false;
 
     for (const key of keys) {
@@ -1453,12 +1536,14 @@ export async function mergeData(jsonString: string): Promise<boolean> {
         continue;
       }
 
-      const existingArray = parseJsonSafe<any[]>(existingRaw, []);
-      const incomingArray = parseJsonSafe<any[]>(incomingRaw, []);
-      if (!Array.isArray(incomingArray)) continue;
-
-      const mergedArray = mergeRecordsById(existingArray, incomingArray);
-      await AsyncStorage.setItem(key, JSON.stringify(mergedArray));
+      const existingParsed = parseJsonSafe<unknown>(existingRaw, existingRaw || null);
+      const incomingParsed = parseJsonSafe<unknown>(incomingRaw, incomingRaw);
+      const mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      if (typeof mergedValue === "string") {
+        await AsyncStorage.setItem(key, mergedValue);
+      } else {
+        await AsyncStorage.setItem(key, JSON.stringify(mergedValue));
+      }
       changed = true;
     }
 

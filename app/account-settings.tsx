@@ -27,7 +27,7 @@ const DEFAULT_LAN_SYNC_URL = "http://192.168.99.9:5000";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
-  const { accountSettings, updateAccountSettings } = useData();
+  const { accountSettings, updateAccountSettings, refreshData } = useData();
   const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
   
@@ -263,6 +263,7 @@ export default function AccountSettingsScreen() {
         ? `Pull: ${pull.changed ? "OK" : `Skip (${pull.reason || "no_change"})`}`
         : `Pull: Fail (${pull.reason || "unknown"}${pull.status ? `/${pull.status}` : ""})`;
 
+      await refreshData({ skipPull: true });
       Alert.alert("Sync", `${pullLine}\n${pushLine}`);
     } finally {
       setSyncing(false);

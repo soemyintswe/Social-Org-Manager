@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
+import * as IntentLauncher from "expo-intent-launcher";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -61,6 +62,11 @@ const WALLET_APP_URLS: Record<MobileWalletProvider, string[]> = {
     "intent://#Intent;package=com.ayapay.wallet;scheme=ayapay;end",
     "ayapay://",
   ],
+};
+const WALLET_APP_PACKAGE: Record<MobileWalletProvider, string> = {
+  kbz_pay: "com.kbzbank.kpaycustomer",
+  wave_pay: "mm.com.wavemoney.wavepay",
+  aya_pay: "com.ayapay.wallet",
 };
 
 const formatDateYmd = (date: Date) => {
@@ -152,6 +158,16 @@ export default function MemberPaymentRequestsScreen() {
   }, [transactions, requestKind, selectedForMemberId, feeStartDate, feeEndDate]);
 
   const openWalletApp = async (provider: MobileWalletProvider) => {
+    if (Platform.OS === "android") {
+      try {
+        await IntentLauncher.startActivityAsync("android.intent.action.MAIN", {
+          packageName: WALLET_APP_PACKAGE[provider],
+          category: "android.intent.category.LAUNCHER",
+        });
+        return;
+      } catch {}
+    }
+
     const urls = WALLET_APP_URLS[provider];
     for (const url of urls) {
       try {
@@ -159,7 +175,10 @@ export default function MemberPaymentRequestsScreen() {
         return;
       } catch {}
     }
-    Alert.alert("Wallet App မဖွင့်နိုင်ပါ", "သက်ဆိုင်ရာ Wallet App ကို ဖုန်းတွင် install လုပ်ထားသလား စစ်ပါ။");
+    Alert.alert(
+      "Wallet App မဖွင့်နိုင်ပါ",
+      `Package: ${WALLET_APP_PACKAGE[provider]}\nသက်ဆိုင်ရာ Wallet App ကို ဖုန်းတွင် install လုပ်ထားသလား စစ်ပါ။`
+    );
   };
 
   const selectSelf = () => {

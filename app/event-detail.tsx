@@ -1,4 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
@@ -85,62 +84,27 @@ export default function EventDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const { currentUser } = useAuth();
-  const { members, users } = useData() as any;
-  const [loading, setLoading] = useState(true);
-  const [event, setEvent] = useState<OrgEventNotice | null>(null);
+  const { members, users, events, editEvent } = useData() as any;
   const [commentText, setCommentText] = useState("");
 
   const actorUserId = String(currentUser?.id || "");
   const actorDisplayName = String(currentUser?.displayName || "");
   const actorMemberId = String(currentUser?.memberId || "");
 
-  const loadEvent = async () => {
-    try {
-      const raw = await AsyncStorage.getItem("@orghub_events");
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return null;
-      const found = parsed.find((item) => String(item?.id) === String(id));
-      return found || null;
-    } catch {
-      return null;
-    }
-  };
-
-  const updateEventWith = async (mutator: (target: OrgEventNotice) => OrgEventNotice): Promise<OrgEventNotice | null> => {
-    try {
-      const raw = await AsyncStorage.getItem("@orghub_events");
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return null;
-      const next = parsed.map((item) => {
-        if (String(item?.id) !== String(id)) return item;
-        return mutator(item as OrgEventNotice);
-      });
-      await AsyncStorage.setItem("@orghub_events", JSON.stringify(next));
-      const refreshed = next.find((item) => String(item?.id) === String(id)) || null;
-      setEvent(refreshed);
-      return refreshed;
-    } catch {
-      return null;
-    }
-  };
+  const event = useMemo(
+    () => ((events || []).find((item: any) => String(item?.id) === String(id)) as OrgEventNotice | undefined) || null,
+    [events, id]
+  );
+  const loading = !Array.isArray(events);
 
   useEffect(() => {
-    let mounted = true;
     (async () => {
-      const found = await loadEvent();
-      if (mounted) {
-        setEvent(found);
-        setLoading(false);
-      }
-      if (!found || !actorUserId) return;
-      const already = !!found.readBy?.[actorUserId];
+      if (!event || !actorUserId) return;
+      const already = !!event.readBy?.[actorUserId];
       if (already) return;
-      await updateEventWith((target) => ({
-        ...target,
+      await editEvent(String(id), {
         readBy: {
-          ...(target.readBy || {}),
+          ...(event.readBy || {}),
           [actorUserId]: {
             userId: actorUserId,
             memberId: actorMemberId || undefined,
@@ -148,12 +112,9 @@ export default function EventDetailScreen() {
             readAt: new Date().toISOString(),
           },
         },
-      }));
+      });
     })();
-    return () => {
-      mounted = false;
-    };
-  }, [id, actorUserId, actorMemberId, actorDisplayName]);
+  }, [id, event, actorUserId, actorMemberId, actorDisplayName, editEvent]);
 
   const images = useMemo(() => {
     if (!event) return [] as string[];
@@ -190,42 +151,34 @@ export default function EventDetailScreen() {
   }, [event?.readBy, members, users]);
 
   const handleReact = async (reaction: "like" | "love" | "sad") => {
-    if (!actorUserId) {
+    if (!actorUserId || !event) {
       return;
     }
-    await updateEventWith((target) => {
-      const current = target.reactions || {};
-      const mine = current[actorUserId];
-      const next = { ...current };
-      if (mine === reaction) {
-        delete next[actorUserId];
-      } else {
-        next[actorUserId] = reaction;
-      }
-      return { ...target, reactions: next };
-    });
+    const current = event.reactions || {};
+    const mine = current[actorUserId];
+    const next = { ...current };
+    if (mine === reaction) delete next[actorUserId];
+    else next[actorUserId] = reaction;
+    await editEvent(String(id), { reactions: next });
   };
 
   const handleSendComment = async () => {
     const msg = commentText.trim();
-    if (!msg || !actorUserId) return;
+    if (!msg || !actorUserId || !event) return;
     setCommentText("");
-    await updateEventWith((target) => {
-      const comments = target.comments || [];
-      return {
-        ...target,
-        comments: [
-          ...comments,
-          {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            userId: actorUserId,
-            memberId: actorMemberId || undefined,
-            displayName: actorDisplayName || undefined,
-            message: msg,
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      };
+    const comments = event.comments || [];
+    await editEvent(String(id), {
+      comments: [
+        ...comments,
+        {
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          userId: actorUserId,
+          memberId: actorMemberId || undefined,
+          displayName: actorDisplayName || undefined,
+          message: msg,
+          createdAt: new Date().toISOString(),
+        },
+      ],
     });
   };
 
@@ -399,7 +352,7 @@ export default function EventDetailScreen() {
             {readStatusRows.length === 0 ? (
               <Text style={styles.scheduleText}>အသင်းဝင်စာရင်း မရှိသေးပါ။</Text>
             ) : (
-              readStatusRows.map((row) => (
+              readStatusRows.map((row: any) => (
                 <View key={row.memberId} style={styles.readRow}>
                   <Text style={styles.scheduleText}>{row.name}</Text>
                   <Text style={[styles.scheduleText, { color: row.readAt ? "#16A34A" : "#F59E0B" }]}>

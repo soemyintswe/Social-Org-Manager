@@ -20,7 +20,12 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory, type MemberPaymentRequestKind } from "@/lib/types";
-import { exportData } from "@/lib/storage";
+import {
+  checkLanSyncHealth,
+  exportData,
+  pullLanSnapshotToLocalDetailed,
+  pushLanSnapshotFromLocalDetailed,
+} from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
@@ -109,6 +114,56 @@ export default function DashboardScreen() {
     router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
   };
   const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
+  const [syncingNow, setSyncingNow] = useState(false);
+
+  const normalizeUrl = (raw: string): string => {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return "";
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    return withProtocol.replace(/\/+$/, "");
+  };
+
+  const handleSyncNow = async () => {
+    if (syncingNow) return;
+    setSyncingNow(true);
+    try {
+      const syncEnabled = accountSettings?.syncEnabled !== false;
+      const syncServerUrl = normalizeUrl(accountSettings?.syncServerUrl || "http://192.168.99.9:5000");
+      if (!syncEnabled || !syncServerUrl) {
+        Alert.alert("Sync", "LAN Sync ကို Account Settings မှာ Enable + URL သတ်မှတ်ပေးပါ။");
+        return;
+      }
+
+      const health = await checkLanSyncHealth();
+      if (!health.ok) {
+        Alert.alert(
+          "Sync Error",
+          `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${syncServerUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}`
+        );
+        return;
+      }
+
+      const pull = await pullLanSnapshotToLocalDetailed();
+      let pushLine = "Push: Skip";
+      if (!pull.ok) {
+        pushLine = "Push: Skip (pull fail)";
+      } else {
+        const push = await pushLanSnapshotFromLocalDetailed();
+        pushLine = push.ok
+          ? "Push: OK"
+          : `Push: Fail (${push.reason || "unknown"}${push.status ? `/${push.status}` : ""})`;
+      }
+
+      const pullLine = pull.ok
+        ? `Pull: ${pull.changed ? "OK" : `Skip (${pull.reason || "no_change"})`}`
+        : `Pull: Fail (${pull.reason || "unknown"}${pull.status ? `/${pull.status}` : ""})`;
+
+      await refreshData({ skipPull: true });
+      Alert.alert("Sync", `${pullLine}\n${pushLine}`);
+    } finally {
+      setSyncingNow(false);
+    }
+  };
 
   const loadMemberChangeLastSeen = useCallback(async () => {
     const seenAt = (await AsyncStorage.getItem(MEMBER_CHANGE_LAST_SEEN_KEY)) || "";
@@ -594,6 +649,7 @@ export default function DashboardScreen() {
         <QuickAction icon="cash-outline" label="ချေးငွေဆပ်ရန်" onPress={() => openPaymentRequest("loan_repayment")} />
         <QuickAction icon="trending-up-outline" label="အတိုးဆပ်ရန်" onPress={() => openPaymentRequest("interest_income")} />
         <QuickAction icon="document-text-outline" label="ငွေတောင်းခံရန်" onPress={() => router.push("/expense-claims" as any)} />
+        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} />
       </View>
 
       {recentEvents.length > 0 && (

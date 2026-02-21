@@ -42,7 +42,7 @@ interface DataContextValue {
   standardAmountChangeRequests: StandardAmountChangeRequest[];
   accountSettings: AccountSettings;
   loading: boolean;
-  refreshData: () => Promise<void>;
+  refreshData: (options?: { skipPull?: boolean }) => Promise<void>;
   addMember: (m: Omit<Member, "id">) => Promise<Member>;
   updateMember: (id: string, u: Partial<Member>) => Promise<void>;
   deleteMember: (id: string) => Promise<void>;
@@ -171,9 +171,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const bootstrappedRef = useRef(false);
 
-  const refreshData = useCallback(async () => {
+  const refreshData = useCallback(async (options?: { skipPull?: boolean }) => {
     try {
-      await store.pullLanSnapshotToLocal();
+      if (!options?.skipPull) {
+        await store.pullLanSnapshotToLocal();
+      }
       await store.seedDefaultAdminUser();
       const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, s] = await Promise.all([
         store.getMembers(),
@@ -246,7 +248,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       void (async () => {
         const changed = await store.pullLanSnapshotToLocal();
         if (changed) {
-          await refreshData();
+          await refreshData({ skipPull: true });
         }
       })();
     }, 10000);
@@ -256,97 +258,97 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // --- Actions ---
   const addMember = async (m: Omit<Member, "id">) => {
     const newMember = await store.addMember(m);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newMember;
   };
 
   const updateMember = async (id: string, u: Partial<Member>) => {
     await store.updateMember(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const deleteMember = async (id: string) => {
     await store.deleteMember(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addEvent = async (e: Omit<OrgEvent, "id">) => {
     const newEvent = await store.addEvent(e);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newEvent;
   };
 
   const editEvent = async (id: string, u: Partial<OrgEvent>) => {
     await store.updateEvent(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeEvent = async (id: string) => {
     await store.deleteEvent(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addGroup = async (g: Omit<Group, "id">) => {
     const newGroup = await store.addGroup(g);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newGroup;
   };
 
   const editGroup = async (id: string, u: Partial<Group>) => {
     await store.updateGroup(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeGroup = async (id: string) => {
     await store.deleteGroup(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addTransaction = async (t: Omit<Transaction, "id">) => {
     const newTxn = await store.addTransaction(t);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newTxn;
   };
 
   const updateTransaction = async (id: string, u: Partial<Transaction>) => {
     await store.updateTransaction(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeTransaction = async (id: string) => {
     await store.deleteTransaction(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addLoan = async (l: Omit<Loan, "id">) => {
     const newLoan = await store.addLoan(l);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newLoan;
   };
 
   const editLoan = async (id: string, u: Partial<Loan>) => {
     await store.updateLoan(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeLoan = async (id: string) => {
     await store.deleteLoan(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const upsertUserAccount = async (u: UserAccount) => {
     await store.upsertUserAccount(u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeUserAccount = async (id: string) => {
     await store.deleteUserAccount(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const updateAccountSettings = async (s: AccountSettings) => {
     await store.saveAccountSettings(s);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const createMemberChangeRequest = async (input: {
@@ -360,23 +362,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createdByMemberId?: string;
   }) => {
     const request = await store.createMemberChangeRequest(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return request;
   };
 
   const approveMemberChangeRequest = async (requestId: string, reviewerUserId: string, reviewNote?: string) => {
     await store.approveMemberChangeRequest(requestId, reviewerUserId, reviewNote);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const rejectMemberChangeRequest = async (requestId: string, reviewerUserId: string, reviewNote?: string) => {
     await store.rejectMemberChangeRequest(requestId, reviewerUserId, reviewNote);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const withdrawMemberChangeRequest = async (requestId: string, requesterUserId: string, note?: string) => {
     await store.withdrawMemberChangeRequest(requestId, requesterUserId, note);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const assignMemberChangeRequest = async (
@@ -385,12 +387,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     assignerUserId: string
   ) => {
     await store.assignMemberChangeRequest(requestId, assignedReviewerUserId, assignerUserId);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const createExpenseClaim = async (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => {
     const claim = await store.createExpenseClaim(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return claim;
   };
 
@@ -401,7 +403,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     approvalNote?: string;
   }) => {
     await store.approveExpenseClaim(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const rejectExpenseClaim = async (input: {
@@ -410,7 +412,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     approvalNote: string;
   }) => {
     await store.rejectExpenseClaim(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const disburseExpenseClaim = async (input: {
@@ -422,7 +424,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     note?: string;
   }) => {
     await store.disburseExpenseClaim(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const createMemberPaymentRequest = async (input: {
@@ -445,7 +447,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createdByMemberId?: string;
   }) => {
     const req = await store.createMemberPaymentRequest(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return req;
   };
 
@@ -456,7 +458,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     acceptedDate?: string;
   }) => {
     await store.approveMemberPaymentRequest(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const rejectMemberPaymentRequest = async (input: {
@@ -465,7 +467,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     reviewNote: string;
   }) => {
     await store.rejectMemberPaymentRequest(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const createStandardAmountChangeRequest = async (input: {
@@ -477,18 +479,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createdByMemberId?: string;
   }) => {
     const req = await store.createStandardAmountChangeRequest(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return req;
   };
 
   const approveStandardAmountChangeRequest = async (requestId: string, approverUserId: string, approvalNote?: string) => {
     await store.approveStandardAmountChangeRequest(requestId, approverUserId, approvalNote);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const rejectStandardAmountChangeRequest = async (requestId: string, approverUserId: string, approvalNote?: string) => {
     await store.rejectStandardAmountChangeRequest(requestId, approverUserId, approvalNote);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   // --- Calculations ---
@@ -524,7 +526,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const markAttendance = async (eventId: string, memberId: string, status: "present" | "absent") => {
     await store.saveAttendance(eventId, memberId, status);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const value: DataContextValue = {
@@ -554,3 +556,4 @@ export function useData() {
   if (!ctx) throw new Error("useData must be used within DataProvider");
   return ctx;
 }
+
