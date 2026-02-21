@@ -1,9 +1,22 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from 'expo-splash-screen';
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import * as FileSystem from "expo-file-system/legacy";
+import * as IntentLauncher from "expo-intent-launcher";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  AppState,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { queryClient } from "@/lib/query-client";
@@ -20,6 +33,37 @@ import {
 } from "@expo-google-fonts/inter";
 
 SplashScreen.preventAutoHideAsync();
+const APP_UPDATE_LAST_CHECKED_KEY = "@app_update_last_checked_at";
+const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
+const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
+
+function normalizeUpdateDownloadUrl(rawUrl: string): string {
+  const text = String(rawUrl || "").trim();
+  if (!text) return "";
+  try {
+    const u = new URL(text);
+    const host = u.hostname.toLowerCase();
+    if (host === "github.com") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      const blobIdx = parts.indexOf("blob");
+      if (parts.length >= 5 && blobIdx === 2) {
+        const owner = parts[0];
+        const repo = parts[1];
+        const branch = parts[3];
+        const filePath = parts.slice(4).join("/");
+        return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+      }
+      if (u.searchParams.get("raw") !== "1") {
+        u.searchParams.set("raw", "1");
+      }
+      return u.toString();
+    }
+    return u.toString();
+  } catch {
+    return text;
+  }
+}
 
 function RootLayoutNav() {
   const { isAuthenticated, loading, recordActivity } = useAuth();
@@ -27,6 +71,10 @@ function RootLayoutNav() {
   const router = useRouter();
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updatingNow, setUpdatingNow] = useState(false);
+  const [updateProgressText, setUpdateProgressText] = useState("");
+  const updateCheckInFlightRef = useRef(false);
+  const lastActiveCheckAtRef = useRef(0);
 
   useEffect(() => {
     if (loading) return;
@@ -41,23 +89,50 @@ function RootLayoutNav() {
   }, [isAuthenticated, loading, segments, router]);
 
   useEffect(() => {
-    const checkUpdateOnLaunch = async () => {
-      if (loading || !isAuthenticated) return;
-      if (Platform.OS === "web") return;
-      const now = Date.now();
-      const lastCheckedAt = Number((await AsyncStorage.getItem("@app_update_last_checked_at")) || 0);
-      if (lastCheckedAt && now - lastCheckedAt < 3 * 60 * 60 * 1000) {
-        return;
+    if (loading || !isAuthenticated || Platform.OS === "web") return;
+
+    const checkForUpdateNow = async (force = false) => {
+      if (updateCheckInFlightRef.current) return;
+      updateCheckInFlightRef.current = true;
+      try {
+        const now = Date.now();
+        if (!force) {
+          const lastCheckedAt = Number((await AsyncStorage.getItem(APP_UPDATE_LAST_CHECKED_KEY)) || 0);
+          if (lastCheckedAt && now - lastCheckedAt < UPDATE_CHECK_MIN_INTERVAL_MS) return;
+        }
+
+        const info = await checkForAppUpdate();
+        await AsyncStorage.setItem(APP_UPDATE_LAST_CHECKED_KEY, String(now));
+        if (!info.ok || !info.hasUpdate || !info.latestVersion || !info.downloadUrl) return;
+
+        const skippedVersion = String((await AsyncStorage.getItem(APP_UPDATE_SKIPPED_VERSION_KEY)) || "");
+        if (!info.force && skippedVersion && skippedVersion === info.latestVersion) return;
+
+        setUpdateInfo(info);
+        setShowUpdateModal(true);
+      } finally {
+        updateCheckInFlightRef.current = false;
       }
-      const info = await checkForAppUpdate();
-      await AsyncStorage.setItem("@app_update_last_checked_at", String(now));
-      if (!info.ok || !info.hasUpdate || !info.latestVersion || !info.downloadUrl) return;
-      const skippedVersion = String((await AsyncStorage.getItem("@app_update_skipped_version")) || "");
-      if (!info.force && skippedVersion && skippedVersion === info.latestVersion) return;
-      setUpdateInfo(info);
-      setShowUpdateModal(true);
     };
-    void checkUpdateOnLaunch();
+
+    void checkForUpdateNow(true);
+
+    const timer = setInterval(() => {
+      void checkForUpdateNow(false);
+    }, UPDATE_BACKGROUND_RECHECK_MS);
+
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      const now = Date.now();
+      if (now - lastActiveCheckAtRef.current < 15_000) return;
+      lastActiveCheckAtRef.current = now;
+      void checkForUpdateNow(true);
+    });
+
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+    };
   }, [loading, isAuthenticated]);
 
   useEffect(() => {
@@ -86,10 +161,45 @@ function RootLayoutNav() {
 
   const handleUpdateNow = async () => {
     if (!updateInfo?.downloadUrl) return;
+    if (updatingNow) return;
     try {
-      await Linking.openURL(updateInfo.downloadUrl);
-    } catch {
-      // ignore
+      const normalizedUrl = normalizeUpdateDownloadUrl(updateInfo.downloadUrl);
+      if (Platform.OS !== "android") {
+        await Linking.openURL(normalizedUrl);
+        return;
+      }
+
+      setUpdatingNow(true);
+      setUpdateProgressText("Update APK ကို download လုပ်နေပါသည်...");
+      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory || "";
+      if (!baseDir) throw new Error("storage_unavailable");
+
+      const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}-${Date.now()}.apk`;
+      const downloadResult = await FileSystem.downloadAsync(normalizedUrl, fileUri);
+      if (!downloadResult?.uri || (downloadResult.status && downloadResult.status >= 400)) {
+        throw new Error(`download_failed_${downloadResult?.status || "unknown"}`);
+      }
+
+      setUpdateProgressText("Install prompt ကိုဖွင့်နေပါသည်...");
+      const contentUri = await FileSystem.getContentUriAsync(downloadResult.uri);
+      await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+        data: contentUri,
+        type: "application/vnd.android.package-archive",
+        flags: 1 | 268435456,
+      });
+      setShowUpdateModal(false);
+    } catch (error: any) {
+      Alert.alert(
+        "Update မလုပ်နိုင်သေးပါ",
+        "Auto install မဖြစ်သေးပါ။ Download link ကို browser ဖြင့်ဖွင့်ပေးပါမည်။"
+      );
+      try {
+        await Linking.openURL(normalizeUpdateDownloadUrl(updateInfo.downloadUrl));
+      } catch {}
+      console.log("update_now_error", String(error?.message || error));
+    } finally {
+      setUpdatingNow(false);
+      setUpdateProgressText("");
     }
   };
 
@@ -99,7 +209,7 @@ function RootLayoutNav() {
 
   const handleSkipThisVersion = async () => {
     if (updateInfo?.latestVersion) {
-      await AsyncStorage.setItem("@app_update_skipped_version", updateInfo.latestVersion);
+      await AsyncStorage.setItem(APP_UPDATE_SKIPPED_VERSION_KEY, updateInfo.latestVersion);
     }
     setShowUpdateModal(false);
   };
@@ -147,20 +257,26 @@ function RootLayoutNav() {
             <Text style={styles.modalText}>Current: {getCurrentAppVersion()}</Text>
             <Text style={styles.modalText}>Latest: {updateInfo?.latestVersion || "-"}</Text>
             {updateInfo?.notes ? <Text style={styles.modalNotes}>{updateInfo.notes}</Text> : null}
+            {updatingNow ? (
+              <View style={styles.updateProgressRow}>
+                <ActivityIndicator size="small" color={Colors.light.tint} />
+                <Text style={styles.updateProgressText}>{updateProgressText || "Updating..."}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.modalActions}>
-              {!updateInfo?.force && (
+              {!updateInfo?.force && !updatingNow && (
                 <Pressable style={styles.btnGhost} onPress={() => void handleSkipThisVersion()}>
                   <Text style={styles.btnGhostText}>Skip</Text>
                 </Pressable>
               )}
-              {!updateInfo?.force && (
+              {!updateInfo?.force && !updatingNow && (
                 <Pressable style={styles.btnGhost} onPress={handleUpdateLater}>
                   <Text style={styles.btnGhostText}>Later</Text>
                 </Pressable>
               )}
-              <Pressable style={styles.btnPrimary} onPress={() => void handleUpdateNow()}>
-                <Text style={styles.btnPrimaryText}>Update Now</Text>
+              <Pressable style={[styles.btnPrimary, updatingNow && { opacity: 0.7 }]} disabled={updatingNow} onPress={() => void handleUpdateNow()}>
+                <Text style={styles.btnPrimaryText}>{updatingNow ? "Updating..." : "Update Now"}</Text>
               </Pressable>
             </View>
           </View>
@@ -242,6 +358,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 8,
+  },
+  updateProgressRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  updateProgressText: {
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
   },
   btnGhost: {
     paddingHorizontal: 12,
