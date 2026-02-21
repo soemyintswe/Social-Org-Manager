@@ -17,6 +17,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { normalizeOrgPosition } from "@/lib/types";
 import {
   checkLanSyncHealth,
   pullLanSnapshotToLocalDetailed,
@@ -30,7 +31,7 @@ export default function AccountSettingsScreen() {
   const { accountSettings, updateAccountSettings, refreshData } = useData();
   const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
-  const canEditReceivingAccounts = String(currentUser?.orgPosition || "") === "treasurer";
+  const canEditReceivingAccounts = normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
   
   const [saving, setSaving] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -339,37 +340,36 @@ export default function AccountSettingsScreen() {
           </Pressable>
         </View>
 
-        <View style={styles.securityCard}>
-          <Text style={styles.sectionTitle}>Payment Receiving Accounts</Text>
-          <Text style={styles.sectionDesc}>
-            ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank နှင့် Mobile Wallet အကောင့်များကို သတ်မှတ်ပါ။
-          </Text>
-          {!canEditReceivingAccounts ? (
-            <Text style={styles.helperText}>Read-only: ဘဏ္ဍာရေးမှူး account ဖြင့်သာ ပြင်ဆင်နိုင်ပါသည်။</Text>
-          ) : null}
+        {canEditReceivingAccounts && (
+          <View style={styles.securityCard}>
+            <Text style={styles.sectionTitle}>Payment Receiving Accounts</Text>
+            <Text style={styles.sectionDesc}>
+              ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank နှင့် Mobile Wallet အကောင့်များကို သတ်မှတ်ပါ။
+            </Text>
 
-          <Text style={styles.label}>Bank Name</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingBankName} onChangeText={setReceivingBankName} placeholder="ဥပမာ - KBZ Bank" editable={canEditReceivingAccounts} />
-          <Text style={styles.label}>Bank Account Number</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingBankAccountNumber} onChangeText={setReceivingBankAccountNumber} placeholder="Account Number" editable={canEditReceivingAccounts} />
-          <Text style={styles.label}>Bank Account Name</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingBankAccountName} onChangeText={setReceivingBankAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
+            <Text style={styles.label}>Bank Name</Text>
+            <TextInput style={styles.input} value={receivingBankName} onChangeText={setReceivingBankName} placeholder="ဥပမာ - KBZ Bank" />
+            <Text style={styles.label}>Bank Account Number</Text>
+            <TextInput style={styles.input} value={receivingBankAccountNumber} onChangeText={setReceivingBankAccountNumber} placeholder="Account Number" />
+            <Text style={styles.label}>Bank Account Name</Text>
+            <TextInput style={styles.input} value={receivingBankAccountName} onChangeText={setReceivingBankAccountName} placeholder="Account Name" />
 
-          <Text style={styles.label}>KBZ Pay Phone</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" editable={canEditReceivingAccounts} />
-          <Text style={styles.label}>KBZ Pay Account Name</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
+            <Text style={styles.label}>KBZ Pay Phone</Text>
+            <TextInput style={styles.input} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+            <Text style={styles.label}>KBZ Pay Account Name</Text>
+            <TextInput style={styles.input} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" />
 
-          <Text style={styles.label}>Wave Pay Phone</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" editable={canEditReceivingAccounts} />
-          <Text style={styles.label}>Wave Pay Account Name</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
+            <Text style={styles.label}>Wave Pay Phone</Text>
+            <TextInput style={styles.input} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+            <Text style={styles.label}>Wave Pay Account Name</Text>
+            <TextInput style={styles.input} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" />
 
-          <Text style={styles.label}>AYA Pay Phone</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" editable={canEditReceivingAccounts} />
-          <Text style={styles.label}>AYA Pay Account Name</Text>
-          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
-        </View>
+            <Text style={styles.label}>AYA Pay Phone</Text>
+            <TextInput style={styles.input} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+            <Text style={styles.label}>AYA Pay Account Name</Text>
+            <TextInput style={styles.input} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" />
+          </View>
+        )}
 
         {canManageSystem && (
           <Pressable

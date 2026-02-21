@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.13",
+  "latestVersion": "1.1.14",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.13-202602220214.apk?raw=1",
-  "notes": "Version 1.1.13: fixed app version detection (Current Version) using native app version/build, improved updater reliability, added expanded system information, and cleaned tracked backup data from repository.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.14-202602220237.apk?raw=1",
+  "notes": "Version 1.1.14: 5-minute inactivity auto logout, logout on app close/reopen marker, System Information visible to all users, and Payment Receiving Accounts hidden for non-treasurer users.",
   "force": false,
-  "publishedAt": "2026-02-21T19:14:00Z"
+  "publishedAt": "2026-02-21T19:37:00Z"
 }

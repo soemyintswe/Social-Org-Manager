@@ -8,11 +8,12 @@ import { MEMBER_STATUS_LABELS, normalizeMemberStatus, normalizeOrgPosition, type
 import { buildMemberUsername, changeUserPassword, resetUserPasswordByIdentifier, verifyPassword } from "./storage";
 
 const AUTH_SESSION_KEY = "@orghub_auth_session";
+const AUTH_BACKGROUND_MARK_KEY = "@orghub_auth_background_marked";
 const RESTORE_SESSION_ON_LAUNCH = true;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 3 * 60 * 60 * 1000;
-const AUTO_LOGOUT_MS = 10 * 60 * 1000; // 10 minutes inactivity
+const AUTO_LOGOUT_MS = 5 * 60 * 1000; // 5 minutes inactivity
 
 type PersistedSession = {
   userId: string;
@@ -238,6 +239,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setRestoring(false);
         return;
       }
+      const backgroundMarked = await AsyncStorage.getItem(AUTH_BACKGROUND_MARK_KEY);
+      if (backgroundMarked === "1") {
+        await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+        await AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
+        if (!active) return;
+        setSessionUserId(null);
+        setRestoring(false);
+        return;
+      }
       const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
       const restored = parsePersistedSession(raw);
       if (!active) return;
@@ -251,7 +261,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearSession = useCallback(async () => {
     setSessionUserId(null);
-    await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+    await AsyncStorage.multiRemove([AUTH_SESSION_KEY, AUTH_BACKGROUND_MARK_KEY]);
   }, []);
 
   useEffect(() => {
@@ -487,7 +497,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!currentUser) return;
     const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
       if (state === "active") {
+        void AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
         setLastActivityAt(Date.now());
+        return;
+      }
+      if (state === "background" || state === "inactive") {
+        void AsyncStorage.setItem(AUTH_BACKGROUND_MARK_KEY, "1");
       }
     });
     return () => sub.remove();

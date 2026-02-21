@@ -9,7 +9,6 @@ import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { clearAllData } from "@/lib/storage";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
-import AccessDenied from "@/components/AccessDenied";
 
 export default function SystemScreen() {
   const insets = useSafeAreaInsets();
@@ -24,10 +23,6 @@ export default function SystemScreen() {
     packageId: "com.soemyintswe.orghub",
     copyright: "Copyright (c) 2026 Social Org Manager. All rights reserved.",
   };
-
-  if (!canManageSystem) {
-    return <AccessDenied showBack={false} />;
-  }
 
   const handleSystemReset = () => {
     if (Platform.OS === "web") {
@@ -106,49 +101,58 @@ export default function SystemScreen() {
       <Text style={styles.title}>System Management</Text>
       <Text style={styles.subtitle}>Manage your data and settings</Text>
 
-      <View style={styles.menuContainer}>
-        <Pressable
-          style={[styles.menuItem, { backgroundColor: Colors.light.tint }]}
-          onPress={() => router.push("/data-management")}
-        >
-          <View style={styles.iconBox}>
-            <Ionicons name="settings-outline" size={24} color="#fff" />
-          </View>
-          <View style={styles.menuTextContainer}>
-            <Text style={styles.menuTitle}>Data & Backup</Text>
-            <Text style={styles.menuDesc}>Import, Export and Restore Data</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
-        </Pressable>
+      {canManageSystem ? (
+        <View style={styles.menuContainer}>
+          <Pressable
+            style={[styles.menuItem, { backgroundColor: Colors.light.tint }]}
+            onPress={() => router.push("/data-management")}
+          >
+            <View style={styles.iconBox}>
+              <Ionicons name="settings-outline" size={24} color="#fff" />
+            </View>
+            <View style={styles.menuTextContainer}>
+              <Text style={styles.menuTitle}>Data & Backup</Text>
+              <Text style={styles.menuDesc}>Import, Export and Restore Data</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
+          </Pressable>
 
-        <Pressable
-          style={[styles.menuItem, { backgroundColor: "#2563EB" }]}
-          onPress={() => void handleCheckForUpdate()}
-        >
-          <View style={styles.iconBox}>
-            <Ionicons name="download-outline" size={24} color="#fff" />
-          </View>
-          <View style={styles.menuTextContainer}>
-            <Text style={styles.menuTitle}>Check App Update</Text>
-            <Text style={styles.menuDesc}>Latest version ရှိ/မရှိ စစ်ဆေးမည်</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
-        </Pressable>
+          <Pressable
+            style={[styles.menuItem, { backgroundColor: "#2563EB" }]}
+            onPress={() => void handleCheckForUpdate()}
+          >
+            <View style={styles.iconBox}>
+              <Ionicons name="download-outline" size={24} color="#fff" />
+            </View>
+            <View style={styles.menuTextContainer}>
+              <Text style={styles.menuTitle}>Check App Update</Text>
+              <Text style={styles.menuDesc}>Latest version ရှိ/မရှိ စစ်ဆေးမည်</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
+          </Pressable>
 
-        <Pressable
-          style={[styles.menuItem, { backgroundColor: "#EF4444" }]}
-          onPress={handleSystemReset}
-        >
-          <View style={styles.iconBox}>
-            <Ionicons name="trash-outline" size={24} color="#fff" />
-          </View>
-          <View style={styles.menuTextContainer}>
-            <Text style={styles.menuTitle}>System Reset</Text>
-            <Text style={styles.menuDesc}>Delete all data permanently</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
-        </Pressable>
-      </View>
+          <Pressable
+            style={[styles.menuItem, { backgroundColor: "#EF4444" }]}
+            onPress={handleSystemReset}
+          >
+            <View style={styles.iconBox}>
+              <Ionicons name="trash-outline" size={24} color="#fff" />
+            </View>
+            <View style={styles.menuTextContainer}>
+              <Text style={styles.menuTitle}>System Reset</Text>
+              <Text style={styles.menuDesc}>Delete all data permanently</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.infoSection}>
+          <Text style={styles.sectionHeader}>About</Text>
+          <Text style={styles.guideText}>
+            ဒီစာမျက်နှာတွင် App Version နှင့် System Information များကို ကြည့်ရှုနိုင်ပါသည်။
+          </Text>
+        </View>
+      )}
 
       <View style={styles.infoSection}>
         <Text style={styles.sectionHeader}>System Information</Text>
