@@ -76,6 +76,34 @@ const formatDateYmd = (date: Date) => {
   return `${y}-${m}-${d}`;
 };
 
+const formatTimeHm = (date: Date) =>
+  `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+const parseHm = (raw: string) => {
+  const text = String(raw || "").trim();
+  if (!/^\d{2}:\d{2}$/.test(text)) return null;
+  const [h, m] = text.split(":").map((v) => Number(v));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+const toDisplayDateTime = (date?: string, time?: string, fallbackIso?: string) => {
+  const d = String(date || "").trim();
+  const t = String(time || "").trim();
+  if (d) {
+    const composed = `${d}T${t || "00:00"}:00`;
+    const dt = new Date(composed);
+    if (!Number.isNaN(dt.getTime())) return dt.toLocaleString();
+    return `${d}${t ? ` ${t}` : ""}`;
+  }
+  if (fallbackIso) {
+    const dt = new Date(fallbackIso);
+    if (!Number.isNaN(dt.getTime())) return dt.toLocaleString();
+  }
+  return "-";
+};
+
 export default function MemberPaymentRequestsScreen() {
   const insets = useSafeAreaInsets();
   const { kind } = useLocalSearchParams<{ kind?: string }>();
@@ -107,6 +135,9 @@ export default function MemberPaymentRequestsScreen() {
   const [feeEndDate, setFeeEndDate] = useState(new Date());
   const [showFeeStartPicker, setShowFeeStartPicker] = useState(false);
   const [showFeeEndPicker, setShowFeeEndPicker] = useState(false);
+  const [requestDate, setRequestDate] = useState(formatDateYmd(new Date()));
+  const [requestTime, setRequestTime] = useState(formatTimeHm(new Date()));
+  const [showRequestDatePicker, setShowRequestDatePicker] = useState(false);
   const [walletProvider, setWalletProvider] = useState<MobileWalletProvider>("kbz_pay");
   const [walletAccountName, setWalletAccountName] = useState("");
   const [walletAccountNumber, setWalletAccountNumber] = useState("");
@@ -118,6 +149,9 @@ export default function MemberPaymentRequestsScreen() {
   const [reviewModalId, setReviewModalId] = useState<string | null>(null);
   const [reviewDecision, setReviewDecision] = useState<"approved" | "rejected">("approved");
   const [reviewNote, setReviewNote] = useState("");
+  const [acceptedDate, setAcceptedDate] = useState(formatDateYmd(new Date()));
+  const [acceptedTime, setAcceptedTime] = useState(formatTimeHm(new Date()));
+  const [showAcceptedDatePicker, setShowAcceptedDatePicker] = useState(false);
 
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
   const canReview = currentUser?.systemRole === "admin" || role === "treasurer";
@@ -260,6 +294,11 @@ export default function MemberPaymentRequestsScreen() {
         return;
       }
     }
+    const parsedRequestTime = parseHm(requestTime);
+    if (!parsedRequestTime) {
+      Alert.alert("လိုအပ်ချက်", "တောင်းခံအချိန်ကို HH:mm ပုံစံဖြင့် ဖြည့်ပါ။");
+      return;
+    }
     setSubmitting(true);
     try {
       await createMemberPaymentRequest({
@@ -275,6 +314,8 @@ export default function MemberPaymentRequestsScreen() {
         walletReference: walletReference.trim(),
         proofImage: proofImage || undefined,
         note: note.trim() || undefined,
+        requestedDate: requestDate,
+        requestedTime: parsedRequestTime,
         feePeriodStart: requestKind === "member_fees" ? formatDateYmd(feeStartDate) : undefined,
         feePeriodEnd: requestKind === "member_fees" ? formatDateYmd(feeEndDate) : undefined,
         createdByUserId: currentUser.id,
@@ -285,6 +326,8 @@ export default function MemberPaymentRequestsScreen() {
       setWalletReference("");
       setNote("");
       setProofImage("");
+      setRequestDate(formatDateYmd(new Date()));
+      setRequestTime(formatTimeHm(new Date()));
       selectSelf();
       Alert.alert(
         "တင်သွင်းပြီးပါပြီ",
@@ -306,10 +349,17 @@ export default function MemberPaymentRequestsScreen() {
     setSavingReview(true);
     try {
       if (reviewDecision === "approved") {
+        const parsedAcceptedTime = parseHm(acceptedTime);
+        if (!parsedAcceptedTime) {
+          Alert.alert("လိုအပ်ချက်", "လက်ခံချိန်ကို HH:mm ပုံစံဖြင့် ဖြည့်ပါ။");
+          return;
+        }
         await approveMemberPaymentRequest({
           requestId: reviewModalId,
           reviewerUserId: currentUser.id,
           reviewNote: reviewNote.trim() || undefined,
+          acceptedDate,
+          acceptedTime: parsedAcceptedTime,
         });
       } else {
         await rejectMemberPaymentRequest({
@@ -373,6 +423,14 @@ export default function MemberPaymentRequestsScreen() {
               <Text style={styles.subLine}>
                 Wallet: {MOBILE_WALLET_PROVIDER_LABELS[item.walletProvider as MobileWalletProvider]} • Ref: {item.walletReference || "-"}
               </Text>
+              <Text style={styles.subLine}>
+                Requested: {toDisplayDateTime(item.requestedDate, item.requestedTime, item.createdAt)}
+              </Text>
+              {item.status !== "pending_treasurer_review" ? (
+                <Text style={styles.subLine}>
+                  Reviewed: {toDisplayDateTime(item.acceptedDate, item.acceptedTime, item.reviewedAt)}
+                </Text>
+              ) : null}
               {!!item.proofImage && (
                 <Pressable style={styles.proofChip} onPress={() => setPreviewImage(String(item.proofImage))}>
                   <Ionicons name="image-outline" size={14} color={Colors.light.tint} />
@@ -387,6 +445,8 @@ export default function MemberPaymentRequestsScreen() {
                     onPress={() => {
                       setReviewDecision("approved");
                       setReviewNote("");
+                      setAcceptedDate(formatDateYmd(new Date()));
+                      setAcceptedTime(formatTimeHm(new Date()));
                       setReviewModalId(item.id);
                     }}
                   >
@@ -439,6 +499,50 @@ export default function MemberPaymentRequestsScreen() {
 
             <Text style={styles.hint}>ရငွေစာရင်း ချိတ်ဆက်မည့်အမျိုးအစား: {KIND_TO_CATEGORY_HINT[requestKind]}</Text>
 
+            <Text style={styles.label}>တောင်းခံသည့်နေ့စွဲ / အချိန်</Text>
+            <View style={styles.dateRow}>
+              {Platform.OS === "web" ? (
+                <View style={styles.dateBtn}>
+                  {React.createElement("input", {
+                    type: "date",
+                    value: requestDate,
+                    onChange: (e: any) => e.target.value && setRequestDate(e.target.value),
+                    style: {
+                      border: "none",
+                      outline: "none",
+                      backgroundColor: "transparent",
+                      color: Colors.light.text,
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      width: 120,
+                    },
+                  })}
+                </View>
+              ) : (
+                <Pressable style={styles.dateBtn} onPress={() => setShowRequestDatePicker(true)}>
+                  <Text style={styles.dateBtnText}>{requestDate}</Text>
+                </Pressable>
+              )}
+              <TextInput
+                style={[styles.input, styles.timeInput]}
+                value={requestTime}
+                onChangeText={setRequestTime}
+                placeholder="HH:mm"
+                maxLength={5}
+              />
+            </View>
+            {showRequestDatePicker && Platform.OS !== "web" && (
+              <DateTimePicker
+                value={new Date(`${requestDate}T00:00:00`)}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                onChange={(_, d) => {
+                  setShowRequestDatePicker(false);
+                  if (d) setRequestDate(formatDateYmd(d));
+                }}
+              />
+            )}
+
             <Text style={styles.label}>ငွေပမာဏ (KS)</Text>
             <TextInput style={styles.input} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" />
 
@@ -465,15 +569,53 @@ export default function MemberPaymentRequestsScreen() {
               <>
                 <Text style={styles.label}>လစဉ်ကြေး ကာလ (From - To)</Text>
                 <View style={styles.dateRow}>
-                  <Pressable style={styles.dateBtn} onPress={() => setShowFeeStartPicker(true)}>
-                    <Text style={styles.dateBtnText}>{formatDateYmd(feeStartDate)}</Text>
-                  </Pressable>
+                  {Platform.OS === "web" ? (
+                    <View style={styles.dateBtn}>
+                      {React.createElement("input", {
+                        type: "date",
+                        value: formatDateYmd(feeStartDate),
+                        onChange: (e: any) => e.target.value && setFeeStartDate(new Date(`${e.target.value}T00:00:00`)),
+                        style: {
+                          border: "none",
+                          outline: "none",
+                          backgroundColor: "transparent",
+                          color: Colors.light.text,
+                          fontSize: 13,
+                          fontFamily: "inherit",
+                          width: 120,
+                        },
+                      })}
+                    </View>
+                  ) : (
+                    <Pressable style={styles.dateBtn} onPress={() => setShowFeeStartPicker(true)}>
+                      <Text style={styles.dateBtnText}>{formatDateYmd(feeStartDate)}</Text>
+                    </Pressable>
+                  )}
                   <Text style={styles.dateDash}>-</Text>
-                  <Pressable style={styles.dateBtn} onPress={() => setShowFeeEndPicker(true)}>
-                    <Text style={styles.dateBtnText}>{formatDateYmd(feeEndDate)}</Text>
-                  </Pressable>
+                  {Platform.OS === "web" ? (
+                    <View style={styles.dateBtn}>
+                      {React.createElement("input", {
+                        type: "date",
+                        value: formatDateYmd(feeEndDate),
+                        onChange: (e: any) => e.target.value && setFeeEndDate(new Date(`${e.target.value}T00:00:00`)),
+                        style: {
+                          border: "none",
+                          outline: "none",
+                          backgroundColor: "transparent",
+                          color: Colors.light.text,
+                          fontSize: 13,
+                          fontFamily: "inherit",
+                          width: 120,
+                        },
+                      })}
+                    </View>
+                  ) : (
+                    <Pressable style={styles.dateBtn} onPress={() => setShowFeeEndPicker(true)}>
+                      <Text style={styles.dateBtnText}>{formatDateYmd(feeEndDate)}</Text>
+                    </Pressable>
+                  )}
                 </View>
-                {showFeeStartPicker && (
+                {showFeeStartPicker && Platform.OS !== "web" && (
                   <DateTimePicker
                     value={feeStartDate}
                     mode="date"
@@ -484,7 +626,7 @@ export default function MemberPaymentRequestsScreen() {
                     }}
                   />
                 )}
-                {showFeeEndPicker && (
+                {showFeeEndPicker && Platform.OS !== "web" && (
                   <DateTimePicker
                     value={feeEndDate}
                     mode="date"
@@ -636,6 +778,53 @@ export default function MemberPaymentRequestsScreen() {
               onChangeText={setReviewNote}
               placeholder={reviewDecision === "approved" ? "Optional note" : "Reject reason"}
             />
+            {reviewDecision === "approved" ? (
+              <>
+                <Text style={styles.label}>လက်ခံသည့်နေ့စွဲ / အချိန်</Text>
+                <View style={styles.dateRow}>
+                  {Platform.OS === "web" ? (
+                    <View style={styles.dateBtn}>
+                      {React.createElement("input", {
+                        type: "date",
+                        value: acceptedDate,
+                        onChange: (e: any) => e.target.value && setAcceptedDate(e.target.value),
+                        style: {
+                          border: "none",
+                          outline: "none",
+                          backgroundColor: "transparent",
+                          color: Colors.light.text,
+                          fontSize: 13,
+                          fontFamily: "inherit",
+                          width: 120,
+                        },
+                      })}
+                    </View>
+                  ) : (
+                    <Pressable style={styles.dateBtn} onPress={() => setShowAcceptedDatePicker(true)}>
+                      <Text style={styles.dateBtnText}>{acceptedDate}</Text>
+                    </Pressable>
+                  )}
+                  <TextInput
+                    style={[styles.input, styles.timeInput]}
+                    value={acceptedTime}
+                    onChangeText={setAcceptedTime}
+                    placeholder="HH:mm"
+                    maxLength={5}
+                  />
+                </View>
+                {showAcceptedDatePicker && Platform.OS !== "web" ? (
+                  <DateTimePicker
+                    value={new Date(`${acceptedDate}T00:00:00`)}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "spinner" : "default"}
+                    onChange={(_, d) => {
+                      setShowAcceptedDatePicker(false);
+                      if (d) setAcceptedDate(formatDateYmd(d));
+                    }}
+                  />
+                ) : null}
+              </>
+            ) : null}
             <View style={styles.rowActions}>
               <Pressable style={[styles.actionBtn, { backgroundColor: "#CBD5E1" }]} onPress={() => setReviewModalId(null)}>
                 <Text style={[styles.actionText, { color: Colors.light.text }]}>Cancel</Text>
@@ -787,6 +976,7 @@ const styles = StyleSheet.create({
   },
   dateBtnText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
   dateDash: { color: Colors.light.textSecondary, fontFamily: "Inter_700Bold" },
+  timeInput: { flex: 0.55, paddingVertical: 10 },
   dupWarn: { marginTop: 6, color: "#DC2626", fontSize: 12, fontFamily: "Inter_500Medium" },
   recvCard: {
     marginTop: 10,

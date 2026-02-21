@@ -48,6 +48,20 @@ function todayYmd(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function nowHm(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function normalizeHm(raw: string): string | null {
+  const text = String(raw || "").trim();
+  if (!/^\d{2}:\d{2}$/.test(text)) return null;
+  const [h, m] = text.split(":").map((v) => Number(v));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 function statusLabel(status: string): string {
   if (status === "pending_approval") return "စိစစ်ဆဲ";
   if (status === "approved") return "အတည်ပြု";
@@ -112,6 +126,7 @@ export default function ExpenseClaimsScreen() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>("category");
 
   const [claimDate, setClaimDate] = useState(todayYmd());
+  const [claimTime, setClaimTime] = useState(nowHm());
   const [categoryId, setCategoryId] = useState("health_support");
   const [categoryLabel, setCategoryLabel] = useState("ကျန်းမာရေးထောက်ပံ့ငွေ");
   const [funeralSubtype, setFuneralSubtype] = useState("funeral_support_self");
@@ -141,6 +156,7 @@ export default function ExpenseClaimsScreen() {
   const [disburseClaim, setDisburseClaim] = useState<ExpenseClaim | null>(null);
   const [disbursementMethod, setDisbursementMethod] = useState<"cash" | "bank">("cash");
   const [disbursementDate, setDisbursementDate] = useState(todayYmd());
+  const [disbursementTime, setDisbursementTime] = useState(nowHm());
   const [voucherNumber, setVoucherNumber] = useState("");
   const [disbursementNote, setDisbursementNote] = useState("");
 
@@ -353,6 +369,7 @@ export default function ExpenseClaimsScreen() {
 
   const resetClaimForm = () => {
     setClaimDate(todayYmd());
+    setClaimTime(nowHm());
     setCategoryId("health_support");
     setCategoryLabel("ကျန်းမာရေးထောက်ပံ့ငွေ");
     setFuneralSubtype("funeral_support_self");
@@ -387,6 +404,7 @@ export default function ExpenseClaimsScreen() {
   const buildClaimDraft = () => ({
     resumePending: true,
     claimDate,
+    claimTime,
     categoryId,
     categoryLabel,
     funeralSubtype,
@@ -411,6 +429,7 @@ export default function ExpenseClaimsScreen() {
   const applyClaimDraft = (draft: any) => {
     if (!draft || typeof draft !== "object") return;
     setClaimDate(String(draft.claimDate || todayYmd()));
+    setClaimTime(String(draft.claimTime || nowHm()));
     setCategoryId(String(draft.categoryId || "health_support"));
     setCategoryLabel(String(draft.categoryLabel || "ကျန်းမာရေးထောက်ပံ့ငွေ"));
     setFuneralSubtype(String(draft.funeralSubtype || "funeral_support_self"));
@@ -550,6 +569,8 @@ export default function ExpenseClaimsScreen() {
     if (!currentUser?.id) return;
     const validationError = validateBeforeSubmit();
     if (validationError) return Alert.alert("လိုအပ်ချက်", validationError);
+    const parsedClaimTime = normalizeHm(claimTime);
+    if (!parsedClaimTime) return Alert.alert("လိုအပ်ချက်", "Claim Time ကို HH:mm ပုံစံဖြင့် ဖြည့်ပါ။");
 
     const amountNum = Number(requestedAmount);
     const relatedMemberId = claimantType === "BEHALF_FAMILY" ? familyOwnerMemberId || undefined : claimantType === "OTHER" && otherRelatedScope === "member" ? otherRelatedMemberId || undefined : undefined;
@@ -557,6 +578,7 @@ export default function ExpenseClaimsScreen() {
 
     await createExpenseClaim({
       claimDate,
+      claimTime: parsedClaimTime,
       expenseCategory: categoryId,
       expenseCategoryLabel: categoryLabel,
       claimantType,
@@ -607,7 +629,17 @@ export default function ExpenseClaimsScreen() {
 
   const submitDisburse = async () => {
     if (!currentUser?.id || !disburseClaim) return;
-    await disburseExpenseClaim({ claimId: disburseClaim.id, disburserUserId: currentUser.id, method: disbursementMethod, disbursementDate: disbursementDate || todayYmd(), voucherNumber: normalizeText(voucherNumber) || undefined, note: normalizeText(disbursementNote) || undefined });
+    const parsedTime = normalizeHm(disbursementTime);
+    if (!parsedTime) return Alert.alert("လိုအပ်ချက်", "Disburse Time ကို HH:mm ပုံစံဖြင့် ဖြည့်ပါ။");
+    await disburseExpenseClaim({
+      claimId: disburseClaim.id,
+      disburserUserId: currentUser.id,
+      method: disbursementMethod,
+      disbursementDate: disbursementDate || todayYmd(),
+      disbursementTime: parsedTime,
+      voucherNumber: normalizeText(voucherNumber) || undefined,
+      note: normalizeText(disbursementNote) || undefined,
+    });
     setShowDisburseModal(false);
     Alert.alert("အောင်မြင်ပါသည်", "ငွေထုတ်ပေးမှု မှတ်တမ်းတင်ပြီး Auto Transaction ထည့်ပြီးပါပြီ။");
   };
@@ -671,9 +703,13 @@ export default function ExpenseClaimsScreen() {
               </View>
               <Text style={styles.title}>{item.claimantName}</Text>
               <Text style={styles.meta}>{item.expenseCategoryLabel} • {Number(item.requestedAmount || 0).toLocaleString()} KS</Text>
+              <Text style={styles.meta}>Claimed At: {item.claimDate || "-"} {item.claimTime || ""}</Text>
+              <Text style={styles.meta}>Submitted At: {item.createdAt ? new Date(item.createdAt).toLocaleString() : "-"}</Text>
               {item.relatedMemberName ? <Text style={styles.meta}>သက်ဆိုင်သူ: {item.relatedMemberName} ({item.relatedMemberId || "-"})</Text> : null}
               {item.linkedEventTitle ? <Text style={styles.meta}>Event: {item.linkedEventTitle}</Text> : null}
               {item.approvedAmount != null ? <Text style={styles.meta}>Approved: {Number(item.approvedAmount).toLocaleString()} KS</Text> : null}
+              {item.approvedAt ? <Text style={styles.meta}>Approved At: {new Date(item.approvedAt).toLocaleString()}</Text> : null}
+              {item.disbursementDate ? <Text style={styles.meta}>Disbursed At: {item.disbursementDate} {item.disbursementTime || ""}</Text> : null}
               <Text style={styles.meta}>Reason: {item.reason}</Text>
               <View style={styles.actions}>
                 {canApprove && item.status === "pending_approval" ? (
@@ -683,7 +719,7 @@ export default function ExpenseClaimsScreen() {
                   </>
                 ) : null}
                 {canDisburse && item.status === "approved" ? (
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#3B82F6" }]} onPress={() => { setDisburseClaim(item); setDisbursementDate(todayYmd()); setDisbursementMethod("cash"); setVoucherNumber(item.claimNumber); setDisbursementNote(""); setShowDisburseModal(true); }}><Text style={styles.actionText}>Disburse</Text></Pressable>
+                  <Pressable style={[styles.actionBtn, { backgroundColor: "#3B82F6" }]} onPress={() => { setDisburseClaim(item); setDisbursementDate(todayYmd()); setDisbursementTime(nowHm()); setDisbursementMethod("cash"); setVoucherNumber(item.claimNumber); setDisbursementNote(""); setShowDisburseModal(true); }}><Text style={styles.actionText}>Disburse</Text></Pressable>
                 ) : null}
               </View>
             </View>
@@ -717,7 +753,30 @@ export default function ExpenseClaimsScreen() {
       <Modal visible={showClaimModal} transparent animationType="slide" onRequestClose={() => setShowClaimModal(false)}>
         <View style={styles.modalWrap}><View style={styles.modalBox}><ScrollView keyboardShouldPersistTaps="handled">
           <Text style={styles.modalTitle}>ငွေတောင်းခံလွှာ</Text>
-          <Text style={styles.label}>Claim Date</Text><TextInput style={styles.input} value={claimDate} onChangeText={setClaimDate} />
+          <Text style={styles.label}>Claim Date / Time</Text>
+          <View style={styles.dateTimeRow}>
+            {Platform.OS === "web" ? (
+              <View style={styles.webDateInputWrap}>
+                {React.createElement("input", {
+                  type: "date",
+                  value: claimDate,
+                  onChange: (e: any) => e.target.value && setClaimDate(e.target.value),
+                  style: {
+                    border: "none",
+                    outline: "none",
+                    backgroundColor: "transparent",
+                    color: Colors.light.text,
+                    fontSize: 13,
+                    fontFamily: "inherit",
+                    width: 130,
+                  },
+                })}
+              </View>
+            ) : (
+              <TextInput style={[styles.input, styles.halfInput]} value={claimDate} onChangeText={setClaimDate} />
+            )}
+            <TextInput style={[styles.input, styles.halfInput]} value={claimTime} onChangeText={setClaimTime} placeholder="HH:mm" maxLength={5} />
+          </View>
 
           <Text style={styles.label}>Category (Dropdown)</Text>
           <Pressable style={styles.inputLike} onPress={() => openPicker("category")}><Text style={styles.inputLikeText}>{categoryLabel}</Text><Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} /></Pressable>
@@ -822,7 +881,7 @@ export default function ExpenseClaimsScreen() {
       </Modal>
 
       <Modal visible={showDisburseModal} transparent animationType="fade" onRequestClose={() => setShowDisburseModal(false)}>
-        <View style={styles.modalWrap}><View style={styles.modalBox}><Text style={styles.modalTitle}>Disburse</Text><View style={{ flexDirection: "row", gap: 8 }}><Pressable style={[styles.chip, disbursementMethod === "cash" && styles.chipActive]} onPress={() => setDisbursementMethod("cash")}><Text style={[styles.chipText, disbursementMethod === "cash" && styles.chipTextActive]}>Cash</Text></Pressable><Pressable style={[styles.chip, disbursementMethod === "bank" && styles.chipActive]} onPress={() => setDisbursementMethod("bank")}><Text style={[styles.chipText, disbursementMethod === "bank" && styles.chipTextActive]}>Bank</Text></Pressable></View><Text style={styles.label}>Disburse Date</Text><TextInput style={styles.input} value={disbursementDate} onChangeText={setDisbursementDate} /><Text style={styles.label}>Voucher Number</Text><TextInput style={styles.input} value={voucherNumber} onChangeText={setVoucherNumber} /><Text style={styles.label}>Note</Text><TextInput style={[styles.input, { minHeight: 70 }]} multiline value={disbursementNote} onChangeText={setDisbursementNote} /><View style={styles.rowEnd}><Pressable onPress={() => setShowDisburseModal(false)}><Text style={styles.cancel}>Cancel</Text></Pressable><Pressable style={styles.okBtn} onPress={() => void submitDisburse()}><Text style={styles.okTxt}>Disburse</Text></Pressable></View></View></View>
+        <View style={styles.modalWrap}><View style={styles.modalBox}><Text style={styles.modalTitle}>Disburse</Text><View style={{ flexDirection: "row", gap: 8 }}><Pressable style={[styles.chip, disbursementMethod === "cash" && styles.chipActive]} onPress={() => setDisbursementMethod("cash")}><Text style={[styles.chipText, disbursementMethod === "cash" && styles.chipTextActive]}>Cash</Text></Pressable><Pressable style={[styles.chip, disbursementMethod === "bank" && styles.chipActive]} onPress={() => setDisbursementMethod("bank")}><Text style={[styles.chipText, disbursementMethod === "bank" && styles.chipTextActive]}>Bank</Text></Pressable></View><Text style={styles.label}>Disburse Date / Time</Text><View style={styles.dateTimeRow}>{Platform.OS === "web" ? (<View style={styles.webDateInputWrap}>{React.createElement("input", { type: "date", value: disbursementDate, onChange: (e: any) => e.target.value && setDisbursementDate(e.target.value), style: { border: "none", outline: "none", backgroundColor: "transparent", color: Colors.light.text, fontSize: 13, fontFamily: "inherit", width: 130 } })}</View>) : (<TextInput style={[styles.input, styles.halfInput]} value={disbursementDate} onChangeText={setDisbursementDate} />)}<TextInput style={[styles.input, styles.halfInput]} value={disbursementTime} onChangeText={setDisbursementTime} placeholder="HH:mm" maxLength={5} /></View><Text style={styles.label}>Voucher Number</Text><TextInput style={styles.input} value={voucherNumber} onChangeText={setVoucherNumber} /><Text style={styles.label}>Note</Text><TextInput style={[styles.input, { minHeight: 70 }]} multiline value={disbursementNote} onChangeText={setDisbursementNote} /><View style={styles.rowEnd}><Pressable onPress={() => setShowDisburseModal(false)}><Text style={styles.cancel}>Cancel</Text></Pressable><Pressable style={styles.okBtn} onPress={() => void submitDisburse()}><Text style={styles.okTxt}>Disburse</Text></Pressable></View></View></View>
       </Modal>
 
       <Modal visible={showAmountReqModal} transparent animationType="fade" onRequestClose={() => setShowAmountReqModal(false)}>
@@ -877,6 +936,17 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 16, color: Colors.light.text, textAlign: "center", fontFamily: "Inter_700Bold", marginBottom: 6 },
   label: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 8, marginBottom: 4, fontFamily: "Inter_600SemiBold" },
   input: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, backgroundColor: "#F8FAFC", color: Colors.light.text },
+  dateTimeRow: { flexDirection: "row", gap: 8, alignItems: "center" },
+  halfInput: { flex: 1 },
+  webDateInputWrap: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    backgroundColor: "#F8FAFC",
+  },
   inputLike: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#F8FAFC", flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
   inputLikeText: { color: Colors.light.text, flex: 1, fontSize: 13 },
   readOnlyBox: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, backgroundColor: "#E2E8F0", color: Colors.light.text, fontSize: 13 },

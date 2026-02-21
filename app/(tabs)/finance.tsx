@@ -19,7 +19,7 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
-import { Transaction, Loan, CATEGORY_LABELS } from "@/lib/types";
+import { Transaction, Loan, CATEGORY_LABELS, type MemberPaymentRequestKind } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
 
 type Tab = "transactions" | "transfers" | "loans";
@@ -221,6 +221,9 @@ export default function FinanceScreen() {
   const canAuditFlagFinance = can("finance.audit_flag");
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
   const effectiveScope: FinanceViewScope = canViewFinanceDetail ? viewScope : "self";
+  const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
+    router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
+  };
 
   const handleOpenSettings = () => {
     setTempCash(accountSettings?.openingBalanceCash?.toString() || "0");
@@ -591,6 +594,34 @@ export default function FinanceScreen() {
         )}
       </View>
 
+      {effectiveScope === "self" && (
+        <>
+          <Text style={styles.quickActionsTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
+          <View style={styles.quickActionsGrid}>
+            <Pressable style={styles.quickActionBtn} onPress={() => openPaymentRequest("member_fees")}>
+              <Ionicons name="card-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.quickActionText}>လစဉ်ကြေးပေးသွင်းရန်</Text>
+            </Pressable>
+            <Pressable style={styles.quickActionBtn} onPress={() => openPaymentRequest("donations")}>
+              <Ionicons name="gift-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.quickActionText}>လှူဒါန်းရန်</Text>
+            </Pressable>
+            <Pressable style={styles.quickActionBtn} onPress={() => openPaymentRequest("loan_repayment")}>
+              <Ionicons name="cash-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.quickActionText}>ချေးငွေဆပ်ရန်</Text>
+            </Pressable>
+            <Pressable style={styles.quickActionBtn} onPress={() => openPaymentRequest("interest_income")}>
+              <Ionicons name="trending-up-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.quickActionText}>အတိုးဆပ်ရန်</Text>
+            </Pressable>
+            <Pressable style={styles.quickActionBtn} onPress={() => router.push("/expense-claims" as any)}>
+              <Ionicons name="document-text-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.quickActionText}>ငွေတောင်းခံရန်</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
+
       <View style={styles.tabBar}>
         <Pressable
           style={[styles.tab, activeTab === "transactions" && styles.activeTab]}
@@ -888,6 +919,36 @@ const styles = StyleSheet.create({
   balanceLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   balanceAmount: { fontSize: 16, fontFamily: "Inter_700Bold", marginTop: 4 },
   currencyText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  quickActionsTitle: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    paddingHorizontal: 20,
+    marginBottom: 8,
+  },
+  quickActionsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 20,
+    gap: 8,
+    marginBottom: 10,
+  },
+  quickActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  quickActionText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
   tabBar: {
     flexDirection: "row",
     paddingHorizontal: 20,

@@ -87,6 +87,7 @@ interface DataContextValue {
     disburserUserId: string;
     method: DisbursementMethod;
     disbursementDate: string;
+    disbursementTime?: string;
     voucherNumber?: string;
     note?: string;
   }) => Promise<void>;
@@ -104,6 +105,7 @@ interface DataContextValue {
     proofImage?: string;
     note?: string;
     requestedDate?: string;
+    requestedTime?: string;
     feePeriodStart?: string;
     feePeriodEnd?: string;
     createdByUserId: string;
@@ -114,6 +116,7 @@ interface DataContextValue {
     reviewerUserId: string;
     reviewNote?: string;
     acceptedDate?: string;
+    acceptedTime?: string;
   }) => Promise<void>;
   rejectMemberPaymentRequest: (input: {
     requestId: string;
@@ -459,6 +462,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     disburserUserId: string;
     method: DisbursementMethod;
     disbursementDate: string;
+    disbursementTime?: string;
     voucherNumber?: string;
     note?: string;
   }) => {
@@ -480,6 +484,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     proofImage?: string;
     note?: string;
     requestedDate?: string;
+    requestedTime?: string;
     feePeriodStart?: string;
     feePeriodEnd?: string;
     createdByUserId: string;
@@ -495,6 +500,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     reviewerUserId: string;
     reviewNote?: string;
     acceptedDate?: string;
+    acceptedTime?: string;
   }) => {
     await store.approveMemberPaymentRequest(input);
     await refreshData({ skipPull: true });

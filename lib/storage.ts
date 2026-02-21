@@ -500,6 +500,10 @@ function toYmd(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+function toHm(date: Date): string {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function makeClaimNumber(existing: ExpenseClaim[]): string {
   const today = new Date();
   const ymd = toYmd(today).replace(/-/g, "");
@@ -708,11 +712,13 @@ export async function getExpenseClaims(): Promise<ExpenseClaim[]> {
 
 export async function createExpenseClaim(input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">): Promise<ExpenseClaim> {
   const claims = await getExpenseClaims();
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
   const claim: ExpenseClaim = {
     id: generateId(),
     claimNumber: makeClaimNumber(claims),
-    claimDate: input.claimDate || toYmd(new Date()),
+    claimDate: input.claimDate || toYmd(nowDate),
+    claimTime: input.claimTime || toHm(nowDate),
     expenseCategory: String(input.expenseCategory || "other_expenses"),
     expenseCategoryLabel: String(input.expenseCategoryLabel || input.expenseCategory || "Other"),
     claimantType: input.claimantType,
@@ -804,6 +810,7 @@ export async function disburseExpenseClaim(input: {
   disburserUserId: string;
   method: DisbursementMethod;
   disbursementDate: string;
+  disbursementTime?: string;
   voucherNumber?: string;
   note?: string;
 }): Promise<void> {
@@ -834,6 +841,7 @@ export async function disburseExpenseClaim(input: {
     disburserUserId: input.disburserUserId,
     disbursementMethod: input.method,
     disbursementDate: input.disbursementDate,
+    disbursementTime: input.disbursementTime || toHm(new Date()),
     voucherNumber: input.voucherNumber?.trim() || undefined,
     disbursementNote: input.note?.trim() || undefined,
     disbursedAt: new Date().toISOString(),
@@ -867,13 +875,15 @@ export async function createMemberPaymentRequest(input: {
   proofImage?: string;
   note?: string;
   requestedDate?: string;
+  requestedTime?: string;
   feePeriodStart?: string;
   feePeriodEnd?: string;
   createdByUserId: string;
   createdByMemberId?: string;
 }): Promise<MemberPaymentRequest> {
   const requests = await getMemberPaymentRequests();
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
   const mapping = mapPaymentRequestKindToIncomeCategory(input.kind);
   const request: MemberPaymentRequest = {
     id: generateId(),
@@ -893,7 +903,8 @@ export async function createMemberPaymentRequest(input: {
     proofImage: input.proofImage || undefined,
     note: input.note?.trim() || undefined,
     status: "pending_treasurer_review",
-    requestedDate: input.requestedDate || toYmd(new Date()),
+    requestedDate: input.requestedDate || toYmd(nowDate),
+    requestedTime: input.requestedTime || toHm(nowDate),
     feePeriodStart: input.feePeriodStart || undefined,
     feePeriodEnd: input.feePeriodEnd || undefined,
     createdByUserId: input.createdByUserId,
@@ -917,6 +928,7 @@ export async function approveMemberPaymentRequest(input: {
   reviewerUserId: string;
   reviewNote?: string;
   acceptedDate?: string;
+  acceptedTime?: string;
 }): Promise<void> {
   const requests = await getMemberPaymentRequests();
   const idx = requests.findIndex((item) => item.id === input.requestId);
@@ -950,6 +962,8 @@ export async function approveMemberPaymentRequest(input: {
     reviewedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     linkedTransactionId: txn.id,
+    acceptedDate,
+    acceptedTime: input.acceptedTime || toHm(new Date()),
   };
   await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(requests));
   await pushSystemEvent({

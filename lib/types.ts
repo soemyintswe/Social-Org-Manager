@@ -287,6 +287,7 @@ export interface MemberPaymentRequest {
   note?: string;
   status: MemberPaymentRequestStatus;
   requestedDate: string;
+  requestedTime?: string;
   feePeriodStart?: string;
   feePeriodEnd?: string;
   createdByUserId: string;
@@ -297,6 +298,8 @@ export interface MemberPaymentRequest {
   reviewNote?: string;
   reviewedAt?: string;
   linkedTransactionId?: string;
+  acceptedDate?: string;
+  acceptedTime?: string;
   notifiedRoles?: OrgPosition[];
 }
 
@@ -304,6 +307,7 @@ export interface ExpenseClaim {
   id: string;
   claimNumber: string;
   claimDate: string;
+  claimTime?: string;
   expenseCategory: string;
   expenseCategoryLabel: string;
   claimantType: ClaimantType;
@@ -331,6 +335,7 @@ export interface ExpenseClaim {
   disburserUserId?: string;
   disbursementMethod?: DisbursementMethod;
   disbursementDate?: string;
+  disbursementTime?: string;
   voucherNumber?: string;
   disbursementNote?: string;
   disbursedAt?: string;

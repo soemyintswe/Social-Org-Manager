@@ -36,6 +36,15 @@ import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
 type SortOption = "id" | "name" | "joinDate" | "dob" | "age";
 type MemberListItem = Member & { profileImage?: string };
 
+function getMemberStatusPalette(status: MemberStatus): { text: string; bg: string } {
+  if (status === "active") return { text: "#059669", bg: "#D1FAE5" };
+  if (status === "expelled") return { text: "#DC2626", bg: "#FEE2E2" };
+  if (status === "resigned") return { text: "#D97706", bg: "#FEF3C7" };
+  if (status === "deceased") return { text: "#6B7280", bg: "#E5E7EB" };
+  if (status === "suspended") return { text: "#7C3AED", bg: "#EDE9FE" };
+  return { text: "#0EA5E9", bg: "#E0F2FE" };
+}
+
 export default function MembersScreen() {
   const insets = useSafeAreaInsets();
   const { members, loading, memberChangeRequests } = useData();
@@ -416,6 +425,11 @@ export default function MembersScreen() {
             style={styles.memberItem} 
             onPress={() => router.push({ pathname: "/member-detail", params: { id: String(item.id) } } as any)}
           >
+            {(() => {
+              const normalizedStatus = normalizeMemberStatus(item.status);
+              const statusPalette = getMemberStatusPalette(normalizedStatus);
+              return (
+                <>
             {item.profileImage ? (
               <Image source={{ uri: item.profileImage }} style={styles.avatar} resizeMode="cover" />
             ) : (
@@ -427,9 +441,11 @@ export default function MembersScreen() {
               <Text style={styles.memberName}>{item.name}</Text>
               <Text style={styles.memberId}>ID: {item.id}</Text>
               <View style={styles.metaRow}>
-                <Text style={styles.metaText}>{MEMBER_STATUS_LABELS[normalizeMemberStatus(item.status)]}</Text>
+                <Text style={[styles.memberStatusText, { color: statusPalette.text, backgroundColor: statusPalette.bg }]}>
+                  {MEMBER_STATUS_LABELS[normalizedStatus]}
+                </Text>
                 <Text style={[styles.metaText, { marginLeft: 8 }]}>
-                  {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || item.status)]}
+                  {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || normalizedStatus)]}
                 </Text>
                 <Text style={[styles.metaText, { marginLeft: 8 }]}>
                   {MEMBER_GENDER_LABELS[
@@ -486,6 +502,9 @@ export default function MembersScreen() {
               )}
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+                </>
+              );
+            })()}
           </Pressable>
         )}
       />
@@ -743,6 +762,14 @@ const styles = StyleSheet.create({
   memberId: { fontSize: 12, color: Colors.light.textSecondary },
   metaRow: { marginTop: 4, flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
   metaText: { fontSize: 12, color: Colors.light.tint, fontFamily: "Inter_500Medium" },
+  memberStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    overflow: "hidden",
+  },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },

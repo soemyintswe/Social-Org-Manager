@@ -16,8 +16,17 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/AuthContext";
 
+const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
+  "နုတ်ထွက်": "နှုတ်ထွက်ထားပါသည်။",
+  "ကွယ်လွန်": "ကွယ်လွန်ထားပါသည်။",
+  "ထုတ်ပယ်": "ထုတ်ပယ်ခံထားရပါသည်။",
+  "ဆိုင်းငံ့": "ဆိုင်းငံ့ထားပါသည်။",
+  "လျှောက်ထားဆဲ": "လျှောက်ထားဆဲဖြစ်ပါသည်။",
+};
+const LOGIN_DENIED_SUFFIX = "Login ဝင်ခွင့်မရှိပါ။";
+
 export default function SignInScreen() {
-  const { attemptLogin, checkUsername, getLoginLockInfo, loading } = useAuth();
+  const { attemptLogin, checkUsernameStatus, getLoginLockInfo, loading } = useAuth();
   const router = useRouter();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [username, setUsername] = useState("");
@@ -25,6 +34,7 @@ export default function SignInScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [usernameTouched, setUsernameTouched] = useState(false);
   const [usernameValid, setUsernameValid] = useState<boolean | null>(null);
+  const [usernameStatusMessage, setUsernameStatusMessage] = useState("");
   const [checkingUsername, setCheckingUsername] = useState(false);
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [passwordValid, setPasswordValid] = useState<boolean | null>(null);
@@ -44,18 +54,28 @@ export default function SignInScreen() {
     return `${minutes} မိနစ်`;
   }, [lockRemainingMs]);
 
-  const validateUsername = async () => {
+  const validateUsername = async (): Promise<{ ok: boolean; message?: string }> => {
     const raw = username.trim();
     setUsernameTouched(true);
+    setUsernameStatusMessage("");
     if (!raw) {
       setUsernameValid(null);
-      return false;
+      return { ok: false };
     }
     setCheckingUsername(true);
     try {
-      const ok = await checkUsername(raw);
-      setUsernameValid(ok);
-      return ok;
+      const result = await checkUsernameStatus(raw);
+      setUsernameValid(result.canLogin);
+      if (!result.exists) return { ok: false };
+      if (!result.canLogin) {
+        const statusLabel = String(result.memberStatusLabel || "").trim();
+        const name = String(result.memberName || raw).trim();
+        const statusSentence = INACTIVE_STATUS_SENTENCE[statusLabel] || `${statusLabel} ဖြစ်ပါသည်။`;
+        const msg = `${name} သည် ${statusSentence} ${LOGIN_DENIED_SUFFIX}`;
+        setUsernameStatusMessage(msg);
+        return { ok: false, message: msg };
+      }
+      return { ok: true };
     } finally {
       setCheckingUsername(false);
     }
@@ -82,11 +102,15 @@ export default function SignInScreen() {
 
   const handleSignIn = async () => {
     if (!canSubmit) return;
-    const isUserValid = await validateUsername();
-    if (!isUserValid) {
+    const usernameCheck = await validateUsername();
+    if (!usernameCheck.ok) {
       setPasswordTouched(false);
       setPasswordValid(null);
-      Alert.alert("Username မမှန်ကန်ပါ", "Member ID / ID### / Name / Phone / Email / Admin ကို မှန်ကန်စွာထည့်ပါ။");
+      if (usernameCheck.message) {
+        Alert.alert("ဝင်ရောက်ခွင့်မရှိပါ", usernameCheck.message);
+      } else {
+        Alert.alert("Username မမှန်ကန်ပါ", "Member ID / ID### / Name / Phone / Email / Admin ကို မှန်ကန်စွာထည့်ပါ။");
+      }
       return;
     }
     setIsSigningIn(true);
@@ -104,6 +128,13 @@ export default function SignInScreen() {
         setPasswordTouched(false);
         setPasswordValid(null);
         Alert.alert("Username မမှန်ကန်ပါ", "User account ကိုမတွေ့ပါ။");
+      } else if (result.reason === "inactive_member") {
+        setPasswordTouched(false);
+        setPasswordValid(null);
+        const statusLabel = String(result.memberStatusLabel || "").trim();
+        const name = String(result.memberName || username || "ဤအသင်းဝင်").trim();
+        const statusSentence = INACTIVE_STATUS_SENTENCE[statusLabel] || `${statusLabel} ဖြစ်ပါသည်။`;
+        Alert.alert("ဝင်ရောက်ခွင့်မရှိပါ", `${name} သည် ${statusSentence} ${LOGIN_DENIED_SUFFIX}`);
       } else {
         setPasswordTouched(true);
         setPasswordValid(false);
@@ -138,6 +169,7 @@ export default function SignInScreen() {
                 setUsername(value);
                 setUsernameTouched(false);
                 setUsernameValid(null);
+                setUsernameStatusMessage("");
               }}
               placeholder="ဥပမာ - ID001 / ဦးစိုးမြင့်ဆွေ / စိုးမြင့်ဆွေ / 09xxxxxxxxx / mail@example.com / Admin"
               autoCapitalize="none"
@@ -151,7 +183,7 @@ export default function SignInScreen() {
             />
             {checkingUsername ? <Text style={styles.helperText}>Username စစ်ဆေးနေပါသည်...</Text> : null}
             {!checkingUsername && usernameTouched && usernameValid === false ? (
-              <Text style={styles.errorText}>Username မမှန်ကန်ပါ။</Text>
+              <Text style={styles.errorText}>{usernameStatusMessage || "Username မမှန်ကန်ပါ။"}</Text>
             ) : null}
             {!checkingUsername && usernameTouched && usernameValid === true ? (
               <Text style={styles.successText}>Username မှန်ကန်ပါသည်။</Text>

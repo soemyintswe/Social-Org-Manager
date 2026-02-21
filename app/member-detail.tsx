@@ -174,6 +174,19 @@ export default function MemberDetailScreen() {
 
     setSaving(true);
     try {
+      const canApproveMemberChanges = can("members.approve_changes");
+      const statusChanged = Boolean(
+        String(member.status || "") !== String(editStatus || "") ||
+        String(member.statusDate || member.resignDate || "") !== String(editStatusDate || "") ||
+        String(member.statusNote || "") !== String(editStatusNote || "")
+      );
+      const memberIdChanged = editMemberId.trim() !== member.id;
+      if (statusChanged && memberIdChanged) {
+        Alert.alert("အသိပေးချက်", "Status ပြင်ဆင်မှုနှင့် Member ID ပြောင်းလဲမှုကို တစ်ခါတည်းမလုပ်နိုင်ပါ။ သီးခြားအဆင့်လိုက် ပြုလုပ်ပါ။");
+        setSaving(false);
+        return;
+      }
+
       // ID ပြောင်းလဲမှုရှိမရှိ စစ်ဆေးခြင်း
       if ((canEditAll || canEditOwn) && editMemberId.trim() !== member.id) {
         const existing = members.find((m: any) => m.id === editMemberId.trim());
@@ -216,7 +229,35 @@ export default function MemberDetailScreen() {
         orgPosition: editOrgPosition,
       };
       if (canEditAll || canEditOwn) {
-        await updateMember(member.id, nextPayload);
+        const nonStatusPayload = { ...nextPayload };
+        delete (nonStatusPayload as any).status;
+        delete (nonStatusPayload as any).statusDate;
+        delete (nonStatusPayload as any).statusNote;
+
+        await updateMember(member.id, statusChanged ? nonStatusPayload : nextPayload);
+
+        if (statusChanged) {
+          if (!currentUser?.id || (!canProposeChanges && !canApproveMemberChanges)) {
+            Alert.alert("ခွင့်မပြုပါ", "Status ပြင်ဆင်ရန် proposal လုပ်ပိုင်ခွင့်မရှိပါ။");
+            setSaving(false);
+            return;
+          }
+          await createMemberChangeRequest({
+            action: "update",
+            targetMemberId: member.id,
+            payload: {
+              member: {
+                status: editStatus,
+                statusDate: editStatusDate.trim(),
+                statusNote: editStatusNote.trim(),
+              },
+              note: "Member status update proposal",
+            },
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+          });
+          Alert.alert("အောင်မြင်ပါသည်", "Status ပြင်ဆင်မှုကို approver ထံ request အဖြစ်ပို့ပြီးပါပြီ။");
+        }
       } else if (canProposeChanges && currentUser?.id) {
         if (editMemberId.trim() !== member.id) {
           Alert.alert("အသိပေးချက်", "Proposal mode တွင် Member ID ပြောင်းလဲမှုကို မပံ့ပိုးသေးပါ။");

@@ -1,8 +1,8 @@
-﻿{
-    "latestVersion":  "1.1.8",
-    "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.8-202602212304.apk?raw=1",
-    "notes":  "Version 1.1.8: treasurer-only editing for payment receiving accounts; others are read-only (view only).",
-    "force":  false,
-    "publishedAt":  "2026-02-21T16:04:00Z"
+{
+  "latestVersion": "1.1.9",
+  "minimumVersion": "1.0.0",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.9-202602220032.apk?raw=1",
+  "notes": "Version 1.1.9: member status governance improved (status changes by proposal/approval), member status colors in list, inactive-login status messages, and payment/claim date-time updates.",
+  "force": false,
+  "publishedAt": "2026-02-21T17:32:00Z"
 }

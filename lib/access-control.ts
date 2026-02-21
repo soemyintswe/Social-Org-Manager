@@ -126,6 +126,8 @@ function checklist(overrides: Partial<PermissionChecklist>): PermissionChecklist
 const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
   patron: checklist({
     "members.view_all": true,
+    "members.edit": true,
+    "members.propose_changes": true,
     "finance.view_summary": true,
     "finance.view_detail": true,
     "reports.view_summary": true,
@@ -193,6 +195,7 @@ const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
   }),
   secretary: checklist({
     "members.view_all": true,
+    "members.edit": true,
     "members.propose_changes": true,
     "finance.view_summary": true,
     "finance.view_detail": true,
@@ -213,6 +216,7 @@ const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
   }),
   joint_secretary: checklist({
     "members.view_all": true,
+    "members.edit": true,
     "members.propose_changes": true,
     "finance.view_summary": true,
     "finance.view_detail": true,
@@ -233,6 +237,8 @@ const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
   }),
   treasurer: checklist({
     "members.view_all": true,
+    "members.edit": true,
+    "members.propose_changes": true,
     "finance.view_summary": true,
     "finance.view_detail": true,
     "finance.create": true,
@@ -251,6 +257,8 @@ const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
   }),
   auditor: checklist({
     "members.view_all": true,
+    "members.edit": true,
+    "members.propose_changes": true,
     "finance.view_summary": true,
     "finance.view_detail": true,
     "finance.audit_flag": true,
@@ -267,6 +275,8 @@ const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
   }),
   committee_member: checklist({
     "members.view_all": true,
+    "members.edit": true,
+    "members.propose_changes": true,
     "finance.view_summary": true,
     "reports.view_summary": true,
     "events.view_public": true,
