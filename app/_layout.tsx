@@ -3,7 +3,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { Linking, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { queryClient } from "@/lib/query-client";
@@ -22,7 +22,7 @@ import {
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, recordActivity } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
@@ -43,6 +43,7 @@ function RootLayoutNav() {
   useEffect(() => {
     const checkUpdateOnLaunch = async () => {
       if (loading || !isAuthenticated) return;
+      if (Platform.OS === "web") return;
       const now = Date.now();
       const lastCheckedAt = Number((await AsyncStorage.getItem("@app_update_last_checked_at")) || 0);
       if (lastCheckedAt && now - lastCheckedAt < 3 * 60 * 60 * 1000) {
@@ -58,6 +59,30 @@ function RootLayoutNav() {
     };
     void checkUpdateOnLaunch();
   }, [loading, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    recordActivity();
+  }, [segments, isAuthenticated, recordActivity]);
+
+  useEffect(() => {
+    if (!isAuthenticated || Platform.OS !== "web") return;
+    const onActivity = () => recordActivity();
+    if (typeof window !== "undefined") {
+      window.addEventListener("click", onActivity);
+      window.addEventListener("keydown", onActivity);
+      window.addEventListener("mousemove", onActivity);
+      window.addEventListener("touchstart", onActivity);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("click", onActivity);
+        window.removeEventListener("keydown", onActivity);
+        window.removeEventListener("mousemove", onActivity);
+        window.removeEventListener("touchstart", onActivity);
+      }
+    };
+  }, [isAuthenticated, recordActivity]);
 
   const handleUpdateNow = async () => {
     if (!updateInfo?.downloadUrl) return;

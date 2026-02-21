@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AppState, type AppStateStatus } from "react-native";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
@@ -11,6 +12,7 @@ const RESTORE_SESSION_ON_LAUNCH = true;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 3 * 60 * 60 * 1000;
+const AUTO_LOGOUT_MS = 10 * 60 * 1000; // 10 minutes inactivity
 
 type PersistedSession = {
   userId: string;
@@ -57,6 +59,7 @@ interface AuthContextValue {
   resetPassword: (identifier: string) => Promise<boolean>;
   can: (permission: AccessPermission, options?: AccessOptions) => boolean;
   canAccessMemberRecord: (targetMemberId: string) => boolean;
+  recordActivity: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -223,6 +226,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { users, members, loading: dataLoading } = useData();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(true);
+  const [lastActivityAt, setLastActivityAt] = useState<number>(Date.now());
 
   useEffect(() => {
     let active = true;
@@ -311,6 +315,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       await AsyncStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
       await clearLoginGuardState();
+      setLastActivityAt(Date.now());
       return true;
     },
     [users]
@@ -319,6 +324,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     await clearSession();
   }, [clearSession]);
+
+  const recordActivity = useCallback(() => {
+    setLastActivityAt(Date.now());
+  }, []);
 
   const checkUsernameStatus = useCallback(async (username: string): Promise<UsernameCheckResult> => {
     const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
@@ -463,6 +472,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [profile]
   );
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const timer = setInterval(() => {
+      const idleMs = Date.now() - lastActivityAt;
+      if (idleMs >= AUTO_LOGOUT_MS) {
+        void signOut();
+      }
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [currentUser, lastActivityAt, signOut]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active") {
+        setLastActivityAt(Date.now());
+      }
+    });
+    return () => sub.remove();
+  }, [currentUser]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       loading: dataLoading || restoring,
@@ -483,8 +513,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       resetPassword,
       can,
       canAccessMemberRecord,
+      recordActivity,
     }),
-    [dataLoading, restoring, currentUser, currentMember, profile, availableUsers, signIn, signOut, checkUsername, checkUsernameStatus, attemptLogin, getLoginLockInfo, login, verifyCurrentPassword, changePassword, resetPassword, can, canAccessMemberRecord]
+    [dataLoading, restoring, currentUser, currentMember, profile, availableUsers, signIn, signOut, checkUsername, checkUsernameStatus, attemptLogin, getLoginLockInfo, login, verifyCurrentPassword, changePassword, resetPassword, can, canAccessMemberRecord, recordActivity]
   );
 
   return React.createElement(AuthContext.Provider, { value }, children);

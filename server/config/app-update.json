@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.9",
+  "latestVersion": "1.1.10",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.9-202602220032.apk?raw=1",
-  "notes": "Version 1.1.9: member status governance improved (status changes by proposal/approval), member status colors in list, inactive-login status messages, and payment/claim date-time updates.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.10-202602220059.apk?raw=1",
+  "notes": "Version 1.1.10: fixed Messages composer layout and Platform crash on web, added inactivity auto-logout, and skipped in-app APK update checks on browser usage.",
   "force": false,
-  "publishedAt": "2026-02-21T17:32:00Z"
+  "publishedAt": "2026-02-21T17:59:00Z"
 }

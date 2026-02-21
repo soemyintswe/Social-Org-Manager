@@ -5,7 +5,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -164,7 +166,11 @@ export default function MessagesScreen() {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <KeyboardAvoidingView
+      style={[styles.container, { paddingTop: insets.top }]}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+    >
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.iconBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
@@ -248,7 +254,7 @@ export default function MessagesScreen() {
                 </View>
               ) : null}
 
-              <View style={styles.composer}>
+              <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 10), marginBottom: 6 }]}>
                 <Pressable style={styles.pickBtn} onPress={() => void pickImage()}>
                   <Ionicons name="image-outline" size={18} color={Colors.light.tint} />
                 </Pressable>
@@ -316,7 +322,7 @@ export default function MessagesScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
