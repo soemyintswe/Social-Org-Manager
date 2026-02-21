@@ -207,6 +207,55 @@ export interface MemberChangeRequest {
 export type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";
 export type ExpenseClaimStatus = "pending_approval" | "approved" | "rejected" | "disbursed";
 export type DisbursementMethod = "cash" | "bank";
+export type MobileWalletProvider = "kbz_pay" | "wave_pay" | "aya_pay";
+export type MemberPaymentRequestStatus = "pending_treasurer_review" | "approved" | "rejected";
+
+export type MemberPaymentRequestKind =
+  | "member_fees"
+  | "donations"
+  | "loan_repayment"
+  | "interest_income";
+
+export const MEMBER_PAYMENT_REQUEST_KIND_LABELS: Record<MemberPaymentRequestKind, string> = {
+  member_fees: "လစဉ်ကြေးပေးသွင်းရန်",
+  donations: "လှူဒါန်းရန်",
+  loan_repayment: "ချေးငွေဆပ်ရန်",
+  interest_income: "အတိုးဆပ်ရန်",
+};
+
+export const MOBILE_WALLET_PROVIDER_LABELS: Record<MobileWalletProvider, string> = {
+  kbz_pay: "KBZ Pay",
+  wave_pay: "Wave Pay",
+  aya_pay: "AYA Pay",
+};
+
+export interface MemberPaymentRequest {
+  id: string;
+  requestNumber: string;
+  kind: MemberPaymentRequestKind;
+  category: string;
+  categoryLabel: string;
+  amount: number;
+  payerMemberId?: string;
+  payerName: string;
+  walletProvider: MobileWalletProvider;
+  walletAccountName?: string;
+  walletAccountNumber?: string;
+  walletReference?: string;
+  proofImage?: string;
+  note?: string;
+  status: MemberPaymentRequestStatus;
+  requestedDate: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedByUserId?: string;
+  reviewNote?: string;
+  reviewedAt?: string;
+  linkedTransactionId?: string;
+  notifiedRoles?: OrgPosition[];
+}
 
 export interface ExpenseClaim {
   id: string;

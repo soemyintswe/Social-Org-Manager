@@ -14,6 +14,9 @@ import {
   MemberChangeRequest,
   MemberChangeAction,
   ExpenseClaim,
+  MemberPaymentRequest,
+  MemberPaymentRequestKind,
+  MobileWalletProvider,
   StandardAmountRule,
   StandardAmountChangeRequest,
   DEFAULT_STANDARD_AMOUNT_RULES,
@@ -33,6 +36,7 @@ const KEYS = {
   USER_PASSWORDS: "@orghub_user_passwords",
   MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
   EXPENSE_CLAIMS: "@orghub_expense_claims",
+  MEMBER_PAYMENT_REQUESTS: "@orghub_member_payment_requests",
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
 };
@@ -463,6 +467,29 @@ function makeClaimNumber(existing: ExpenseClaim[]): string {
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
 
+function makePaymentRequestNumber(existing: MemberPaymentRequest[]): string {
+  const today = new Date();
+  const ymd = toYmd(today).replace(/-/g, "");
+  const prefix = `PR-${ymd}-`;
+  let max = 0;
+  for (const item of existing) {
+    const value = String(item.requestNumber || "");
+    if (!value.startsWith(prefix)) continue;
+    const seq = Number(value.slice(prefix.length));
+    if (Number.isFinite(seq) && seq > max) max = seq;
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+
+function mapPaymentRequestKindToIncomeCategory(
+  kind: MemberPaymentRequestKind
+): { category: string; categoryLabel: string } {
+  if (kind === "member_fees") return { category: "member_fees", categoryLabel: "လစဉ်ကြေးရငွေ" };
+  if (kind === "donations") return { category: "donations", categoryLabel: "အလှူငွေရရှိ" };
+  if (kind === "loan_repayment") return { category: "loan_repayment", categoryLabel: "ချေးငွေပြန်ဆပ်ရရှိငွေ" };
+  return { category: "interest_income", categoryLabel: "အတိုးရငွေ" };
+}
+
 async function pushSystemEvent(input: {
   title: string;
   description: string;
@@ -771,6 +798,134 @@ export async function disburseExpenseClaim(input: {
     title: `Expense Disbursed (${claim.claimNumber})`,
     description: `${amount.toLocaleString()} KS • ${input.method.toUpperCase()}`,
     createdByUserId: input.disburserUserId,
+  });
+}
+
+export async function getMemberPaymentRequests(): Promise<MemberPaymentRequest[]> {
+  const rows = await safeGet<MemberPaymentRequest[]>(KEYS.MEMBER_PAYMENT_REQUESTS, []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function createMemberPaymentRequest(input: {
+  kind: MemberPaymentRequestKind;
+  amount: number;
+  payerMemberId?: string;
+  payerName: string;
+  walletProvider: MobileWalletProvider;
+  walletAccountName?: string;
+  walletAccountNumber?: string;
+  walletReference?: string;
+  proofImage?: string;
+  note?: string;
+  requestedDate?: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+}): Promise<MemberPaymentRequest> {
+  const requests = await getMemberPaymentRequests();
+  const now = new Date().toISOString();
+  const mapping = mapPaymentRequestKindToIncomeCategory(input.kind);
+  const request: MemberPaymentRequest = {
+    id: generateId(),
+    requestNumber: makePaymentRequestNumber(requests),
+    kind: input.kind,
+    category: mapping.category,
+    categoryLabel: mapping.categoryLabel,
+    amount: Number(input.amount || 0),
+    payerMemberId: input.payerMemberId,
+    payerName: String(input.payerName || "").trim(),
+    walletProvider: input.walletProvider,
+    walletAccountName: input.walletAccountName?.trim() || undefined,
+    walletAccountNumber: input.walletAccountNumber?.trim() || undefined,
+    walletReference: input.walletReference?.trim() || undefined,
+    proofImage: input.proofImage || undefined,
+    note: input.note?.trim() || undefined,
+    status: "pending_treasurer_review",
+    requestedDate: input.requestedDate || toYmd(new Date()),
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: now,
+    updatedAt: now,
+    notifiedRoles: ["treasurer", "chairperson", "vice_chairperson", "secretary", "joint_secretary", "auditor"],
+  };
+  await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify([request, ...requests]));
+  await pushSystemEvent({
+    title: `Payment Request Submitted (${request.requestNumber})`,
+    description: `${request.payerName} • ${request.amount.toLocaleString()} KS • ${request.categoryLabel}`,
+    createdByUserId: request.createdByUserId,
+    createdByMemberId: request.createdByMemberId,
+  });
+  return request;
+}
+
+export async function approveMemberPaymentRequest(input: {
+  requestId: string;
+  reviewerUserId: string;
+  reviewNote?: string;
+  acceptedDate?: string;
+}): Promise<void> {
+  const requests = await getMemberPaymentRequests();
+  const idx = requests.findIndex((item) => item.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const request = requests[idx];
+  if (request.status !== "pending_treasurer_review") throw new Error("request_not_pending");
+
+  const acceptedDate = input.acceptedDate || toYmd(new Date());
+  const txn = await addTransaction({
+    memberId: request.payerMemberId || undefined,
+    payerPayee: request.payerName,
+    amount: Number(request.amount || 0),
+    type: "income",
+    category: request.category,
+    paymentMethod: "bank",
+    date: acceptedDate,
+    notes:
+      request.note ||
+      `${request.categoryLabel} (${request.walletProvider})`,
+    receiptNumber: request.requestNumber,
+    categoryLabel: request.categoryLabel,
+  });
+
+  requests[idx] = {
+    ...request,
+    status: "approved",
+    reviewedByUserId: input.reviewerUserId,
+    reviewNote: input.reviewNote?.trim() || undefined,
+    reviewedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    linkedTransactionId: txn.id,
+  };
+  await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(requests));
+  await pushSystemEvent({
+    title: `Payment Request Approved (${request.requestNumber})`,
+    description: `${request.amount.toLocaleString()} KS ကို ရငွေစာရင်းသို့ ထည့်သွင်းပြီးပါပြီ`,
+    createdByUserId: input.reviewerUserId,
+  });
+}
+
+export async function rejectMemberPaymentRequest(input: {
+  requestId: string;
+  reviewerUserId: string;
+  reviewNote: string;
+}): Promise<void> {
+  const requests = await getMemberPaymentRequests();
+  const idx = requests.findIndex((item) => item.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const request = requests[idx];
+  if (request.status !== "pending_treasurer_review") throw new Error("request_not_pending");
+
+  requests[idx] = {
+    ...request,
+    status: "rejected",
+    reviewedByUserId: input.reviewerUserId,
+    reviewNote: input.reviewNote?.trim() || undefined,
+    reviewedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(requests));
+  await pushSystemEvent({
+    title: `Payment Request Rejected (${request.requestNumber})`,
+    description: requests[idx].reviewNote || "Rejected by treasurer",
+    createdByUserId: input.reviewerUserId,
   });
 }
 

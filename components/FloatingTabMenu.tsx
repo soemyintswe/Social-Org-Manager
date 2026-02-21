@@ -29,7 +29,7 @@ export default function FloatingTabMenu() {
         enabled: can("members.approve_changes") || can("members.propose_changes"),
       },
       {
-        name: "လှုပ်ရှားမှုများ",
+        name: "သတင်းပို့ရန်",
         icon: "calendar-outline",
         route: "/events",
         enabled: can("events.view_public"),
@@ -45,6 +45,12 @@ export default function FloatingTabMenu() {
         icon: "wallet-outline",
         route: "/finance",
         enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
+      },
+      {
+        name: "ငွေပေးသွင်းတောင်းခံမှု",
+        icon: "phone-portrait-outline",
+        route: "/member-payment-requests",
+        enabled: true,
       },
       {
         name: "ငွေတောင်းခံလွှာ",

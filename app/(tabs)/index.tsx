@@ -19,7 +19,7 @@ import { router, useFocusEffect } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory } from "@/lib/types";
+import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory, type MemberPaymentRequestKind } from "@/lib/types";
 import { exportData } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 
@@ -105,6 +105,9 @@ export default function DashboardScreen() {
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canApproveMemberChanges = can("members.approve_changes");
   const canProposeMemberChanges = can("members.propose_changes");
+  const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
+    router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
+  };
   const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
 
   const loadMemberChangeLastSeen = useCallback(async () => {
@@ -519,7 +522,7 @@ export default function DashboardScreen() {
           onPress={() => router.push("/finance" as any)} 
         />
         <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" onPress={() => router.push("/loans" as any)} />
-        <StatCard icon="calendar" label="လှုပ်ရှားမှုများ" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
+        <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
       </View>
 
       {(canApproveMemberChanges || canProposeMemberChanges) && (
@@ -585,7 +588,12 @@ export default function DashboardScreen() {
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
         {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
-        <QuickAction icon="qr-code-outline" label="ကတ်ဖတ်မည်" onPress={() => router.push("/qr-scanner" as any)} />
+        <QuickAction icon="megaphone-outline" label="သတင်းပို့ရန်" onPress={() => router.push("/add-event" as any)} />
+        <QuickAction icon="card-outline" label="လစဉ်ကြေးပေးသွင်းရန်" onPress={() => openPaymentRequest("member_fees")} />
+        <QuickAction icon="gift-outline" label="လှူဒါန်းရန်" onPress={() => openPaymentRequest("donations")} />
+        <QuickAction icon="cash-outline" label="ချေးငွေဆပ်ရန်" onPress={() => openPaymentRequest("loan_repayment")} />
+        <QuickAction icon="trending-up-outline" label="အတိုးဆပ်ရန်" onPress={() => openPaymentRequest("interest_income")} />
+        <QuickAction icon="document-text-outline" label="ငွေတောင်းခံရန်" onPress={() => router.push("/expense-claims" as any)} />
       </View>
 
       {recentEvents.length > 0 && (
@@ -661,8 +669,8 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, marginTop: 2 },
   subBalanceText: { fontSize: 10, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, paddingHorizontal: 20, marginBottom: 15 },
-  quickActions: { flexDirection: "row", paddingHorizontal: 20, gap: 12, marginBottom: 25 },
-  quickAction: { flex: 1, backgroundColor: "white", padding: 15, borderRadius: 16, alignItems: "center", elevation: 1 },
+  quickActions: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 20, gap: 12, marginBottom: 25 },
+  quickAction: { width: "31%", minWidth: 95, backgroundColor: "white", padding: 12, borderRadius: 16, alignItems: "center", elevation: 1 },
   actionIcon: { width: 45, height: 45, borderRadius: 12, backgroundColor: Colors.light.tint + "15", justifyContent: "center", alignItems: "center", marginBottom: 8 },
   actionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   recentTxnRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", padding: 12, borderRadius: 12, marginBottom: 10, marginHorizontal: 20 },

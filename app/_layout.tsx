@@ -102,6 +102,7 @@ function RootLayoutNav() {
         <Stack.Screen name="member-data-management" options={{ headerShown: false }} />
         <Stack.Screen name="import-members" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen name="member-payment-requests" options={{ headerShown: false }} />
         <Stack.Screen name="members" options={{ headerShown: false }} />
         <Stack.Screen name="events" options={{ headerShown: false }} />
         <Stack.Screen name="loans" options={{ headerShown: false }} />

@@ -18,6 +18,9 @@ import type {
   UserAccount,
   MemberChangeRequest,
   ExpenseClaim,
+  MemberPaymentRequest,
+  MemberPaymentRequestKind,
+  MobileWalletProvider,
   StandardAmountRule,
   StandardAmountChangeRequest,
   DisbursementMethod,
@@ -34,6 +37,7 @@ interface DataContextValue {
   users: UserAccount[];
   memberChangeRequests: MemberChangeRequest[];
   expenseClaims: ExpenseClaim[];
+  memberPaymentRequests: MemberPaymentRequest[];
   standardAmountRules: StandardAmountRule[];
   standardAmountChangeRequests: StandardAmountChangeRequest[];
   accountSettings: AccountSettings;
@@ -82,6 +86,32 @@ interface DataContextValue {
     voucherNumber?: string;
     note?: string;
   }) => Promise<void>;
+  createMemberPaymentRequest: (input: {
+    kind: MemberPaymentRequestKind;
+    amount: number;
+    payerMemberId?: string;
+    payerName: string;
+    walletProvider: MobileWalletProvider;
+    walletAccountName?: string;
+    walletAccountNumber?: string;
+    walletReference?: string;
+    proofImage?: string;
+    note?: string;
+    requestedDate?: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => Promise<MemberPaymentRequest>;
+  approveMemberPaymentRequest: (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote?: string;
+    acceptedDate?: string;
+  }) => Promise<void>;
+  rejectMemberPaymentRequest: (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote: string;
+  }) => Promise<void>;
   createStandardAmountChangeRequest: (input: {
     ruleKey: string;
     ruleLabel: string;
@@ -113,6 +143,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [memberChangeRequests, setMemberChangeRequests] = useState<MemberChangeRequest[]>([]);
   const [expenseClaims, setExpenseClaims] = useState<ExpenseClaim[]>([]);
+  const [memberPaymentRequests, setMemberPaymentRequests] = useState<MemberPaymentRequest[]>([]);
   const [standardAmountRules, setStandardAmountRules] = useState<StandardAmountRule[]>([]);
   const [standardAmountChangeRequests, setStandardAmountChangeRequests] = useState<StandardAmountChangeRequest[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
@@ -131,7 +162,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     try {
       await store.pullLanSnapshotToLocal();
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, ec, sar, sacr, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -141,6 +172,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getUsers(),
         store.getMemberChangeRequests(),
         store.getExpenseClaims(),
+        store.getMemberPaymentRequests(),
         store.getStandardAmountRules(),
         store.getStandardAmountChangeRequests(),
         store.getAccountSettings(),
@@ -154,6 +186,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setUsers(u);
       setMemberChangeRequests(r);
       setExpenseClaims(ec);
+      setMemberPaymentRequests(mpr);
       setStandardAmountRules(sar);
       setStandardAmountChangeRequests(sacr);
       if (s) setAccountSettings(s);
@@ -189,6 +222,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     users,
     memberChangeRequests,
     expenseClaims,
+    memberPaymentRequests,
     standardAmountRules,
     standardAmountChangeRequests,
     accountSettings,
@@ -378,6 +412,45 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData();
   };
 
+  const createMemberPaymentRequest = async (input: {
+    kind: MemberPaymentRequestKind;
+    amount: number;
+    payerMemberId?: string;
+    payerName: string;
+    walletProvider: MobileWalletProvider;
+    walletAccountName?: string;
+    walletAccountNumber?: string;
+    walletReference?: string;
+    proofImage?: string;
+    note?: string;
+    requestedDate?: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => {
+    const req = await store.createMemberPaymentRequest(input);
+    await refreshData();
+    return req;
+  };
+
+  const approveMemberPaymentRequest = async (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote?: string;
+    acceptedDate?: string;
+  }) => {
+    await store.approveMemberPaymentRequest(input);
+    await refreshData();
+  };
+
+  const rejectMemberPaymentRequest = async (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote: string;
+  }) => {
+    await store.rejectMemberPaymentRequest(input);
+    await refreshData();
+  };
+
   const createStandardAmountChangeRequest = async (input: {
     ruleKey: string;
     ruleLabel: string;
@@ -438,7 +511,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, standardAmountRules, standardAmountChangeRequests, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -449,6 +522,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
+    createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
     createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
