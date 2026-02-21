@@ -44,6 +44,25 @@
 
 ---
 
+## ℹ️ System Information
+
+- **App Name**: Social Org Manager (OrgHub)
+- **Package ID**: `com.soemyintswe.orghub`
+- **Current Release**: `1.1.13`
+- **Release Date**: `2026-02-21`
+- **Project Owner & Developer**: MR. SOE MYINT SWE
+- **Copyright**: Copyright (c) 2026 Social Org Manager. All rights reserved.
+
+---
+
+## 🔐 Repository Data Policy
+
+- This GitHub repository is maintained as a **clean app source template**.
+- Personal/organization runtime data (sync snapshot, backups, private exports) is **not tracked** in Git.
+- Local data is stored on device/server runtime only and should be backed up separately.
+
+---
+
 ## 📱 Installation & Usage
 
 To run this project locally, follow these steps:

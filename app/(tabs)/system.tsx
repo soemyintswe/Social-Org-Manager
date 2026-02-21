@@ -8,7 +8,7 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { clearAllData } from "@/lib/storage";
-import { checkForAppUpdate, getCurrentAppVersion } from "@/lib/app-update";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
 import AccessDenied from "@/components/AccessDenied";
 
 export default function SystemScreen() {
@@ -16,6 +16,14 @@ export default function SystemScreen() {
   const { refreshData } = useData() as any;
   const { can } = useAuth();
   const canManageSystem = can("system.manage");
+  const currentVersion = getCurrentAppVersion();
+  const currentBuild = getCurrentBuildNumber();
+  const systemInfo = {
+    releaseDate: "2026-02-21",
+    developer: "MR. SOE MYINT SWE",
+    packageId: "com.soemyintswe.orghub",
+    copyright: "Copyright (c) 2026 Social Org Manager. All rights reserved.",
+  };
 
   if (!canManageSystem) {
     return <AccessDenied showBack={false} />;
@@ -70,12 +78,12 @@ export default function SystemScreen() {
       return;
     }
     if (!info.hasUpdate) {
-      Alert.alert("Update Check", `အသစ်မရှိသေးပါ။\nCurrent Version: ${getCurrentAppVersion()}`);
+      Alert.alert("Update Check", `အသစ်မရှိသေးပါ။\nCurrent Version: ${currentVersion}`);
       return;
     }
     Alert.alert(
       "Update Available",
-      `Current: ${getCurrentAppVersion()}\nLatest: ${info.latestVersion}\n\n${info.notes || ""}`,
+      `Current: ${currentVersion}\nLatest: ${info.latestVersion}\n\n${info.notes || ""}`,
       [
         { text: "Later", style: "cancel" },
         {
@@ -146,15 +154,31 @@ export default function SystemScreen() {
         <Text style={styles.sectionHeader}>System Information</Text>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>App Version</Text>
-          <Text style={styles.infoValue}>{getCurrentAppVersion()}</Text>
+          <Text style={styles.infoValue}>{currentVersion}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Build Number</Text>
+          <Text style={styles.infoValue}>{currentBuild || "-"}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Release Date</Text>
+          <Text style={styles.infoValue}>{systemInfo.releaseDate}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Developer</Text>
-          <Text style={styles.infoValue}>MR. SOE MYINT SWE</Text>
+          <Text style={styles.infoValue}>{systemInfo.developer}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Package ID</Text>
+          <Text style={styles.infoValue}>{systemInfo.packageId}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Technology</Text>
           <Text style={styles.infoValue}>React Native / Expo / Gemini AI</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Copyright</Text>
+          <Text style={styles.infoValue}>{systemInfo.copyright}</Text>
         </View>
       </View>
 

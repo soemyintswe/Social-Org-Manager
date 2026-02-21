@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import * as Application from "expo-application";
 import { getAccountSettings } from "@/lib/storage";
 
 export type AppUpdateInfo = {
@@ -35,9 +36,18 @@ export function compareVersion(left: string, right: string): number {
 
 export function getCurrentAppVersion(): string {
   return (
+    String((Application as any).nativeApplicationVersion || "") ||
     String((Constants as any).nativeAppVersion || "") ||
     String((Constants as any).expoConfig?.version || "") ||
     "0.0.0"
+  );
+}
+
+export function getCurrentBuildNumber(): string {
+  return (
+    String((Application as any).nativeBuildVersion || "") ||
+    String((Constants as any).nativeBuildVersion || "") ||
+    ""
   );
 }
 
@@ -106,4 +116,3 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     };
   }
 }
-

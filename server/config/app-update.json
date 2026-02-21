@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.12",
+  "latestVersion": "1.1.13",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.12-202602220140.apk?raw=1",
-  "notes": "Version 1.1.12: improved in-app updater on Android with foreground/interval checks and direct APK download + installer prompt instead of only opening GitHub page.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.13-202602220214.apk?raw=1",
+  "notes": "Version 1.1.13: fixed app version detection (Current Version) using native app version/build, improved updater reliability, added expanded system information, and cleaned tracked backup data from repository.",
   "force": false,
-  "publishedAt": "2026-02-21T18:40:00Z"
+  "publishedAt": "2026-02-21T19:14:00Z"
 }
