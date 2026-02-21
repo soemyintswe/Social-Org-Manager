@@ -62,6 +62,7 @@ const BACKUP_EXCLUDED_KEYS = new Set<string>([
   "@last_birthday_notification",
   "@app_update_last_checked_at",
   "@app_update_skipped_version",
+  "@orghub_cloud_sync_last_remote_updated_at",
 ]);
 
 function isSharedBackupKey(key: string): boolean {
@@ -85,6 +86,7 @@ async function getAllSharedBackupKeys(): Promise<string[]> {
 }
 
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
+const CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY = "@orghub_cloud_sync_last_remote_updated_at";
 const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || "http://192.168.99.9:5000");
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
@@ -1274,6 +1276,12 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     asOfDate: new Date().toISOString(),
     syncServerUrl: DEFAULT_SYNC_SERVER_URL,
     syncEnabled: true,
+    cloudSyncEnabled: false,
+    cloudSyncProvider: "google_drive_apps_script",
+    cloudSyncEndpoint: "",
+    cloudSyncApiKey: "",
+    cloudSyncGoogleAccountEmail: "",
+    cloudSyncFolderName: "OrgHub Sync",
     receivingBankName: "",
     receivingBankAccountNumber: "",
     receivingBankAccountName: "",
@@ -1295,6 +1303,30 @@ function normalizeSyncServerUrl(raw: string): string {
   if (!trimmed) return "";
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   return withProtocol.replace(/\/+$/, "");
+}
+
+function normalizeCloudSyncEndpoint(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+async function resolveCloudSyncConfig(): Promise<{
+  enabled: boolean;
+  endpoint: string;
+  apiKey: string;
+  provider: string;
+  accountEmail: string;
+  folderName: string;
+}> {
+  const settings = await getAccountSettings();
+  const endpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+  const apiKey = String(settings.cloudSyncApiKey || "").trim();
+  const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
+  const accountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
+  const folderName = String(settings.cloudSyncFolderName || "OrgHub Sync").trim() || "OrgHub Sync";
+  const enabled = settings.cloudSyncEnabled === true && !!endpoint;
+  return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
 }
 
 function parseImageDataUrl(value: string): { mime: string; base64: string } | null {
@@ -1409,6 +1441,35 @@ export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string;
   }
 }
 
+export type CloudSyncResult = {
+  ok: boolean;
+  changed?: boolean;
+  reason?: string;
+  status?: number;
+  endpoint?: string;
+};
+
+export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
+  try {
+    const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
+    if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
+    const url = `${endpoint}?action=health`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, provider, accountEmail, folderName }),
+      },
+      15000
+    );
+    if (!res.ok) return { ok: false, reason: "cloud_health_http_error", status: res.status, endpoint };
+    return { ok: true, status: res.status, endpoint };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "cloud_health_failed") };
+  }
+}
+
 export type LanSyncResult = {
   ok: boolean;
   changed?: boolean;
@@ -1437,6 +1498,40 @@ export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult>
     return { ok: true, changed: true, reason: "pushed", status: res.status, url };
   } catch (e: any) {
     return { ok: false, reason: String(e?.message || "push_failed") };
+  }
+}
+
+export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncResult> {
+  try {
+    const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
+    if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
+    const raw = await exportData();
+    const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const payload = {
+      action: "pushSnapshot",
+      apiKey,
+      provider,
+      accountEmail,
+      folderName,
+      snapshot: {
+        updatedAt: new Date().toISOString(),
+        source: "mobile_cloud_sync",
+        data,
+      },
+    };
+    const res = await fetchWithTimeout(
+      endpoint,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+      30000
+    );
+    if (!res.ok) return { ok: false, reason: "cloud_push_http_error", status: res.status, endpoint };
+    return { ok: true, changed: true, reason: "cloud_pushed", status: res.status, endpoint };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "cloud_push_failed") };
   }
 }
 
@@ -1470,6 +1565,62 @@ export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
   }
 }
 
+export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResult> {
+  try {
+    const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
+    if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
+    const res = await fetchWithTimeout(
+      endpoint,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "pullSnapshot",
+          apiKey,
+          provider,
+          accountEmail,
+          folderName,
+        }),
+      },
+      30000
+    );
+    if (res.status === 404) {
+      return { ok: true, changed: false, reason: "cloud_snapshot_not_found", status: res.status, endpoint };
+    }
+    if (!res.ok) return { ok: false, reason: "cloud_pull_http_error", status: res.status, endpoint };
+
+    const payload = (await res.json()) as {
+      ok?: boolean;
+      snapshot?: { updatedAt?: string; data?: Record<string, string> };
+      updatedAt?: string;
+      data?: Record<string, string>;
+      reason?: string;
+    };
+
+    const snapshot = payload?.snapshot || ({ updatedAt: payload?.updatedAt, data: payload?.data } as any);
+    if (!snapshot || !snapshot.data || typeof snapshot.data !== "object") {
+      if (payload?.ok === false && payload?.reason === "snapshot_not_found") {
+        return { ok: true, changed: false, reason: "cloud_snapshot_not_found", endpoint };
+      }
+      return { ok: false, reason: "cloud_invalid_snapshot_payload", endpoint };
+    }
+
+    const incomingUpdatedAt = String(snapshot.updatedAt || "");
+    const lastApplied = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY)) || "");
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
+      return { ok: true, changed: false, reason: "already_applied", endpoint };
+    }
+
+    const merged = await mergeData(JSON.stringify(snapshot.data));
+    if (incomingUpdatedAt) {
+      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
+    }
+    return { ok: true, changed: merged, reason: merged ? "cloud_pulled_applied" : "cloud_pulled_no_change", endpoint };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "cloud_pull_failed") };
+  }
+}
+
 export async function pushLanSnapshotFromLocal(): Promise<boolean> {
   const result = await pushLanSnapshotFromLocalDetailed();
   return result.ok;
@@ -1477,6 +1628,16 @@ export async function pushLanSnapshotFromLocal(): Promise<boolean> {
 
 export async function pullLanSnapshotToLocal(): Promise<boolean> {
   const result = await pullLanSnapshotToLocalDetailed();
+  return result.ok && !!result.changed;
+}
+
+export async function pushCloudSnapshotFromLocal(): Promise<boolean> {
+  const result = await pushCloudSnapshotFromLocalDetailed();
+  return result.ok;
+}
+
+export async function pullCloudSnapshotToLocal(): Promise<boolean> {
+  const result = await pullCloudSnapshotToLocalDetailed();
   return result.ok && !!result.changed;
 }
 

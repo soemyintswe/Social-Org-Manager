@@ -48,7 +48,7 @@
 
 - **App Name**: Social Org Manager (OrgHub)
 - **Package ID**: `com.soemyintswe.orghub`
-- **Current Release**: `1.1.13`
+- **Current Release**: `1.1.15`
 - **Release Date**: `2026-02-21`
 - **Project Owner & Developer**: MR. SOE MYINT SWE
 - **Copyright**: Copyright (c) 2026 Social Org Manager. All rights reserved.
@@ -90,6 +90,15 @@ To run this project locally, follow these steps:
     ```
     - Press `w` to run on Web Browser.
     - Scan the QR code with **Expo Go** to run on Android/iOS.
+
+---
+
+## ☁️ Google Drive Cloud Sync (MVP)
+
+- Cloud sync is available via Google Apps Script Web App endpoint.
+- Setup guide: `docs/google-drive-cloud-sync-mvp.md`
+- Script template: `docs/google-drive-cloud-sync-webapp.gs`
+- After setup, phones can sync without running LAN server on a computer.
 
 ---
 

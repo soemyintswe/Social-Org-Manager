@@ -19,8 +19,11 @@ import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { normalizeOrgPosition } from "@/lib/types";
 import {
+  checkCloudSyncHealth,
+  pullCloudSnapshotToLocalDetailed,
   checkLanSyncHealth,
   pullLanSnapshotToLocalDetailed,
+  pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
 } from "@/lib/storage";
 
@@ -48,6 +51,11 @@ export default function AccountSettingsScreen() {
   const [resettingPassword, setResettingPassword] = useState(false);
   const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
   const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(accountSettings.cloudSyncEnabled === true);
+  const [cloudSyncEndpoint, setCloudSyncEndpoint] = useState(accountSettings.cloudSyncEndpoint || "");
+  const [cloudSyncApiKey, setCloudSyncApiKey] = useState(accountSettings.cloudSyncApiKey || "");
+  const [cloudSyncGoogleAccountEmail, setCloudSyncGoogleAccountEmail] = useState(accountSettings.cloudSyncGoogleAccountEmail || "");
+  const [cloudSyncFolderName, setCloudSyncFolderName] = useState(accountSettings.cloudSyncFolderName || "OrgHub Sync");
   const [receivingBankName, setReceivingBankName] = useState(accountSettings.receivingBankName || "");
   const [receivingBankAccountNumber, setReceivingBankAccountNumber] = useState(accountSettings.receivingBankAccountNumber || "");
   const [receivingBankAccountName, setReceivingBankAccountName] = useState(accountSettings.receivingBankAccountName || "");
@@ -71,6 +79,11 @@ export default function AccountSettingsScreen() {
   React.useEffect(() => {
     setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
     setSyncEnabled(accountSettings.syncEnabled !== false);
+    setCloudSyncEnabled(accountSettings.cloudSyncEnabled === true);
+    setCloudSyncEndpoint(accountSettings.cloudSyncEndpoint || "");
+    setCloudSyncApiKey(accountSettings.cloudSyncApiKey || "");
+    setCloudSyncGoogleAccountEmail(accountSettings.cloudSyncGoogleAccountEmail || "");
+    setCloudSyncFolderName(accountSettings.cloudSyncFolderName || "OrgHub Sync");
     setReceivingBankName(accountSettings.receivingBankName || "");
     setReceivingBankAccountNumber(accountSettings.receivingBankAccountNumber || "");
     setReceivingBankAccountName(accountSettings.receivingBankAccountName || "");
@@ -83,6 +96,11 @@ export default function AccountSettingsScreen() {
   }, [
     accountSettings.syncServerUrl,
     accountSettings.syncEnabled,
+    accountSettings.cloudSyncEnabled,
+    accountSettings.cloudSyncEndpoint,
+    accountSettings.cloudSyncApiKey,
+    accountSettings.cloudSyncGoogleAccountEmail,
+    accountSettings.cloudSyncFolderName,
     accountSettings.receivingBankName,
     accountSettings.receivingBankAccountNumber,
     accountSettings.receivingBankAccountName,
@@ -133,6 +151,12 @@ export default function AccountSettingsScreen() {
         currency: accountSettings.currency || "MMK",
         syncServerUrl: normalizedUrl,
         syncEnabled,
+        cloudSyncEnabled,
+        cloudSyncProvider: "google_drive_apps_script",
+        cloudSyncEndpoint: cloudSyncEndpoint.trim(),
+        cloudSyncApiKey: cloudSyncApiKey.trim(),
+        cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
+        cloudSyncFolderName: cloudSyncFolderName.trim() || "OrgHub Sync",
         ...receiving,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -250,6 +274,12 @@ export default function AccountSettingsScreen() {
         currency: accountSettings.currency || "MMK",
         syncServerUrl: normalizedUrl,
         syncEnabled,
+        cloudSyncEnabled,
+        cloudSyncProvider: "google_drive_apps_script",
+        cloudSyncEndpoint: cloudSyncEndpoint.trim(),
+        cloudSyncApiKey: cloudSyncApiKey.trim(),
+        cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
+        cloudSyncFolderName: cloudSyncFolderName.trim() || "OrgHub Sync",
         ...receiving,
       });
       if (syncEnabled && normalizedUrl) {
@@ -259,27 +289,48 @@ export default function AccountSettingsScreen() {
             "Sync Error",
             `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${normalizedUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}\n\nComputer server run နေ/မနေ၊ Phone/Computer Wi-Fi တူ/မတူ၊ firewall ကို စစ်ပါ။`
           );
-          return;
         }        
       }
-      const pull = await pullLanSnapshotToLocalDetailed();
 
-      let pushLine = "Push: Skip";
-      if (!pull.ok) {
-        pushLine = "Push: Skip (pull fail)";
-      } else {
-        const push = await pushLanSnapshotFromLocalDetailed();
-        pushLine = push.ok
-          ? "Push: OK"
-          : `Push: Fail (${push.reason || "unknown"}${push.status ? `/${push.status}` : ""})`;
+      let cloudHealthLine = "Cloud: Disabled";
+      if (cloudSyncEnabled && cloudSyncEndpoint.trim()) {
+        const cloudHealth = await checkCloudSyncHealth();
+        cloudHealthLine = cloudHealth.ok
+          ? "Cloud Health: OK"
+          : `Cloud Health: Fail (${cloudHealth.reason || "unknown"}${cloudHealth.status ? `/${cloudHealth.status}` : ""})`;
       }
 
-      const pullLine = pull.ok
-        ? `Pull: ${pull.changed ? "OK" : `Skip (${pull.reason || "no_change"})`}`
-        : `Pull: Fail (${pull.reason || "unknown"}${pull.status ? `/${pull.status}` : ""})`;
+      const pullLan = await pullLanSnapshotToLocalDetailed();
+      const pullCloud = await pullCloudSnapshotToLocalDetailed();
+
+      const pushLan = await pushLanSnapshotFromLocalDetailed();
+      const pushCloud = await pushCloudSnapshotFromLocalDetailed();
+
+      const asSyncLine = (
+        prefix: string,
+        result: { ok: boolean; changed?: boolean; reason?: string; status?: number },
+        action: "pull" | "push"
+      ): string => {
+        if (String(result.reason || "").includes("disabled_or_empty")) {
+          return `${prefix}: Skip (disabled)`;
+        }
+        if (action === "pull") {
+          return result.ok
+            ? `${prefix}: ${result.changed ? "OK" : `Skip (${result.reason || "no_change"})`}`
+            : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
+        }
+        return result.ok
+          ? `${prefix}: OK`
+          : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
+      };
+
+      const lanPullLine = asSyncLine("LAN Pull", pullLan, "pull");
+      const lanPushLine = asSyncLine("LAN Push", pushLan, "push");
+      const cloudPullLine = asSyncLine("Cloud Pull", pullCloud, "pull");
+      const cloudPushLine = asSyncLine("Cloud Push", pushCloud, "push");
 
       await refreshData({ skipPull: true });
-      Alert.alert("Sync", `${pullLine}\n${pushLine}`);
+      Alert.alert("Sync", `${lanPullLine}\n${lanPushLine}\n${cloudPullLine}\n${cloudPushLine}\n${cloudHealthLine}`);
     } finally {
       setSyncing(false);
     }
@@ -316,7 +367,7 @@ export default function AccountSettingsScreen() {
           <View style={styles.storageTextContainer}>
             <Text style={styles.storageTitle}>Storage: {syncEnabled ? "Online + Offline (LAN Sync)" : "Offline (Local)"}</Text>
             <Text style={styles.storageDesc}>
-              LAN Sync URL သတ်မှတ်ပြီး Enable လုပ်ပါက Computer/Mobile တို့တွင် အချက်အလက်များ အလိုအလျောက်ညှိနှိုင်းသွားပါမည်။
+              LAN Sync သို့မဟုတ် Google Drive Cloud Sync ကို Enable လုပ်ပါက အချက်အလက်များ မျှဝေညှိနှိုင်းနိုင်ပါမည်။
             </Text>
           </View>
         </View>
@@ -338,6 +389,53 @@ export default function AccountSettingsScreen() {
           <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
             <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
           </Pressable>
+        </View>
+
+        <View style={styles.securityCard}>
+          <Text style={styles.sectionTitle}>Google Drive Cloud Sync (MVP)</Text>
+          <Text style={styles.sectionDesc}>
+            Computer မဖွင့်ဘဲ ဖုန်းများအချင်းချင်း Sync လုပ်ရန် Google Apps Script Web App URL ကိုထည့်ပါ။
+          </Text>
+          <Text style={styles.label}>Cloud Script URL</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncEndpoint}
+            onChangeText={setCloudSyncEndpoint}
+            placeholder="https://script.google.com/macros/s/.../exec"
+            autoCapitalize="none"
+          />
+          <Text style={styles.label}>Cloud API Key (Optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncApiKey}
+            onChangeText={setCloudSyncApiKey}
+            placeholder="Shared key between phones"
+            autoCapitalize="none"
+          />
+          <Text style={styles.label}>Google Drive Account (Optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncGoogleAccountEmail}
+            onChangeText={setCloudSyncGoogleAccountEmail}
+            placeholder="name@gmail.com"
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+          <Text style={styles.label}>Cloud Folder Name</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncFolderName}
+            onChangeText={setCloudSyncFolderName}
+            placeholder="OrgHub Sync"
+          />
+          <View style={styles.syncRow}>
+            <Pressable style={[styles.syncToggleBtn, cloudSyncEnabled && styles.syncToggleBtnActive]} onPress={() => setCloudSyncEnabled((v) => !v)}>
+              <Ionicons name={cloudSyncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={cloudSyncEnabled ? "#fff" : Colors.light.text} />
+              <Text style={[styles.syncToggleText, cloudSyncEnabled && styles.syncToggleTextActive]}>
+                {cloudSyncEnabled ? "Cloud Sync Enabled" : "Cloud Sync Disabled"}
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
         {canEditReceivingAccounts && (

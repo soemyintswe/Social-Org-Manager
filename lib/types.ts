@@ -102,6 +102,12 @@ export interface AccountSettings {
   asOfDate: string;
   syncServerUrl?: string;
   syncEnabled?: boolean;
+  cloudSyncEnabled?: boolean;
+  cloudSyncProvider?: "google_drive_apps_script";
+  cloudSyncEndpoint?: string;
+  cloudSyncApiKey?: string;
+  cloudSyncGoogleAccountEmail?: string;
+  cloudSyncFolderName?: string;
   receivingBankName?: string;
   receivingBankAccountNumber?: string;
   receivingBankAccountName?: string;

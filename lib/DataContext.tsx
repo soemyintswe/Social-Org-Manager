@@ -182,6 +182,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     asOfDate: new Date().toISOString(),
     syncServerUrl: "",
     syncEnabled: true,
+    cloudSyncEnabled: false,
+    cloudSyncProvider: "google_drive_apps_script",
+    cloudSyncEndpoint: "",
+    cloudSyncApiKey: "",
+    cloudSyncGoogleAccountEmail: "",
+    cloudSyncFolderName: "OrgHub Sync",
     receivingBankName: "",
     receivingBankAccountNumber: "",
     receivingBankAccountName: "",
@@ -199,10 +205,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const AUTO_PUSH_DEBOUNCE_MS = 350;
   const AUTO_PULL_INTERVAL_MS = 3000;
 
+  const pushAllSyncTargets = useCallback(async () => {
+    await Promise.allSettled([
+      store.pushLanSnapshotFromLocal(),
+      store.pushCloudSnapshotFromLocal(),
+    ]);
+  }, []);
+
+  const pullAllSyncTargets = useCallback(async (): Promise<boolean> => {
+    const [lanChanged, cloudChanged] = await Promise.allSettled([
+      store.pullLanSnapshotToLocal(),
+      store.pullCloudSnapshotToLocal(),
+    ]);
+    const changedFromLan = lanChanged.status === "fulfilled" && lanChanged.value === true;
+    const changedFromCloud = cloudChanged.status === "fulfilled" && cloudChanged.value === true;
+    return changedFromLan || changedFromCloud;
+  }, []);
+
   const refreshData = useCallback(async (options?: { skipPull?: boolean }) => {
     try {
       if (!options?.skipPull) {
-        await store.pullLanSnapshotToLocal();
+        await pullAllSyncTargets();
       } else {
         lastLocalMutationAtRef.current = Date.now();
       }
@@ -244,7 +267,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pullAllSyncTargets]);
 
   useEffect(() => {
     refreshData();
@@ -257,7 +280,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       return;
     }
     const timer = setTimeout(() => {
-      void store.pushLanSnapshotFromLocal();
+      void pushAllSyncTargets();
     }, AUTO_PUSH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [
@@ -277,6 +300,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     chatThreads,
     chatMessages,
     accountSettings,
+    pushAllSyncTargets,
   ]);
 
   useEffect(() => {
@@ -284,14 +308,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
       void (async () => {
         const elapsed = Date.now() - lastLocalMutationAtRef.current;
         if (elapsed < LOCAL_PULL_GUARD_MS) return;
-        const changed = await store.pullLanSnapshotToLocal();
+        const changed = await pullAllSyncTargets();
         if (changed) {
           await refreshData({ skipPull: true });
         }
       })();
     }, AUTO_PULL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [refreshData]);
+  }, [pullAllSyncTargets, refreshData]);
 
   // --- Actions ---
   const addMember = async (m: Omit<Member, "id">) => {
@@ -314,7 +338,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     lastLocalMutationAtRef.current = Date.now();
     const newEvent = await store.addEvent(e);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
+    void pushAllSyncTargets();
     return newEvent;
   };
 
@@ -322,14 +346,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     lastLocalMutationAtRef.current = Date.now();
     await store.updateEvent(id, u);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
+    void pushAllSyncTargets();
   };
 
   const removeEvent = async (id: string) => {
     lastLocalMutationAtRef.current = Date.now();
     await store.deleteEvent(id);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
+    void pushAllSyncTargets();
   };
 
   const addGroup = async (g: Omit<Group, "id">) => {
@@ -544,7 +568,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     lastLocalMutationAtRef.current = Date.now();
     const thread = await store.createDirectChatThread(input);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
+    void pushAllSyncTargets();
     return thread;
   };
 
@@ -552,7 +576,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     lastLocalMutationAtRef.current = Date.now();
     const thread = await store.createGroupChatThread(input);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
+    void pushAllSyncTargets();
     return thread;
   };
 
@@ -572,7 +596,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const message = await store.sendChatMessage(input);
     await refreshData({ skipPull: true });
     // Chat UX: push immediately so other devices can see the message with low delay.
-    await store.pushLanSnapshotFromLocal();
+    await pushAllSyncTargets();
     return message;
   };
 
@@ -580,8 +604,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     lastLocalMutationAtRef.current = Date.now();
     await store.markChatThreadRead(threadId, userId);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
-  }, [refreshData]);
+    void pushAllSyncTargets();
+  }, [pushAllSyncTargets, refreshData]);
 
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
