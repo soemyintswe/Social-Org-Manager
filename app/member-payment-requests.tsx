@@ -42,9 +42,22 @@ const REQUEST_KIND_OPTIONS: MemberPaymentRequestKind[] = [
 
 const WALLET_OPTIONS: MobileWalletProvider[] = ["kbz_pay", "wave_pay", "aya_pay"];
 const WALLET_APP_URLS: Record<MobileWalletProvider, string[]> = {
-  kbz_pay: ["kbzpay://", "intent://#Intent;package=com.kbzbank.kpaycustomer;end"],
-  wave_pay: ["wavepay://", "intent://#Intent;package=mm.com.wavemoney.wavepay;end"],
-  aya_pay: ["ayapay://", "intent://#Intent;package=com.ayapay.wallet;end"],
+  kbz_pay: [
+    "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.kbzbank.kpaycustomer;end",
+    "intent://#Intent;package=com.kbzbank.kpaycustomer;scheme=kbzpay;end",
+    "kbzpay://",
+    "kpay://",
+  ],
+  wave_pay: [
+    "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=mm.com.wavemoney.wavepay;end",
+    "intent://#Intent;package=mm.com.wavemoney.wavepay;scheme=wavepay;end",
+    "wavepay://",
+  ],
+  aya_pay: [
+    "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.ayapay.wallet;end",
+    "intent://#Intent;package=com.ayapay.wallet;scheme=ayapay;end",
+    "ayapay://",
+  ],
 };
 
 export default function MemberPaymentRequestsScreen() {
