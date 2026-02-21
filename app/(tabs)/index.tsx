@@ -19,6 +19,7 @@ import { router, useFocusEffect } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { isCommitteePosition } from "@/lib/access-control";
 import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory, type MemberPaymentRequestKind } from "@/lib/types";
 import {
   checkLanSyncHealth,
@@ -110,6 +111,10 @@ export default function DashboardScreen() {
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canApproveMemberChanges = can("members.approve_changes");
   const canProposeMemberChanges = can("members.propose_changes");
+  const canViewOrgFinanceSummary =
+    currentUser?.systemRole === "admin" ||
+    isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
+  const hasPersonalFinanceProfile = Boolean(currentUser?.memberId);
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
     router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
   };
@@ -190,6 +195,13 @@ export default function DashboardScreen() {
     .slice(0, 5);
 
   const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
+  const personalLoanOutstanding = useMemo(() => {
+    const myMemberId = String(currentUser?.memberId || "");
+    if (!myMemberId) return 0;
+    return (loans || [])
+      .filter((loan: any) => String(loan.memberId || "") === myMemberId)
+      .reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
+  }, [loans, getLoanOutstanding, currentUser?.memberId]);
 
   const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
     const name = String(rawName || "").trim();
@@ -267,6 +279,19 @@ export default function DashboardScreen() {
   }, [transactions, accountSettings]);
 
   const eventCount = Array.isArray(events) ? events.length : 0;
+  const personalFinanceStats = useMemo(() => {
+    const myMemberId = String(currentUser?.memberId || "");
+    if (!myMemberId) return { income: 0, expense: 0, net: 0 };
+    const rows = (transactions || []).filter((t: any) => String(t.memberId || "") === myMemberId);
+    const income = rows
+      .filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
+      .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+    const expense = rows
+      .filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
+      .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+    return { income, expense, net: income - expense };
+  }, [transactions, currentUser?.memberId]);
+
   const unreadEventCount = useMemo(() => {
     if (!currentUser?.id) return 0;
     return (events || []).filter((item: any) => !item?.readBy?.[currentUser.id]).length;
@@ -669,22 +694,58 @@ export default function DashboardScreen() {
           color="#8B5CF6" 
           onPress={() => router.push("/members" as any)} 
         />
-        <StatCard 
-          icon="wallet" 
-          label="စုစုပေါင်းလက်ကျန်" 
-          value={
-            <View>
-              <View style={{ marginBottom: 4 }}>
-                <Text style={styles.subBalanceText}>လက်ဝယ်: {formatCurrency(balances.cash)}</Text>
-                <Text style={styles.subBalanceText}>ဘဏ်: {formatCurrency(balances.bank)}</Text>
+        {canViewOrgFinanceSummary && (
+          <StatCard
+            icon="wallet"
+            label="စုစုပေါင်းလက်ကျန်"
+            value={
+              <View>
+                <View style={{ marginBottom: 4 }}>
+                  <Text style={styles.subBalanceText}>လက်ဝယ်: {formatCurrency(balances.cash)}</Text>
+                  <Text style={styles.subBalanceText}>ဘဏ်: {formatCurrency(balances.bank)}</Text>
+                </View>
+                <Text style={styles.statValue}>{formatCurrency(balances.total)}</Text>
               </View>
-              <Text style={styles.statValue}>{formatCurrency(balances.total)}</Text>
-            </View>
-          } 
-          color="#10B981" 
-          onPress={() => router.push("/finance" as any)} 
-        />
-        <StatCard icon="cash" label="ချေးငွေလက်ကျန်" value={formatCurrency(totalLoanOutstanding)} color="#F59E0B" onPress={() => router.push("/loans" as any)} />
+            }
+            color="#10B981"
+            onPress={() => router.push("/finance" as any)}
+          />
+        )}
+        {(!canViewOrgFinanceSummary || hasPersonalFinanceProfile) && (
+          <StatCard
+            icon="wallet"
+            label="ကိုယ်ပိုင်ငွေစာရင်း"
+            value={
+              <View>
+                <View style={{ marginBottom: 4 }}>
+                  <Text style={styles.subBalanceText}>အသင်းသို့ပေးသွင်းငွေများ: {formatCurrency(personalFinanceStats.income)}</Text>
+                  <Text style={styles.subBalanceText}>အသင်းမှထုတ်ယူငွေ: {formatCurrency(personalFinanceStats.expense)}</Text>
+                </View>
+                <Text style={styles.statValue}>စုစုပေါင်းကွာဟချက်: {formatCurrency(personalFinanceStats.net)}</Text>
+              </View>
+            }
+            color="#10B981"
+            onPress={() => router.push("/finance" as any)}
+          />
+        )}
+        {canViewOrgFinanceSummary && (
+          <StatCard
+            icon="cash"
+            label="ချေးငွေလက်ကျန် (စုစုပေါင်း)"
+            value={formatCurrency(totalLoanOutstanding)}
+            color="#F59E0B"
+            onPress={() => router.push("/loans" as any)}
+          />
+        )}
+        {(!canViewOrgFinanceSummary || hasPersonalFinanceProfile) && (
+          <StatCard
+            icon="cash"
+            label="ချေးငွေလက်ကျန် (ကိုယ်ပိုင်)"
+            value={formatCurrency(personalLoanOutstanding)}
+            color="#F59E0B"
+            onPress={() => router.push("/loans" as any)}
+          />
+        )}
         <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
       </View>
 

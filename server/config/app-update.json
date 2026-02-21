@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.10",
+  "latestVersion": "1.1.11",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.10-202602220059.apk?raw=1",
-  "notes": "Version 1.1.10: fixed Messages composer layout and Platform crash on web, added inactivity auto-logout, and skipped in-app APK update checks on browser usage.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.11-202602220127.apk?raw=1",
+  "notes": "Version 1.1.11: improved chat sync responsiveness and updated Dashboard to show committee-level totals separately from personal finance/loan summaries.",
   "force": false,
-  "publishedAt": "2026-02-21T17:59:00Z"
+  "publishedAt": "2026-02-21T18:27:00Z"
 }
