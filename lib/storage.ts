@@ -21,6 +21,8 @@ import {
   StandardAmountChangeRequest,
   DEFAULT_STANDARD_AMOUNT_RULES,
   DisbursementMethod,
+  ChatThread,
+  ChatMessage,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 
@@ -39,6 +41,8 @@ const KEYS = {
   MEMBER_PAYMENT_REQUESTS: "@orghub_member_payment_requests",
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
+  CHAT_THREADS: "@orghub_chat_threads",
+  CHAT_MESSAGES: "@orghub_chat_messages",
 };
 
 const EXTRA_SHARED_KEYS = [
@@ -64,6 +68,8 @@ function isSharedBackupKey(key: string): boolean {
   if (!key) return false;
   if (BACKUP_EXCLUDED_KEYS.has(key)) return false;
   if (key.startsWith("@event_notification_seen_ids_")) return false;
+  if (key.startsWith("@comment_notification_seen_ids_")) return false;
+  if (key.startsWith("@chat_notification_seen_ids_")) return false;
   if (Object.values(KEYS).includes(key as any)) return true;
   if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
   return false;
@@ -1004,6 +1010,145 @@ export async function deleteEvent(id: string) {
   await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify(events.filter(e => e.id !== id)));
 }
 
+// --- Chat ---
+export const getChatThreads = () => safeGet<ChatThread[]>(KEYS.CHAT_THREADS, []);
+export const getChatMessages = () => safeGet<ChatMessage[]>(KEYS.CHAT_MESSAGES, []);
+
+export async function saveChatThreads(data: ChatThread[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.CHAT_THREADS, JSON.stringify(data));
+}
+
+export async function saveChatMessages(data: ChatMessage[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.CHAT_MESSAGES, JSON.stringify(data));
+}
+
+function normalizeUserIdList(ids: string[]): string[] {
+  return Array.from(
+    new Set(
+      (ids || [])
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+    )
+  ).sort();
+}
+
+export async function createDirectChatThread(input: {
+  userAId: string;
+  userBId: string;
+  createdByUserId: string;
+}): Promise<ChatThread> {
+  const [a, b] = normalizeUserIdList([input.userAId, input.userBId]);
+  if (!a || !b) throw new Error("invalid_participants");
+  const threads = await getChatThreads();
+  const existing = threads.find((row) => {
+    if (row.type !== "direct") return false;
+    const ids = normalizeUserIdList(row.participantUserIds || []);
+    return ids.length === 2 && ids[0] === a && ids[1] === b;
+  });
+  if (existing) return existing;
+
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id: generateId(),
+    type: "direct",
+    participantUserIds: [a, b],
+    createdByUserId: input.createdByUserId,
+    createdAt: now,
+    updatedAt: now,
+    lastReadAtBy: {},
+  };
+  await saveChatThreads([thread, ...threads]);
+  return thread;
+}
+
+export async function createGroupChatThread(input: {
+  name: string;
+  participantUserIds: string[];
+  createdByUserId: string;
+}): Promise<ChatThread> {
+  const participants = normalizeUserIdList(input.participantUserIds);
+  if (!input.name.trim() || participants.length < 2) {
+    throw new Error("invalid_group");
+  }
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id: generateId(),
+    type: "group",
+    name: input.name.trim(),
+    participantUserIds: participants,
+    createdByUserId: input.createdByUserId,
+    createdAt: now,
+    updatedAt: now,
+    lastReadAtBy: {},
+  };
+  const threads = await getChatThreads();
+  await saveChatThreads([thread, ...threads]);
+  return thread;
+}
+
+export async function sendChatMessage(input: {
+  threadId: string;
+  senderUserId: string;
+  senderMemberId?: string;
+  senderDisplayName?: string;
+  text?: string;
+  image?: string;
+  replyToMessageId?: string;
+  replyToUserId?: string;
+  replyToDisplayName?: string;
+  mentionUserIds?: string[];
+}): Promise<ChatMessage> {
+  const text = String(input.text || "").trim();
+  const image = String(input.image || "").trim();
+  if (!text && !image) throw new Error("empty_message");
+
+  const [threads, messages] = await Promise.all([getChatThreads(), getChatMessages()]);
+  const idx = threads.findIndex((row) => row.id === input.threadId);
+  if (idx === -1) throw new Error("thread_not_found");
+  if (!threads[idx].participantUserIds.includes(input.senderUserId)) throw new Error("sender_not_in_thread");
+
+  const now = new Date().toISOString();
+  const message: ChatMessage = {
+    id: generateId(),
+    threadId: input.threadId,
+    senderUserId: input.senderUserId,
+    senderMemberId: input.senderMemberId,
+    senderDisplayName: input.senderDisplayName,
+    text: text || undefined,
+    image: image || undefined,
+    createdAt: now,
+    replyToMessageId: input.replyToMessageId,
+    replyToUserId: input.replyToUserId,
+    replyToDisplayName: input.replyToDisplayName,
+    mentionUserIds: (input.mentionUserIds || []).map((v) => String(v || "").trim()).filter(Boolean),
+  };
+  await saveChatMessages([...messages, message]);
+
+  threads[idx] = {
+    ...threads[idx],
+    lastMessageAt: now,
+    lastMessageText: message.text || (message.image ? "[Image]" : ""),
+    updatedAt: now,
+  };
+  await saveChatThreads(threads);
+  return message;
+}
+
+export async function markChatThreadRead(threadId: string, userId: string): Promise<void> {
+  if (!threadId || !userId) return;
+  const threads = await getChatThreads();
+  const idx = threads.findIndex((row) => row.id === threadId);
+  if (idx === -1) return;
+  const prevReadAt = String(threads[idx].lastReadAtBy?.[userId] || "");
+  const lastMessageAt = String(threads[idx].lastMessageAt || "");
+  if (prevReadAt && (!lastMessageAt || new Date(prevReadAt).getTime() >= new Date(lastMessageAt).getTime())) {
+    return;
+  }
+  const nextMap = { ...(threads[idx].lastReadAtBy || {}), [userId]: new Date().toISOString() };
+  threads[idx] = { ...threads[idx], lastReadAtBy: nextMap, updatedAt: new Date().toISOString() };
+  await saveChatThreads(threads);
+}
+
 // --- Groups ---
 export const getGroups = () => safeGet<Group[]>(KEYS.GROUPS, []);
 export const saveGroups = (data: Group[]) => AsyncStorage.setItem(KEYS.GROUPS, JSON.stringify(data));
@@ -1522,8 +1667,11 @@ export async function mergeData(jsonString: string): Promise<boolean> {
         const existingSettings = parseJsonSafe<Record<string, unknown>>(existingRaw, {});
         const incomingSettings = parseJsonSafe<Record<string, unknown>>(incomingRaw, {});
         const mergedSettings = { ...existingSettings, ...incomingSettings };
-        await AsyncStorage.setItem(key, JSON.stringify(mergedSettings));
-        changed = true;
+        const mergedSerialized = JSON.stringify(mergedSettings);
+        if (String(existingRaw || "") !== mergedSerialized) {
+          await AsyncStorage.setItem(key, mergedSerialized);
+          changed = true;
+        }
         continue;
       }
 
@@ -1531,20 +1679,22 @@ export async function mergeData(jsonString: string): Promise<boolean> {
         const existingPasswords = parseJsonSafe<Record<string, string>>(existingRaw, {});
         const incomingPasswords = parseJsonSafe<Record<string, string>>(incomingRaw, {});
         const mergedPasswords = { ...existingPasswords, ...incomingPasswords };
-        await AsyncStorage.setItem(key, JSON.stringify(mergedPasswords));
-        changed = true;
+        const mergedSerialized = JSON.stringify(mergedPasswords);
+        if (String(existingRaw || "") !== mergedSerialized) {
+          await AsyncStorage.setItem(key, mergedSerialized);
+          changed = true;
+        }
         continue;
       }
 
       const existingParsed = parseJsonSafe<unknown>(existingRaw, existingRaw || null);
       const incomingParsed = parseJsonSafe<unknown>(incomingRaw, incomingRaw);
       const mergedValue = mergeStorageValues(existingParsed, incomingParsed);
-      if (typeof mergedValue === "string") {
-        await AsyncStorage.setItem(key, mergedValue);
-      } else {
-        await AsyncStorage.setItem(key, JSON.stringify(mergedValue));
+      const mergedSerialized = typeof mergedValue === "string" ? mergedValue : JSON.stringify(mergedValue);
+      if (String(existingRaw || "") !== mergedSerialized) {
+        await AsyncStorage.setItem(key, mergedSerialized);
+        changed = true;
       }
-      changed = true;
     }
 
     return changed;

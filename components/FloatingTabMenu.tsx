@@ -35,6 +35,12 @@ export default function FloatingTabMenu() {
         enabled: can("events.view_public"),
       },
       {
+        name: "Messages",
+        icon: "chatbubbles-outline",
+        route: "/messages",
+        enabled: true,
+      },
+      {
         name: "ချေးငွေများ",
         icon: "cash-outline",
         route: "/loans",

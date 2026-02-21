@@ -30,6 +30,7 @@ export default function AccountSettingsScreen() {
   const { accountSettings, updateAccountSettings, refreshData } = useData();
   const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
+  const canEditReceivingAccounts = String(currentUser?.orgPosition || "") === "treasurer";
   
   const [saving, setSaving] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -92,17 +93,9 @@ export default function AccountSettingsScreen() {
     accountSettings.receivingAyaPayAccountName,
   ]);
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
-      await updateAccountSettings({
-        ...accountSettings,
-        openingBalanceCash: accountSettings.openingBalanceCash,
-        openingBalanceBank: accountSettings.openingBalanceBank,
-        currency: accountSettings.currency || "MMK",
-        syncServerUrl: normalizedUrl,
-        syncEnabled,
+  const getReceivingValuesForSave = () => {
+    if (canEditReceivingAccounts) {
+      return {
         receivingBankName: receivingBankName.trim(),
         receivingBankAccountNumber: receivingBankAccountNumber.trim(),
         receivingBankAccountName: receivingBankAccountName.trim(),
@@ -112,6 +105,34 @@ export default function AccountSettingsScreen() {
         receivingWavePayAccountName: receivingWavePayAccountName.trim(),
         receivingAyaPayPhone: receivingAyaPayPhone.trim(),
         receivingAyaPayAccountName: receivingAyaPayAccountName.trim(),
+      };
+    }
+    return {
+      receivingBankName: accountSettings.receivingBankName || "",
+      receivingBankAccountNumber: accountSettings.receivingBankAccountNumber || "",
+      receivingBankAccountName: accountSettings.receivingBankAccountName || "",
+      receivingKbzPayPhone: accountSettings.receivingKbzPayPhone || "",
+      receivingKbzPayAccountName: accountSettings.receivingKbzPayAccountName || "",
+      receivingWavePayPhone: accountSettings.receivingWavePayPhone || "",
+      receivingWavePayAccountName: accountSettings.receivingWavePayAccountName || "",
+      receivingAyaPayPhone: accountSettings.receivingAyaPayPhone || "",
+      receivingAyaPayAccountName: accountSettings.receivingAyaPayAccountName || "",
+    };
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+      const receiving = getReceivingValuesForSave();
+      await updateAccountSettings({
+        ...accountSettings,
+        openingBalanceCash: accountSettings.openingBalanceCash,
+        openingBalanceBank: accountSettings.openingBalanceBank,
+        currency: accountSettings.currency || "MMK",
+        syncServerUrl: normalizedUrl,
+        syncEnabled,
+        ...receiving,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
@@ -220,6 +241,7 @@ export default function AccountSettingsScreen() {
     setSyncing(true);
     try {
       const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+      const receiving = getReceivingValuesForSave();
       await updateAccountSettings({
         ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
@@ -227,15 +249,7 @@ export default function AccountSettingsScreen() {
         currency: accountSettings.currency || "MMK",
         syncServerUrl: normalizedUrl,
         syncEnabled,
-        receivingBankName: receivingBankName.trim(),
-        receivingBankAccountNumber: receivingBankAccountNumber.trim(),
-        receivingBankAccountName: receivingBankAccountName.trim(),
-        receivingKbzPayPhone: receivingKbzPayPhone.trim(),
-        receivingKbzPayAccountName: receivingKbzPayAccountName.trim(),
-        receivingWavePayPhone: receivingWavePayPhone.trim(),
-        receivingWavePayAccountName: receivingWavePayAccountName.trim(),
-        receivingAyaPayPhone: receivingAyaPayPhone.trim(),
-        receivingAyaPayAccountName: receivingAyaPayAccountName.trim(),
+        ...receiving,
       });
       if (syncEnabled && normalizedUrl) {
         const health = await checkLanSyncHealth();
@@ -330,28 +344,31 @@ export default function AccountSettingsScreen() {
           <Text style={styles.sectionDesc}>
             ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank နှင့် Mobile Wallet အကောင့်များကို သတ်မှတ်ပါ။
           </Text>
+          {!canEditReceivingAccounts ? (
+            <Text style={styles.helperText}>Read-only: ဘဏ္ဍာရေးမှူး account ဖြင့်သာ ပြင်ဆင်နိုင်ပါသည်။</Text>
+          ) : null}
 
           <Text style={styles.label}>Bank Name</Text>
-          <TextInput style={styles.input} value={receivingBankName} onChangeText={setReceivingBankName} placeholder="ဥပမာ - KBZ Bank" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingBankName} onChangeText={setReceivingBankName} placeholder="ဥပမာ - KBZ Bank" editable={canEditReceivingAccounts} />
           <Text style={styles.label}>Bank Account Number</Text>
-          <TextInput style={styles.input} value={receivingBankAccountNumber} onChangeText={setReceivingBankAccountNumber} placeholder="Account Number" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingBankAccountNumber} onChangeText={setReceivingBankAccountNumber} placeholder="Account Number" editable={canEditReceivingAccounts} />
           <Text style={styles.label}>Bank Account Name</Text>
-          <TextInput style={styles.input} value={receivingBankAccountName} onChangeText={setReceivingBankAccountName} placeholder="Account Name" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingBankAccountName} onChangeText={setReceivingBankAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
 
           <Text style={styles.label}>KBZ Pay Phone</Text>
-          <TextInput style={styles.input} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" editable={canEditReceivingAccounts} />
           <Text style={styles.label}>KBZ Pay Account Name</Text>
-          <TextInput style={styles.input} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
 
           <Text style={styles.label}>Wave Pay Phone</Text>
-          <TextInput style={styles.input} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" editable={canEditReceivingAccounts} />
           <Text style={styles.label}>Wave Pay Account Name</Text>
-          <TextInput style={styles.input} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
 
           <Text style={styles.label}>AYA Pay Phone</Text>
-          <TextInput style={styles.input} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" editable={canEditReceivingAccounts} />
           <Text style={styles.label}>AYA Pay Account Name</Text>
-          <TextInput style={styles.input} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" />
+          <TextInput style={[styles.input, !canEditReceivingAccounts && styles.inputDisabled]} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" editable={canEditReceivingAccounts} />
         </View>
 
         {canManageSystem && (

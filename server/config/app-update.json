@@ -1,8 +1,8 @@
 ﻿{
-    "latestVersion":  "1.1.7",
+    "latestVersion":  "1.1.8",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.7-202602212143.apk?raw=1",
-    "notes":  "Version 1.1.7: comment sync race fix, comment reply/tag support with notifications, full-name login, and Sync Now moved to top.",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.8-202602212304.apk?raw=1",
+    "notes":  "Version 1.1.8: treasurer-only editing for payment receiving accounts; others are read-only (view only).",
     "force":  false,
-    "publishedAt":  "2026-02-21T14:43:00Z"
+    "publishedAt":  "2026-02-21T16:04:00Z"
 }

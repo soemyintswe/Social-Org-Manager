@@ -47,6 +47,36 @@ export interface OrgEvent {
   createdByMemberId?: string;
 }
 
+export type ChatThreadType = "direct" | "group";
+
+export interface ChatThread {
+  id: string;
+  type: ChatThreadType;
+  name?: string;
+  participantUserIds: string[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt?: string;
+  lastMessageText?: string;
+  lastReadAtBy?: Record<string, string>;
+}
+
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  senderUserId: string;
+  senderMemberId?: string;
+  senderDisplayName?: string;
+  text?: string;
+  image?: string;
+  createdAt: string;
+  replyToMessageId?: string;
+  replyToUserId?: string;
+  replyToDisplayName?: string;
+  mentionUserIds?: string[];
+}
+
 export interface Group {
   id: string;
   name: string;

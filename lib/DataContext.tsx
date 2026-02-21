@@ -24,6 +24,8 @@ import type {
   StandardAmountRule,
   StandardAmountChangeRequest,
   DisbursementMethod,
+  ChatThread,
+  ChatMessage,
 } from "./types";
 import * as store from "./storage";
 
@@ -40,6 +42,8 @@ interface DataContextValue {
   memberPaymentRequests: MemberPaymentRequest[];
   standardAmountRules: StandardAmountRule[];
   standardAmountChangeRequests: StandardAmountChangeRequest[];
+  chatThreads: ChatThread[];
+  chatMessages: ChatMessage[];
   accountSettings: AccountSettings;
   loading: boolean;
   refreshData: (options?: { skipPull?: boolean }) => Promise<void>;
@@ -126,6 +130,21 @@ interface DataContextValue {
   }) => Promise<StandardAmountChangeRequest>;
   approveStandardAmountChangeRequest: (requestId: string, approverUserId: string, approvalNote?: string) => Promise<void>;
   rejectStandardAmountChangeRequest: (requestId: string, approverUserId: string, approvalNote?: string) => Promise<void>;
+  createDirectChatThread: (input: { userAId: string; userBId: string; createdByUserId: string }) => Promise<ChatThread>;
+  createGroupChatThread: (input: { name: string; participantUserIds: string[]; createdByUserId: string }) => Promise<ChatThread>;
+  sendChatMessage: (input: {
+    threadId: string;
+    senderUserId: string;
+    senderMemberId?: string;
+    senderDisplayName?: string;
+    text?: string;
+    image?: string;
+    replyToMessageId?: string;
+    replyToUserId?: string;
+    replyToDisplayName?: string;
+    mentionUserIds?: string[];
+  }) => Promise<ChatMessage>;
+  markChatThreadRead: (threadId: string, userId: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -150,6 +169,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [memberPaymentRequests, setMemberPaymentRequests] = useState<MemberPaymentRequest[]>([]);
   const [standardAmountRules, setStandardAmountRules] = useState<StandardAmountRule[]>([]);
   const [standardAmountChangeRequests, setStandardAmountChangeRequests] = useState<StandardAmountChangeRequest[]>([]);
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
     orgName: "My Organization",
     currency: "MMK",
@@ -181,7 +202,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         lastLocalMutationAtRef.current = Date.now();
       }
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, cth, ctm, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -194,6 +215,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getMemberPaymentRequests(),
         store.getStandardAmountRules(),
         store.getStandardAmountChangeRequests(),
+        store.getChatThreads(),
+        store.getChatMessages(),
         store.getAccountSettings(),
       ]);
       setMembers(m);
@@ -208,6 +231,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setMemberPaymentRequests(mpr);
       setStandardAmountRules(sar);
       setStandardAmountChangeRequests(sacr);
+      setChatThreads(cth);
+      setChatMessages(ctm);
       if (s) setAccountSettings(s);
     } catch (error) {
       console.error("Refresh Error:", error);
@@ -244,6 +269,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     memberPaymentRequests,
     standardAmountRules,
     standardAmountChangeRequests,
+    chatThreads,
+    chatMessages,
     accountSettings,
   ]);
 
@@ -505,6 +532,48 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData({ skipPull: true });
   };
 
+  const createDirectChatThread = async (input: { userAId: string; userBId: string; createdByUserId: string }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const thread = await store.createDirectChatThread(input);
+    await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
+    return thread;
+  };
+
+  const createGroupChatThread = async (input: { name: string; participantUserIds: string[]; createdByUserId: string }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const thread = await store.createGroupChatThread(input);
+    await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
+    return thread;
+  };
+
+  const sendChatMessage = async (input: {
+    threadId: string;
+    senderUserId: string;
+    senderMemberId?: string;
+    senderDisplayName?: string;
+    text?: string;
+    image?: string;
+    replyToMessageId?: string;
+    replyToUserId?: string;
+    replyToDisplayName?: string;
+    mentionUserIds?: string[];
+  }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const message = await store.sendChatMessage(input);
+    await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
+    return message;
+  };
+
+  const markChatThreadRead = useCallback(async (threadId: string, userId: string) => {
+    lastLocalMutationAtRef.current = Date.now();
+    await store.markChatThreadRead(threadId, userId);
+    await refreshData({ skipPull: true });
+    void store.pushLanSnapshotFromLocal();
+  }, [refreshData]);
+
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
@@ -542,7 +611,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -555,6 +624,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
     createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
     createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
+    createDirectChatThread, createGroupChatThread, sendChatMessage, markChatThreadRead,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

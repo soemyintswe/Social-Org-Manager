@@ -38,7 +38,7 @@ function RootLayoutNav() {
     if (isAuthenticated && inLogin) {
       router.replace("/" as any);
     }
-  }, [isAuthenticated, loading, segments]);
+  }, [isAuthenticated, loading, segments, router]);
 
   useEffect(() => {
     const checkUpdateOnLaunch = async () => {
@@ -105,6 +105,7 @@ function RootLayoutNav() {
         <Stack.Screen name="member-payment-requests" options={{ headerShown: false }} />
         <Stack.Screen name="members" options={{ headerShown: false }} />
         <Stack.Screen name="events" options={{ headerShown: false }} />
+        <Stack.Screen name="messages" options={{ headerShown: false }} />
         <Stack.Screen name="loans" options={{ headerShown: false }} />
         <Stack.Screen name="expense-claims" options={{ headerShown: false }} />
       </Stack>

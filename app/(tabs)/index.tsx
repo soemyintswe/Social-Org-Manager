@@ -103,7 +103,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, events, transactions, loans, memberChangeRequests, chatThreads, chatMessages, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const canCreateMember = can("members.create") || can("members.manage");
@@ -267,6 +267,28 @@ export default function DashboardScreen() {
   }, [transactions, accountSettings]);
 
   const eventCount = Array.isArray(events) ? events.length : 0;
+  const unreadEventCount = useMemo(() => {
+    if (!currentUser?.id) return 0;
+    return (events || []).filter((item: any) => !item?.readBy?.[currentUser.id]).length;
+  }, [events, currentUser?.id]);
+
+  const unreadMessageCount = useMemo(() => {
+    if (!currentUser?.id) return 0;
+    const me = String(currentUser.id);
+    const myThreads = (chatThreads || []).filter((t: any) => (t.participantUserIds || []).includes(me));
+    let total = 0;
+    for (const thread of myThreads) {
+      const lastRead = String(thread?.lastReadAtBy?.[me] || "");
+      const rows = (chatMessages || []).filter((m: any) => String(m.threadId) === String(thread.id) && String(m.senderUserId) !== me);
+      if (!lastRead) {
+        total += rows.length;
+      } else {
+        const since = new Date(lastRead).getTime();
+        total += rows.filter((m: any) => new Date(m.createdAt || 0).getTime() > since).length;
+      }
+    }
+    return total;
+  }, [chatThreads, chatMessages, currentUser?.id]);
 
   // Auto Backup Logic
   useEffect(() => {
@@ -666,6 +688,17 @@ export default function DashboardScreen() {
         <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
       </View>
 
+      <View style={styles.noticeRow}>
+        <Pressable style={styles.noticeCard} onPress={() => router.push("/events" as any)}>
+          <Text style={styles.noticeTitle}>📰 Event အသစ်</Text>
+          <Text style={styles.noticeCount}>{unreadEventCount}</Text>
+        </Pressable>
+        <Pressable style={styles.noticeCard} onPress={() => router.push("/messages" as any)}>
+          <Text style={styles.noticeTitle}>💬 Message အသစ်</Text>
+          <Text style={styles.noticeCount}>{unreadMessageCount}</Text>
+        </Pressable>
+      </View>
+
       {(canApproveMemberChanges || canProposeMemberChanges) && (
         <Pressable style={styles.requestInboxCard} onPress={() => router.push("/member-change-approvals" as any)}>
           <View style={styles.requestInboxHeader}>
@@ -727,6 +760,7 @@ export default function DashboardScreen() {
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
       <View style={styles.quickActions}>
         <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} />
+        <QuickAction icon="chatbubbles-outline" label="Messages" onPress={() => router.push("/messages" as any)} />
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
         {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
@@ -805,6 +839,10 @@ const styles = StyleSheet.create({
   orgName: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
   profileBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "white", justifyContent: "center", alignItems: "center", elevation: 2 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 15, gap: 10, marginBottom: 25 },
+  noticeRow: { flexDirection: "row", paddingHorizontal: 20, gap: 10, marginBottom: 18 },
+  noticeCard: { flex: 1, backgroundColor: "white", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 12 },
+  noticeTitle: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
+  noticeCount: { fontSize: 20, color: Colors.light.text, fontFamily: "Inter_700Bold", marginTop: 4 },
   statCard: { flex: 1, minWidth: "45%", backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
   statIconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 10 },
   statValue: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
