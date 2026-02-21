@@ -10,7 +10,10 @@ import {
   TextInput,
   View,
   Image,
+  FlatList,
+  Platform,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -60,11 +63,20 @@ const WALLET_APP_URLS: Record<MobileWalletProvider, string[]> = {
   ],
 };
 
+const formatDateYmd = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
 export default function MemberPaymentRequestsScreen() {
   const insets = useSafeAreaInsets();
   const { kind } = useLocalSearchParams<{ kind?: string }>();
   const {
     memberPaymentRequests = [],
+    members = [],
+    transactions = [],
     createMemberPaymentRequest,
     approveMemberPaymentRequest,
     rejectMemberPaymentRequest,
@@ -81,6 +93,14 @@ export default function MemberPaymentRequestsScreen() {
   );
   const [amount, setAmount] = useState("");
   const [payerName, setPayerName] = useState(currentMember?.name || currentUser?.displayName || "");
+  const [payForType, setPayForType] = useState<"self" | "other">("self");
+  const [selectedForMemberId, setSelectedForMemberId] = useState(currentMember?.id || "");
+  const [selectedForMemberName, setSelectedForMemberName] = useState(currentMember?.name || currentUser?.displayName || "");
+  const [memberPickerOpen, setMemberPickerOpen] = useState(false);
+  const [feeStartDate, setFeeStartDate] = useState(new Date());
+  const [feeEndDate, setFeeEndDate] = useState(new Date());
+  const [showFeeStartPicker, setShowFeeStartPicker] = useState(false);
+  const [showFeeEndPicker, setShowFeeEndPicker] = useState(false);
   const [walletProvider, setWalletProvider] = useState<MobileWalletProvider>("kbz_pay");
   const [walletAccountName, setWalletAccountName] = useState("");
   const [walletAccountNumber, setWalletAccountNumber] = useState("");
@@ -113,6 +133,24 @@ export default function MemberPaymentRequestsScreen() {
     [visibleRequests, reviewModalId]
   );
 
+  const feeOverlapRecords = useMemo(() => {
+    if (requestKind !== "member_fees" || !selectedForMemberId) return [];
+    const start = new Date(feeStartDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(feeEndDate);
+    end.setHours(23, 59, 59, 999);
+    return (transactions || []).filter((t: any) => {
+      if (t?.type !== "income" || t?.category !== "member_fees") return false;
+      if (String(t?.memberId || "") !== String(selectedForMemberId)) return false;
+      if (!t?.feePeriodStart || !t?.feePeriodEnd) return false;
+      const tStart = new Date(t.feePeriodStart);
+      tStart.setHours(0, 0, 0, 0);
+      const tEnd = new Date(t.feePeriodEnd);
+      tEnd.setHours(23, 59, 59, 999);
+      return start <= tEnd && end >= tStart;
+    });
+  }, [transactions, requestKind, selectedForMemberId, feeStartDate, feeEndDate]);
+
   const openWalletApp = async (provider: MobileWalletProvider) => {
     const urls = WALLET_APP_URLS[provider];
     for (const url of urls) {
@@ -122,6 +160,23 @@ export default function MemberPaymentRequestsScreen() {
       } catch {}
     }
     Alert.alert("Wallet App မဖွင့်နိုင်ပါ", "သက်ဆိုင်ရာ Wallet App ကို ဖုန်းတွင် install လုပ်ထားသလား စစ်ပါ။");
+  };
+
+  const selectSelf = () => {
+    setPayForType("self");
+    setSelectedForMemberId(currentMember?.id || "");
+    setSelectedForMemberName(currentMember?.name || currentUser?.displayName || "");
+  };
+
+  const openOtherMemberPicker = () => {
+    setPayForType("other");
+    setMemberPickerOpen(true);
+  };
+
+  const onPickMember = (member: any) => {
+    setSelectedForMemberId(String(member?.id || ""));
+    setSelectedForMemberName(String(member?.name || ""));
+    setMemberPickerOpen(false);
   };
 
   const pickProofImage = async () => {
@@ -168,11 +223,31 @@ export default function MemberPaymentRequestsScreen() {
       Alert.alert("လိုအပ်ချက်", "Wallet Transaction Ref/မှတ်ပုံတင်နံပါတ် ဖြည့်ပါ။");
       return;
     }
+    if (!selectedForMemberId || !selectedForMemberName.trim()) {
+      Alert.alert("လိုအပ်ချက်", "ငွေပေးသွင်းမည့် အသင်းဝင်ကို ရွေးချယ်ပေးပါ။");
+      return;
+    }
+    if (requestKind === "member_fees") {
+      if (feeEndDate < feeStartDate) {
+        Alert.alert("လိုအပ်ချက်", "To Date သည် From Date ထက်နောက်ကျရပါမည်။");
+        return;
+      }
+      if (feeOverlapRecords.length > 0) {
+        const info = feeOverlapRecords
+          .slice(0, 3)
+          .map((t: any) => `• ${t.date || "-"} (Ref: ${t.receiptNumber || "-"})`)
+          .join("\n");
+        Alert.alert("ယခင်ကပေးသွင်းပြီးဖြစ်ပါသည်", `ဤကာလနှင့် ထပ်နေသော ပေးသွင်းမှုရှိပါသည်:\n${info}`);
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       await createMemberPaymentRequest({
         kind: requestKind,
         amount: numericAmount,
+        forMemberId: selectedForMemberId,
+        forMemberName: selectedForMemberName.trim(),
         payerMemberId: currentMember?.id,
         payerName: payerName.trim(),
         walletProvider,
@@ -181,6 +256,8 @@ export default function MemberPaymentRequestsScreen() {
         walletReference: walletReference.trim(),
         proofImage: proofImage || undefined,
         note: note.trim() || undefined,
+        feePeriodStart: requestKind === "member_fees" ? formatDateYmd(feeStartDate) : undefined,
+        feePeriodEnd: requestKind === "member_fees" ? formatDateYmd(feeEndDate) : undefined,
         createdByUserId: currentUser.id,
         createdByMemberId: currentMember?.id,
       });
@@ -189,6 +266,7 @@ export default function MemberPaymentRequestsScreen() {
       setWalletReference("");
       setNote("");
       setProofImage("");
+      selectSelf();
       Alert.alert(
         "တင်သွင်းပြီးပါပြီ",
         "ငွေပေးသွင်းတောင်းခံမှုကို ဘဏ္ဍာရေးမှူးထံ ပို့ပြီးပါပြီ။ အတည်ပြုပြီးမှ ရငွေစာရင်းသို့ သွင်းပါမည်။"
@@ -263,8 +341,16 @@ export default function MemberPaymentRequestsScreen() {
                 {item.payerName} • {Number(item.amount || 0).toLocaleString()} KS
               </Text>
               <Text style={styles.subLine}>
+                For: {item.forMemberName || "-"} ({item.forMemberId || "-"})
+              </Text>
+              <Text style={styles.subLine}>
                 {MEMBER_PAYMENT_REQUEST_KIND_LABELS[item.kind as MemberPaymentRequestKind]} → {item.categoryLabel}
               </Text>
+              {item.kind === "member_fees" ? (
+                <Text style={styles.subLine}>
+                  Period: {item.feePeriodStart || "-"} to {item.feePeriodEnd || "-"}
+                </Text>
+              ) : null}
               <Text style={styles.subLine}>
                 Wallet: {MOBILE_WALLET_PROVIDER_LABELS[item.walletProvider as MobileWalletProvider]} • Ref: {item.walletReference || "-"}
               </Text>
@@ -337,8 +423,66 @@ export default function MemberPaymentRequestsScreen() {
             <Text style={styles.label}>ငွေပမာဏ (KS)</Text>
             <TextInput style={styles.input} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" />
 
-            <Text style={styles.label}>ငွေပေးသွင်းသူအမည်</Text>
+            <Text style={styles.label}>ငွေပေးသွင်းသူ (လက်ရှိ account)</Text>
             <TextInput style={styles.input} value={payerName} onChangeText={setPayerName} placeholder="အမည်" />
+
+            <Text style={styles.label}>ငွေပေးသွင်းမည့် အသင်းဝင်</Text>
+            <View style={styles.walletRow}>
+              <Pressable style={[styles.walletBtn, payForType === "self" && styles.walletBtnActive]} onPress={selectSelf}>
+                <Text style={[styles.walletText, payForType === "self" && styles.walletTextActive]}>ကိုယ်တိုင်</Text>
+              </Pressable>
+              <Pressable style={[styles.walletBtn, payForType === "other" && styles.walletBtnActive]} onPress={openOtherMemberPicker}>
+                <Text style={[styles.walletText, payForType === "other" && styles.walletTextActive]}>အခြားအသင်းဝင်</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.memberPreview} onPress={() => payForType === "other" && setMemberPickerOpen(true)}>
+              <Text style={styles.memberPreviewText}>
+                {selectedForMemberName || "-"} ({selectedForMemberId || "-"})
+              </Text>
+              {payForType === "other" ? <Ionicons name="chevron-down" size={18} color={Colors.light.textSecondary} /> : null}
+            </Pressable>
+
+            {requestKind === "member_fees" ? (
+              <>
+                <Text style={styles.label}>လစဉ်ကြေး ကာလ (From - To)</Text>
+                <View style={styles.dateRow}>
+                  <Pressable style={styles.dateBtn} onPress={() => setShowFeeStartPicker(true)}>
+                    <Text style={styles.dateBtnText}>{formatDateYmd(feeStartDate)}</Text>
+                  </Pressable>
+                  <Text style={styles.dateDash}>-</Text>
+                  <Pressable style={styles.dateBtn} onPress={() => setShowFeeEndPicker(true)}>
+                    <Text style={styles.dateBtnText}>{formatDateYmd(feeEndDate)}</Text>
+                  </Pressable>
+                </View>
+                {showFeeStartPicker && (
+                  <DateTimePicker
+                    value={feeStartDate}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "spinner" : "default"}
+                    onChange={(_, d) => {
+                      setShowFeeStartPicker(false);
+                      if (d) setFeeStartDate(d);
+                    }}
+                  />
+                )}
+                {showFeeEndPicker && (
+                  <DateTimePicker
+                    value={feeEndDate}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "spinner" : "default"}
+                    onChange={(_, d) => {
+                      setShowFeeEndPicker(false);
+                      if (d) setFeeEndDate(d);
+                    }}
+                  />
+                )}
+                {feeOverlapRecords.length > 0 ? (
+                  <Text style={styles.dupWarn}>
+                    ယခင်ကပေးထားပြီးဖြစ်နိုင်ပါသည်: {feeOverlapRecords.map((t: any) => t.date || "-").join(", ")}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
 
             <Text style={styles.label}>Mobile Wallet</Text>
             <View style={styles.walletRow}>
@@ -432,6 +576,28 @@ export default function MemberPaymentRequestsScreen() {
               placeholder="အထောက်အထား/မှတ်ချက်"
             />
           </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal transparent visible={memberPickerOpen} animationType="slide" onRequestClose={() => setMemberPickerOpen(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.memberPickerBox}>
+            <Text style={styles.reviewTitle}>အသင်းဝင်ရွေးချယ်ရန်</Text>
+            <FlatList
+              data={members}
+              keyExtractor={(item: any) => String(item.id)}
+              renderItem={({ item }) => (
+                <Pressable style={styles.memberRow} onPress={() => onPickMember(item)}>
+                  <Text style={styles.memberRowName}>{item.name}</Text>
+                  <Text style={styles.memberRowId}>{item.id}</Text>
+                </Pressable>
+              )}
+              style={{ maxHeight: 360 }}
+            />
+            <Pressable style={[styles.actionBtn, { backgroundColor: "#CBD5E1", alignSelf: "flex-end", marginTop: 8 }]} onPress={() => setMemberPickerOpen(false)}>
+              <Text style={[styles.actionText, { color: Colors.light.text }]}>Close</Text>
+            </Pressable>
+          </View>
         </View>
       </Modal>
 
@@ -577,6 +743,32 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.tint + "14",
   },
   walletOpenText: { color: Colors.light.tint, fontSize: 12, fontFamily: "Inter_700Bold" },
+  memberPreview: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: Colors.light.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  memberPreviewText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  dateRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 },
+  dateBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    backgroundColor: Colors.light.surface,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  dateBtnText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  dateDash: { color: Colors.light.textSecondary, fontFamily: "Inter_700Bold" },
+  dupWarn: { marginTop: 6, color: "#DC2626", fontSize: 12, fontFamily: "Inter_500Medium" },
   recvCard: {
     marginTop: 10,
     borderWidth: 1,
@@ -634,6 +826,21 @@ const styles = StyleSheet.create({
     borderColor: Colors.light.border,
   },
   reviewTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 10 },
+  memberPickerBox: {
+    width: "100%",
+    backgroundColor: Colors.light.surface,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  memberRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    paddingVertical: 10,
+  },
+  memberRowName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  memberRowId: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 2 },
   reviewProofImage: {
     width: "100%",
     height: 150,

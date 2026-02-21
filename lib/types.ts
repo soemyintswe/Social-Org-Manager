@@ -245,6 +245,8 @@ export interface MemberPaymentRequest {
   category: string;
   categoryLabel: string;
   amount: number;
+  forMemberId?: string;
+  forMemberName?: string;
   payerMemberId?: string;
   payerName: string;
   walletProvider: MobileWalletProvider;
@@ -255,6 +257,8 @@ export interface MemberPaymentRequest {
   note?: string;
   status: MemberPaymentRequestStatus;
   requestedDate: string;
+  feePeriodStart?: string;
+  feePeriodEnd?: string;
   createdByUserId: string;
   createdByMemberId?: string;
   createdAt: string;

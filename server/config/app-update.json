@@ -1,8 +1,8 @@
 ﻿{
-    "latestVersion":  "1.1.4",
+    "latestVersion":  "1.1.5",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.4-202602211855.apk?raw=1",
-    "notes":  "Version 1.1.4: improved direct launch for KBZ Pay/Wave Pay + receiving account display/config.",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.5-202602211926.apk?raw=1",
+    "notes":  "Version 1.1.5: pay-for-self/other member, monthly fee period picker + duplicate check, wallet launch tweaks.",
     "force":  false,
-    "publishedAt":  "2026-02-21T12:25:24Z"
+    "publishedAt":  "2026-02-21T12:56:05Z"
 }

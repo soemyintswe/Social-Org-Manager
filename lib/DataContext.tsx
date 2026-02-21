@@ -89,6 +89,8 @@ interface DataContextValue {
   createMemberPaymentRequest: (input: {
     kind: MemberPaymentRequestKind;
     amount: number;
+    forMemberId?: string;
+    forMemberName?: string;
     payerMemberId?: string;
     payerName: string;
     walletProvider: MobileWalletProvider;
@@ -98,6 +100,8 @@ interface DataContextValue {
     proofImage?: string;
     note?: string;
     requestedDate?: string;
+    feePeriodStart?: string;
+    feePeriodEnd?: string;
     createdByUserId: string;
     createdByMemberId?: string;
   }) => Promise<MemberPaymentRequest>;
@@ -424,6 +428,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const createMemberPaymentRequest = async (input: {
     kind: MemberPaymentRequestKind;
     amount: number;
+    forMemberId?: string;
+    forMemberName?: string;
     payerMemberId?: string;
     payerName: string;
     walletProvider: MobileWalletProvider;
@@ -433,6 +439,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     proofImage?: string;
     note?: string;
     requestedDate?: string;
+    feePeriodStart?: string;
+    feePeriodEnd?: string;
     createdByUserId: string;
     createdByMemberId?: string;
   }) => {

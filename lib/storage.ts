@@ -809,6 +809,8 @@ export async function getMemberPaymentRequests(): Promise<MemberPaymentRequest[]
 export async function createMemberPaymentRequest(input: {
   kind: MemberPaymentRequestKind;
   amount: number;
+  forMemberId?: string;
+  forMemberName?: string;
   payerMemberId?: string;
   payerName: string;
   walletProvider: MobileWalletProvider;
@@ -818,6 +820,8 @@ export async function createMemberPaymentRequest(input: {
   proofImage?: string;
   note?: string;
   requestedDate?: string;
+  feePeriodStart?: string;
+  feePeriodEnd?: string;
   createdByUserId: string;
   createdByMemberId?: string;
 }): Promise<MemberPaymentRequest> {
@@ -831,6 +835,8 @@ export async function createMemberPaymentRequest(input: {
     category: mapping.category,
     categoryLabel: mapping.categoryLabel,
     amount: Number(input.amount || 0),
+    forMemberId: input.forMemberId?.trim() || undefined,
+    forMemberName: input.forMemberName?.trim() || undefined,
     payerMemberId: input.payerMemberId,
     payerName: String(input.payerName || "").trim(),
     walletProvider: input.walletProvider,
@@ -841,6 +847,8 @@ export async function createMemberPaymentRequest(input: {
     note: input.note?.trim() || undefined,
     status: "pending_treasurer_review",
     requestedDate: input.requestedDate || toYmd(new Date()),
+    feePeriodStart: input.feePeriodStart || undefined,
+    feePeriodEnd: input.feePeriodEnd || undefined,
     createdByUserId: input.createdByUserId,
     createdByMemberId: input.createdByMemberId,
     createdAt: now,
@@ -871,8 +879,8 @@ export async function approveMemberPaymentRequest(input: {
 
   const acceptedDate = input.acceptedDate || toYmd(new Date());
   const txn = await addTransaction({
-    memberId: request.payerMemberId || undefined,
-    payerPayee: request.payerName,
+    memberId: request.forMemberId || request.payerMemberId || undefined,
+    payerPayee: request.forMemberName || request.payerName,
     amount: Number(request.amount || 0),
     type: "income",
     category: request.category,
@@ -883,6 +891,8 @@ export async function approveMemberPaymentRequest(input: {
       `${request.categoryLabel} (${request.walletProvider})`,
     receiptNumber: request.requestNumber,
     categoryLabel: request.categoryLabel,
+    feePeriodStart: request.feePeriodStart,
+    feePeriodEnd: request.feePeriodEnd,
   });
 
   requests[idx] = {
