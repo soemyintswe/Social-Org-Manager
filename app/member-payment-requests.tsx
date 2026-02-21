@@ -46,11 +46,6 @@ const WALLET_APP_URLS: Record<MobileWalletProvider, string[]> = {
   wave_pay: ["wavepay://", "intent://#Intent;package=mm.com.wavemoney.wavepay;end"],
   aya_pay: ["ayapay://", "intent://#Intent;package=com.ayapay.wallet;end"],
 };
-const WALLET_FALLBACK_WEB: Record<MobileWalletProvider, string> = {
-  kbz_pay: "https://www.kbzpay.com/en/",
-  wave_pay: "https://wavemoney.com.mm/",
-  aya_pay: "https://www.ayapay.com/",
-};
 
 export default function MemberPaymentRequestsScreen() {
   const insets = useSafeAreaInsets();
@@ -60,6 +55,7 @@ export default function MemberPaymentRequestsScreen() {
     createMemberPaymentRequest,
     approveMemberPaymentRequest,
     rejectMemberPaymentRequest,
+    accountSettings,
   } = useData() as any;
   const { currentUser, currentMember } = useAuth();
   const [openCreate, setOpenCreate] = useState(false);
@@ -108,18 +104,11 @@ export default function MemberPaymentRequestsScreen() {
     const urls = WALLET_APP_URLS[provider];
     for (const url of urls) {
       try {
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-          return;
-        }
+        await Linking.openURL(url);
+        return;
       } catch {}
     }
-    try {
-      await Linking.openURL(WALLET_FALLBACK_WEB[provider]);
-    } catch {
-      Alert.alert("Wallet App မဖွင့်နိုင်ပါ", "ဖုန်းတွင် Wallet App တင်ထားမရှိသေးနိုင်ပါသည်။");
-    }
+    Alert.alert("Wallet App မဖွင့်နိုင်ပါ", "သက်ဆိုင်ရာ Wallet App ကို ဖုန်းတွင် install လုပ်ထားသလား စစ်ပါ။");
   };
 
   const pickProofImage = async () => {
@@ -363,6 +352,35 @@ export default function MemberPaymentRequestsScreen() {
                 <Text style={styles.walletOpenText}>Open AYA Pay</Text>
               </Pressable>
             </View>
+            <View style={styles.recvCard}>
+              <Text style={styles.recvTitle}>ဘဏ္ဍာရေးမှူး လက်ခံမည့်အကောင့်များ</Text>
+              {(accountSettings?.receivingBankAccountNumber || accountSettings?.receivingBankAccountName || accountSettings?.receivingBankName) ? (
+                <Text style={styles.recvLine}>
+                  Bank: {accountSettings?.receivingBankName || "-"} / {accountSettings?.receivingBankAccountNumber || "-"} / {accountSettings?.receivingBankAccountName || "-"}
+                </Text>
+              ) : null}
+              {(accountSettings?.receivingKbzPayPhone || accountSettings?.receivingKbzPayAccountName) ? (
+                <Text style={styles.recvLine}>
+                  KBZ Pay: {accountSettings?.receivingKbzPayPhone || "-"} / {accountSettings?.receivingKbzPayAccountName || "-"}
+                </Text>
+              ) : null}
+              {(accountSettings?.receivingWavePayPhone || accountSettings?.receivingWavePayAccountName) ? (
+                <Text style={styles.recvLine}>
+                  Wave Pay: {accountSettings?.receivingWavePayPhone || "-"} / {accountSettings?.receivingWavePayAccountName || "-"}
+                </Text>
+              ) : null}
+              {(accountSettings?.receivingAyaPayPhone || accountSettings?.receivingAyaPayAccountName) ? (
+                <Text style={styles.recvLine}>
+                  AYA Pay: {accountSettings?.receivingAyaPayPhone || "-"} / {accountSettings?.receivingAyaPayAccountName || "-"}
+                </Text>
+              ) : null}
+              {!accountSettings?.receivingBankAccountNumber &&
+                !accountSettings?.receivingKbzPayPhone &&
+                !accountSettings?.receivingWavePayPhone &&
+                !accountSettings?.receivingAyaPayPhone ? (
+                <Text style={styles.recvHint}>Account Settings တွင် receiving account များကို အရင်သတ်မှတ်ပေးပါ။</Text>
+              ) : null}
+            </View>
 
             <Text style={styles.label}>Wallet Account Name (Optional)</Text>
             <TextInput style={styles.input} value={walletAccountName} onChangeText={setWalletAccountName} placeholder="Account Name" />
@@ -546,6 +564,18 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.tint + "14",
   },
   walletOpenText: { color: Colors.light.tint, fontSize: 12, fontFamily: "Inter_700Bold" },
+  recvCard: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: Colors.light.surface,
+    padding: 10,
+    gap: 4,
+  },
+  recvTitle: { fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  recvLine: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  recvHint: { fontSize: 12, color: "#DC2626", fontFamily: "Inter_500Medium" },
   proofRow: { flexDirection: "row", gap: 8, marginTop: 2 },
   proofBtn: {
     flexDirection: "row",

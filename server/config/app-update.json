@@ -1,8 +1,8 @@
 ﻿{
-    "latestVersion":  "1.1.2",
+    "latestVersion":  "1.1.3",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.2-202602211544.apk?raw=1",
-    "notes":  "Version 1.1.2: dashboard actions + wallet-open + receipt upload for payment requests.",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.3-202602211812.apk?raw=1",
+    "notes":  "Version 1.1.3: direct wallet app launch + configurable receiving accounts shown to payers.",
     "force":  false,
-    "publishedAt":  "2026-02-21T09:14:50Z"
+    "publishedAt":  "2026-02-21T11:42:18Z"
 }

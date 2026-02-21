@@ -72,6 +72,15 @@ export interface AccountSettings {
   asOfDate: string;
   syncServerUrl?: string;
   syncEnabled?: boolean;
+  receivingBankName?: string;
+  receivingBankAccountNumber?: string;
+  receivingBankAccountName?: string;
+  receivingKbzPayPhone?: string;
+  receivingKbzPayAccountName?: string;
+  receivingWavePayPhone?: string;
+  receivingWavePayAccountName?: string;
+  receivingAyaPayPhone?: string;
+  receivingAyaPayAccountName?: string;
 }
 
 export type TransactionType = "income" | "expense";

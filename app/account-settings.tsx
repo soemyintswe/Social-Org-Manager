@@ -46,6 +46,15 @@ export default function AccountSettingsScreen() {
   const [resettingPassword, setResettingPassword] = useState(false);
   const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
   const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
+  const [receivingBankName, setReceivingBankName] = useState(accountSettings.receivingBankName || "");
+  const [receivingBankAccountNumber, setReceivingBankAccountNumber] = useState(accountSettings.receivingBankAccountNumber || "");
+  const [receivingBankAccountName, setReceivingBankAccountName] = useState(accountSettings.receivingBankAccountName || "");
+  const [receivingKbzPayPhone, setReceivingKbzPayPhone] = useState(accountSettings.receivingKbzPayPhone || "");
+  const [receivingKbzPayAccountName, setReceivingKbzPayAccountName] = useState(accountSettings.receivingKbzPayAccountName || "");
+  const [receivingWavePayPhone, setReceivingWavePayPhone] = useState(accountSettings.receivingWavePayPhone || "");
+  const [receivingWavePayAccountName, setReceivingWavePayAccountName] = useState(accountSettings.receivingWavePayAccountName || "");
+  const [receivingAyaPayPhone, setReceivingAyaPayPhone] = useState(accountSettings.receivingAyaPayPhone || "");
+  const [receivingAyaPayAccountName, setReceivingAyaPayAccountName] = useState(accountSettings.receivingAyaPayAccountName || "");
   const [syncing, setSyncing] = useState(false);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
@@ -60,7 +69,28 @@ export default function AccountSettingsScreen() {
   React.useEffect(() => {
     setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
     setSyncEnabled(accountSettings.syncEnabled !== false);
-  }, [accountSettings.syncServerUrl, accountSettings.syncEnabled]);
+    setReceivingBankName(accountSettings.receivingBankName || "");
+    setReceivingBankAccountNumber(accountSettings.receivingBankAccountNumber || "");
+    setReceivingBankAccountName(accountSettings.receivingBankAccountName || "");
+    setReceivingKbzPayPhone(accountSettings.receivingKbzPayPhone || "");
+    setReceivingKbzPayAccountName(accountSettings.receivingKbzPayAccountName || "");
+    setReceivingWavePayPhone(accountSettings.receivingWavePayPhone || "");
+    setReceivingWavePayAccountName(accountSettings.receivingWavePayAccountName || "");
+    setReceivingAyaPayPhone(accountSettings.receivingAyaPayPhone || "");
+    setReceivingAyaPayAccountName(accountSettings.receivingAyaPayAccountName || "");
+  }, [
+    accountSettings.syncServerUrl,
+    accountSettings.syncEnabled,
+    accountSettings.receivingBankName,
+    accountSettings.receivingBankAccountNumber,
+    accountSettings.receivingBankAccountName,
+    accountSettings.receivingKbzPayPhone,
+    accountSettings.receivingKbzPayAccountName,
+    accountSettings.receivingWavePayPhone,
+    accountSettings.receivingWavePayAccountName,
+    accountSettings.receivingAyaPayPhone,
+    accountSettings.receivingAyaPayAccountName,
+  ]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -73,6 +103,15 @@ export default function AccountSettingsScreen() {
         currency: accountSettings.currency || "MMK",
         syncServerUrl: normalizedUrl,
         syncEnabled,
+        receivingBankName: receivingBankName.trim(),
+        receivingBankAccountNumber: receivingBankAccountNumber.trim(),
+        receivingBankAccountName: receivingBankAccountName.trim(),
+        receivingKbzPayPhone: receivingKbzPayPhone.trim(),
+        receivingKbzPayAccountName: receivingKbzPayAccountName.trim(),
+        receivingWavePayPhone: receivingWavePayPhone.trim(),
+        receivingWavePayAccountName: receivingWavePayAccountName.trim(),
+        receivingAyaPayPhone: receivingAyaPayPhone.trim(),
+        receivingAyaPayAccountName: receivingAyaPayAccountName.trim(),
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
@@ -188,6 +227,15 @@ export default function AccountSettingsScreen() {
         currency: accountSettings.currency || "MMK",
         syncServerUrl: normalizedUrl,
         syncEnabled,
+        receivingBankName: receivingBankName.trim(),
+        receivingBankAccountNumber: receivingBankAccountNumber.trim(),
+        receivingBankAccountName: receivingBankAccountName.trim(),
+        receivingKbzPayPhone: receivingKbzPayPhone.trim(),
+        receivingKbzPayAccountName: receivingKbzPayAccountName.trim(),
+        receivingWavePayPhone: receivingWavePayPhone.trim(),
+        receivingWavePayAccountName: receivingWavePayAccountName.trim(),
+        receivingAyaPayPhone: receivingAyaPayPhone.trim(),
+        receivingAyaPayAccountName: receivingAyaPayAccountName.trim(),
       });
       if (syncEnabled && normalizedUrl) {
         const health = await checkLanSyncHealth();
@@ -274,6 +322,35 @@ export default function AccountSettingsScreen() {
           <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
             <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
           </Pressable>
+        </View>
+
+        <View style={styles.securityCard}>
+          <Text style={styles.sectionTitle}>Payment Receiving Accounts</Text>
+          <Text style={styles.sectionDesc}>
+            ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank နှင့် Mobile Wallet အကောင့်များကို သတ်မှတ်ပါ။
+          </Text>
+
+          <Text style={styles.label}>Bank Name</Text>
+          <TextInput style={styles.input} value={receivingBankName} onChangeText={setReceivingBankName} placeholder="ဥပမာ - KBZ Bank" />
+          <Text style={styles.label}>Bank Account Number</Text>
+          <TextInput style={styles.input} value={receivingBankAccountNumber} onChangeText={setReceivingBankAccountNumber} placeholder="Account Number" />
+          <Text style={styles.label}>Bank Account Name</Text>
+          <TextInput style={styles.input} value={receivingBankAccountName} onChangeText={setReceivingBankAccountName} placeholder="Account Name" />
+
+          <Text style={styles.label}>KBZ Pay Phone</Text>
+          <TextInput style={styles.input} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+          <Text style={styles.label}>KBZ Pay Account Name</Text>
+          <TextInput style={styles.input} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" />
+
+          <Text style={styles.label}>Wave Pay Phone</Text>
+          <TextInput style={styles.input} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+          <Text style={styles.label}>Wave Pay Account Name</Text>
+          <TextInput style={styles.input} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" />
+
+          <Text style={styles.label}>AYA Pay Phone</Text>
+          <TextInput style={styles.input} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+          <Text style={styles.label}>AYA Pay Account Name</Text>
+          <TextInput style={styles.input} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" />
         </View>
 
         {canManageSystem && (

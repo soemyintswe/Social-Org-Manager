@@ -1064,6 +1064,15 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     asOfDate: new Date().toISOString(),
     syncServerUrl: DEFAULT_SYNC_SERVER_URL,
     syncEnabled: true,
+    receivingBankName: "",
+    receivingBankAccountNumber: "",
+    receivingBankAccountName: "",
+    receivingKbzPayPhone: "",
+    receivingKbzPayAccountName: "",
+    receivingWavePayPhone: "",
+    receivingWavePayAccountName: "",
+    receivingAyaPayPhone: "",
+    receivingAyaPayAccountName: "",
   });
 }
 

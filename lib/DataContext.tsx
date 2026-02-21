@@ -154,6 +154,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
     asOfDate: new Date().toISOString(),
     syncServerUrl: "",
     syncEnabled: true,
+    receivingBankName: "",
+    receivingBankAccountNumber: "",
+    receivingBankAccountName: "",
+    receivingKbzPayPhone: "",
+    receivingKbzPayAccountName: "",
+    receivingWavePayPhone: "",
+    receivingWavePayAccountName: "",
+    receivingAyaPayPhone: "",
+    receivingAyaPayAccountName: "",
   });
   const [loading, setLoading] = useState(true);
   const bootstrappedRef = useRef(false);
