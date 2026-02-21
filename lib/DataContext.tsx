@@ -196,6 +196,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const bootstrappedRef = useRef(false);
   const lastLocalMutationAtRef = useRef(0);
   const LOCAL_PULL_GUARD_MS = 12000;
+  const AUTO_PUSH_DEBOUNCE_MS = 350;
+  const AUTO_PULL_INTERVAL_MS = 3000;
 
   const refreshData = useCallback(async (options?: { skipPull?: boolean }) => {
     try {
@@ -256,7 +258,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
     const timer = setTimeout(() => {
       void store.pushLanSnapshotFromLocal();
-    }, 1200);
+    }, AUTO_PUSH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [
     loading,
@@ -287,7 +289,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           await refreshData({ skipPull: true });
         }
       })();
-    }, 10000);
+    }, AUTO_PULL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [refreshData]);
 
@@ -569,7 +571,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     lastLocalMutationAtRef.current = Date.now();
     const message = await store.sendChatMessage(input);
     await refreshData({ skipPull: true });
-    void store.pushLanSnapshotFromLocal();
+    // Chat UX: push immediately so other devices can see the message with low delay.
+    await store.pushLanSnapshotFromLocal();
     return message;
   };
 
