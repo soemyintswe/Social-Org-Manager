@@ -1453,21 +1453,48 @@ export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
   try {
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
-    const url = `${endpoint}?action=health`;
-    const res = await fetchWithTimeout(
-      url,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, provider, accountEmail, folderName }),
-      },
-      15000
-    );
+    const res = await postCloudSyncRequest(endpoint, {
+      action: "health",
+      apiKey,
+      provider,
+      accountEmail,
+      folderName,
+    }, 15000);
     if (!res.ok) return { ok: false, reason: "cloud_health_http_error", status: res.status, endpoint };
     return { ok: true, status: res.status, endpoint };
   } catch (e: any) {
     return { ok: false, reason: String(e?.message || "cloud_health_failed") };
   }
+}
+
+async function postCloudSyncRequest(endpoint: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Response> {
+  // On web, route cloud calls through LAN server when available to avoid browser CORS issues.
+  if (Platform.OS === "web") {
+    try {
+      const { url, enabled } = await resolveSyncServerUrl();
+      if (enabled && url) {
+        return await fetchWithTimeout(
+          `${url}/api/cloud-sync/proxy`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint, ...payload }),
+          },
+          timeoutMs
+        );
+      }
+    } catch {}
+  }
+
+  return await fetchWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs
+  );
 }
 
 export type LanSyncResult = {
@@ -1519,15 +1546,7 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
         data,
       },
     };
-    const res = await fetchWithTimeout(
-      endpoint,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      },
-      30000
-    );
+    const res = await postCloudSyncRequest(endpoint, payload as unknown as Record<string, unknown>, 30000);
     if (!res.ok) return { ok: false, reason: "cloud_push_http_error", status: res.status, endpoint };
     return { ok: true, changed: true, reason: "cloud_pushed", status: res.status, endpoint };
   } catch (e: any) {
@@ -1569,21 +1588,13 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
   try {
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
-    const res = await fetchWithTimeout(
-      endpoint,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "pullSnapshot",
-          apiKey,
-          provider,
-          accountEmail,
-          folderName,
-        }),
-      },
-      30000
-    );
+    const res = await postCloudSyncRequest(endpoint, {
+      action: "pullSnapshot",
+      apiKey,
+      provider,
+      accountEmail,
+      folderName,
+    }, 30000);
     if (res.status === 404) {
       return { ok: true, changed: false, reason: "cloud_snapshot_not_found", status: res.status, endpoint };
     }

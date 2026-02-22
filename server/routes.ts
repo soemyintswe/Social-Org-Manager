@@ -18,12 +18,26 @@ type AppUpdateConfig = {
   publishedAt?: string;
 };
 
+function getBaseDir(): string {
+  const envBase = String(process.env.ORGHUB_BASE_DIR || "").trim();
+  if (envBase) return path.resolve(envBase);
+  return process.cwd();
+}
+
+function resolveFromBase(...parts: string[]): string {
+  return path.resolve(getBaseDir(), ...parts);
+}
+
 function getSnapshotFilePath(): string {
-  return path.resolve(process.cwd(), "server", "data", "sync-snapshot.json");
+  const customDataDir = String(process.env.ORGHUB_DATA_DIR || "").trim();
+  if (customDataDir) {
+    return path.resolve(customDataDir, "sync-snapshot.json");
+  }
+  return resolveFromBase("server", "data", "sync-snapshot.json");
 }
 
 function getAppUpdateConfigPath(): string {
-  return path.resolve(process.cwd(), "server", "config", "app-update.json");
+  return resolveFromBase("server", "config", "app-update.json");
 }
 
 function parseVersion(version: string): number[] {
@@ -92,6 +106,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
     writeSnapshot(snapshot);
     return res.json({ ok: true, updatedAt: snapshot.updatedAt });
+  });
+
+  app.post("/api/cloud-sync/proxy", async (req, res) => {
+    try {
+      const body = (req.body || {}) as Record<string, unknown>;
+      const endpoint = String(body.endpoint || "").trim();
+      if (!endpoint) {
+        return res.status(400).json({ ok: false, reason: "missing_endpoint" });
+      }
+      if (!/^https?:\/\//i.test(endpoint)) {
+        return res.status(400).json({ ok: false, reason: "invalid_endpoint" });
+      }
+
+      const payload = { ...body };
+      delete (payload as any).endpoint;
+
+      const upstream = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const text = await upstream.text();
+      const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
+      res.status(upstream.status);
+      res.setHeader("Content-Type", contentType);
+      return res.send(text);
+    } catch (error) {
+      return res.status(502).json({
+        ok: false,
+        reason: "cloud_proxy_failed",
+        detail: String((error as any)?.message || "unknown"),
+      });
+    }
   });
 
   app.get("/api/app-update", (req, res) => {

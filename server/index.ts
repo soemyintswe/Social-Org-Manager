@@ -13,6 +13,16 @@ if (process.env.DATABASE_URL) {
 const app = express();
 const log = console.log;
 
+function getBaseDir(): string {
+  const envBase = String(process.env.ORGHUB_BASE_DIR || "").trim();
+  if (envBase) return path.resolve(envBase);
+  return process.cwd();
+}
+
+function resolveFromBase(...parts: string[]): string {
+  return path.resolve(getBaseDir(), ...parts);
+}
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -110,7 +120,7 @@ function setupRequestLogging(app: express.Application) {
 
 function getAppName(): string {
   try {
-    const appJsonPath = path.resolve(process.cwd(), "app.json");
+    const appJsonPath = resolveFromBase("app.json");
     const appJsonContent = fs.readFileSync(appJsonPath, "utf-8");
     const appJson = JSON.parse(appJsonContent);
     return appJson.expo?.name || "App Landing Page";
@@ -120,12 +130,7 @@ function getAppName(): string {
 }
 
 function serveExpoManifest(platform: string, res: Response) {
-  const manifestPath = path.resolve(
-    process.cwd(),
-    "static-build",
-    platform,
-    "manifest.json",
-  );
+  const manifestPath = resolveFromBase("static-build", platform, "manifest.json");
 
   if (!fs.existsSync(manifestPath)) {
     return res
@@ -172,13 +177,13 @@ function serveLandingPage({
 }
 
 function configureExpoAndLanding(app: express.Application) {
-  const templatePath = path.resolve(
-    process.cwd(),
-    "server",
-    "templates",
-    "landing-page.html",
-  );
-  const landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
+  const templatePath = resolveFromBase("server", "templates", "landing-page.html");
+  let landingPageTemplate = "";
+  if (fs.existsSync(templatePath)) {
+    landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
+  } else {
+    landingPageTemplate = "<html><body><h3>OrgHub</h3><p>Landing page template not found.</p></body></html>";
+  }
   const appName = getAppName();
 
   log("Serving static Expo files with dynamic manifest routing");
@@ -209,8 +214,20 @@ function configureExpoAndLanding(app: express.Application) {
     next();
   });
 
-  app.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
-  app.use(express.static(path.resolve(process.cwd(), "static-build")));
+  app.use("/assets", express.static(resolveFromBase("assets")));
+  app.use(express.static(resolveFromBase("static-build")));
+
+  const webBuildDir = resolveFromBase("web-build");
+  const hasWebBuild =
+    fs.existsSync(webBuildDir) &&
+    fs.existsSync(path.join(webBuildDir, "index.html"));
+  if (hasWebBuild) {
+    app.use("/web", express.static(webBuildDir));
+    app.get(/^\/web(\/.*)?$/, (_req, res) => {
+      return res.sendFile(path.join(webBuildDir, "index.html"));
+    });
+    log("Web build route enabled at /web");
+  }
 
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
