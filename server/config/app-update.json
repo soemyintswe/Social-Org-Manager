@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.16",
+  "latestVersion": "1.1.17",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.16-202602220321.apk?raw=1",
-  "notes": "Version 1.1.16: added Google Drive Cloud Sync (MVP) via Apps Script endpoint, dual LAN+Cloud auto sync support, and Cloud Sync settings in Account Settings.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.17-202602220959.apk?raw=1",
+  "notes": "Version 1.1.17: fixed Dashboard Sync Now to support Cloud Sync when LAN is disabled (no more LAN-enable-only prompt).",
   "force": false,
-  "publishedAt": "2026-02-21T21:21:00Z"
+  "publishedAt": "2026-02-22T02:59:00Z"
 }

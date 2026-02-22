@@ -22,9 +22,12 @@ import { useAuth } from "@/lib/AuthContext";
 import { isCommitteePosition } from "@/lib/access-control";
 import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory, type MemberPaymentRequestKind } from "@/lib/types";
 import {
+  checkCloudSyncHealth,
   checkLanSyncHealth,
   exportData,
+  pullCloudSnapshotToLocalDetailed,
   pullLanSnapshotToLocalDetailed,
+  pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
 } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
@@ -132,39 +135,60 @@ export default function DashboardScreen() {
     if (syncingNow) return;
     setSyncingNow(true);
     try {
-      const syncEnabled = accountSettings?.syncEnabled !== false;
+      const lanEnabled = accountSettings?.syncEnabled !== false;
       const syncServerUrl = normalizeUrl(accountSettings?.syncServerUrl || "http://192.168.99.9:5000");
-      if (!syncEnabled || !syncServerUrl) {
-        Alert.alert("Sync", "LAN Sync ကို Account Settings မှာ Enable + URL သတ်မှတ်ပေးပါ။");
+      const cloudEnabled = accountSettings?.cloudSyncEnabled === true;
+      const cloudEndpoint = String(accountSettings?.cloudSyncEndpoint || "").trim();
+
+      if ((!lanEnabled || !syncServerUrl) && (!cloudEnabled || !cloudEndpoint)) {
+        Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync ကို Account Settings မှာ Enable လုပ်ပေးပါ။");
         return;
       }
 
-      const health = await checkLanSyncHealth();
-      if (!health.ok) {
-        Alert.alert(
-          "Sync Error",
-          `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${syncServerUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}`
-        );
-        return;
+      let lanHealthLine = "LAN Health: Skip (disabled)";
+      if (lanEnabled && syncServerUrl) {
+        const health = await checkLanSyncHealth();
+        lanHealthLine = health.ok
+          ? "LAN Health: OK"
+          : `LAN Health: Fail (${health.reason || "unknown"}${health.status ? `/${health.status}` : ""})`;
       }
 
-      const pull = await pullLanSnapshotToLocalDetailed();
-      let pushLine = "Push: Skip";
-      if (!pull.ok) {
-        pushLine = "Push: Skip (pull fail)";
-      } else {
-        const push = await pushLanSnapshotFromLocalDetailed();
-        pushLine = push.ok
-          ? "Push: OK"
-          : `Push: Fail (${push.reason || "unknown"}${push.status ? `/${push.status}` : ""})`;
+      let cloudHealthLine = "Cloud Health: Skip (disabled)";
+      if (cloudEnabled && cloudEndpoint) {
+        const health = await checkCloudSyncHealth();
+        cloudHealthLine = health.ok
+          ? "Cloud Health: OK"
+          : `Cloud Health: Fail (${health.reason || "unknown"}${health.status ? `/${health.status}` : ""})`;
       }
 
-      const pullLine = pull.ok
-        ? `Pull: ${pull.changed ? "OK" : `Skip (${pull.reason || "no_change"})`}`
-        : `Pull: Fail (${pull.reason || "unknown"}${pull.status ? `/${pull.status}` : ""})`;
+      const pullLan = await pullLanSnapshotToLocalDetailed();
+      const pushLan = await pushLanSnapshotFromLocalDetailed();
+      const pullCloud = await pullCloudSnapshotToLocalDetailed();
+      const pushCloud = await pushCloudSnapshotFromLocalDetailed();
+
+      const asSyncLine = (
+        prefix: string,
+        result: { ok: boolean; changed?: boolean; reason?: string; status?: number },
+        action: "pull" | "push"
+      ): string => {
+        if (String(result.reason || "").includes("disabled_or_empty")) {
+          return `${prefix}: Skip (disabled)`;
+        }
+        if (action === "pull") {
+          return result.ok
+            ? `${prefix}: ${result.changed ? "OK" : `Skip (${result.reason || "no_change"})`}`
+            : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
+        }
+        return result.ok
+          ? `${prefix}: OK`
+          : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
+      };
 
       await refreshData({ skipPull: true });
-      Alert.alert("Sync", `${pullLine}\n${pushLine}`);
+      Alert.alert(
+        "Sync",
+        `${asSyncLine("LAN Pull", pullLan, "pull")}\n${asSyncLine("LAN Push", pushLan, "push")}\n${asSyncLine("Cloud Pull", pullCloud, "pull")}\n${asSyncLine("Cloud Push", pushCloud, "push")}\n${lanHealthLine}\n${cloudHealthLine}`
+      );
     } finally {
       setSyncingNow(false);
     }
