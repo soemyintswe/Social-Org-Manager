@@ -4,6 +4,7 @@ export interface Member {
   id: string;
   name: string;
   gender?: MemberGender;
+  occupation?: string;
   dob?: string;
   nrc?: string;
   phone: string;
@@ -24,6 +25,7 @@ export interface Member {
   statusDate?: string;
   statusNote?: string;
   profileImage?: string;
+  familyMembers?: MemberFamilyMember[];
 }
 
 export type MemberGender = "male" | "female" | "other";
@@ -33,6 +35,16 @@ export const MEMBER_GENDER_LABELS: Record<MemberGender, string> = {
   female: "မ",
   other: "အခြား",
 };
+
+export interface MemberFamilyMember {
+  id?: string;
+  name: string;
+  gender?: MemberGender;
+  relation?: string;
+  dob?: string;
+  nrc?: string;
+  occupation?: string;
+}
 
 export interface OrgEvent {
   id: string;

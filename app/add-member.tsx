@@ -22,15 +22,18 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { isCommitteePosition } from "@/lib/access-control";
 import {
   ORG_POSITION_LABELS,
   OrgPosition,
   MemberStatus,
   MemberGender,
+  MemberFamilyMember,
   MEMBER_STATUS_VALUES,
   MEMBER_STATUS_LABELS,
   MEMBER_GENDER_VALUES,
   MEMBER_GENDER_LABELS,
+  normalizeOrgPosition,
 } from "@/lib/types";
 import AccessDenied from "@/components/AccessDenied";
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
@@ -84,10 +87,58 @@ const inferGenderFromName = (rawName: string): MemberGender => {
   return "other";
 };
 
+const RESTRICTED_MEMBER_FIELDS = ["id", "orgPosition", "status", "statusDate"] as const;
+type RestrictedMemberField = (typeof RESTRICTED_MEMBER_FIELDS)[number];
+
+function hasValueChanged(before: unknown, after: unknown): boolean {
+  try {
+    return JSON.stringify(before ?? null) !== JSON.stringify(after ?? null);
+  } catch {
+    return String(before ?? "") !== String(after ?? "");
+  }
+}
+
+type FamilyFormMember = MemberFamilyMember & { _localId: string };
+
+function toFamilyFormRows(input: unknown): FamilyFormMember[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((row, index) => {
+      const item = (row || {}) as any;
+      const name = String(item.name || "").trim();
+      if (!name) return null;
+      return {
+        _localId: String(item.id || `fm-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`),
+        id: item.id ? String(item.id) : undefined,
+        name,
+        gender: item.gender === "male" || item.gender === "female" || item.gender === "other" ? item.gender : "other",
+        relation: item.relation ? String(item.relation) : "",
+        dob: item.dob ? String(item.dob) : "",
+        nrc: item.nrc ? String(item.nrc) : "",
+        occupation: item.occupation ? String(item.occupation) : "",
+      } as FamilyFormMember;
+    })
+    .filter(Boolean) as FamilyFormMember[];
+}
+
+function toFamilyPayload(rows: FamilyFormMember[]): MemberFamilyMember[] {
+  return rows
+    .map((row) => ({
+      id: row.id,
+      name: String(row.name || "").trim(),
+      gender: row.gender,
+      relation: row.relation ? String(row.relation).trim() : undefined,
+      dob: row.dob ? String(row.dob).trim() : undefined,
+      nrc: row.nrc ? String(row.nrc).trim() : undefined,
+      occupation: row.occupation ? String(row.occupation).trim() : undefined,
+    }))
+    .filter((row) => row.name);
+}
+
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
-  const { members, addMember, updateMember, createMemberChangeRequest, transactions, loans, groups, updateTransaction, updateLoan, updateGroup } = useData() as any;
-  const { can, currentUser } = useAuth();
+  const { members, addMember, updateMember, createMemberChangeRequest } = useData() as any;
+  const { can, currentUser, profile } = useAuth();
   const { editId } = useLocalSearchParams<{ editId: string }>();
   const canCreateMember = can("members.create");
   const canEditMember = can("members.edit");
@@ -99,6 +150,7 @@ export default function AddMemberScreen() {
   const [memberId, setMemberId] = useState("");
   const [gender, setGender] = useState<MemberGender>("other");
   const [phone, setPhone] = useState("");
+  const [occupation, setOccupation] = useState("");
   const [nrc, setNrc] = useState("");
   const [dob, setDob] = useState("");
   const [address, setAddress] = useState("");
@@ -109,11 +161,44 @@ export default function AddMemberScreen() {
   const [statusNote, setStatusNote] = useState("");
   const [orgPosition, setOrgPosition] = useState<OrgPosition>("member");
   const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [familyMembers, setFamilyMembers] = useState<FamilyFormMember[]>([]);
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [showJoinDatePicker, setShowJoinDatePicker] = useState(false);
   const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
   const [showPositionPicker, setShowPositionPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
+  const isChairOrVice =
+    currentUser?.systemRole === "admin" ||
+    actorPosition === "chairperson" ||
+    actorPosition === "vice_chairperson";
+  const canProposeRestricted = Boolean(canProposeMemberChanges && !isChairOrVice && isCommitteePosition(actorPosition));
+  const canEditGeneralMemberInfo = Boolean(currentUser?.id && profile?.memberStatus !== "applicant");
+
+  const addFamilyMember = () => {
+    setFamilyMembers((prev) => [
+      ...prev,
+      {
+        _localId: `fm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: "",
+        gender: "other",
+        relation: "",
+        dob: "",
+        nrc: "",
+        occupation: "",
+      },
+    ]);
+  };
+
+  const updateFamilyMember = (localId: string, key: keyof FamilyFormMember, value: string) => {
+    setFamilyMembers((prev) =>
+      prev.map((row) => (row._localId === localId ? { ...row, [key]: value } : row))
+    );
+  };
+
+  const removeFamilyMember = (localId: string) => {
+    setFamilyMembers((prev) => prev.filter((row) => row._localId !== localId));
+  };
 
   useEffect(() => {
     if (editId) {
@@ -123,6 +208,7 @@ export default function AddMemberScreen() {
         setMemberId(member.id);
         setGender(member.gender || inferGenderFromName(member.name || ""));
         setPhone(member.phone);
+        setOccupation((member as any).occupation || "");
         // @ts-ignore - nrc နှင့် dob က type ထဲမှာ မပါခဲ့ရင် error မတက်စေရန်
         setNrc(member.nrc || "");
         // @ts-ignore
@@ -135,6 +221,7 @@ export default function AddMemberScreen() {
         setStatusNote(member.statusNote || "");
         setOrgPosition(member.orgPosition || "member");
         setProfileImage(member.profileImage || null);
+        setFamilyMembers(toFamilyFormRows((member as any).familyMembers));
       }
     }
   }, [editId, members]);
@@ -169,42 +256,13 @@ export default function AddMemberScreen() {
     try {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // ID ပြောင်းလဲမှုရှိမရှိ စစ်ဆေးခြင်း (Edit Mode တွင်သာ)
-      if (editId && canEditMember && memberId.trim() !== editId) {
-        const existing = members.find((m: any) => m.id === memberId.trim());
-        if (existing) {
-          Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
-          setSaving(false);
-          return;
-        }
-
-        // Cascade Update: Transactions
-        const memberTxns = transactions?.filter((t: any) => t.memberId === editId) || [];
-        for (const txn of memberTxns) {
-          if (updateTransaction) await updateTransaction(txn.id, { ...txn, memberId: memberId.trim() });
-        }
-
-        // Cascade Update: Loans
-        const memberLoans = loans?.filter((l: any) => l.memberId === editId) || [];
-        for (const loan of memberLoans) {
-          if (updateLoan) await updateLoan(loan.id, { ...loan, memberId: memberId.trim() });
-        }
-
-        // Cascade Update: Groups
-        const memberGroups = groups?.filter((g: any) => g.memberIds.includes(editId)) || [];
-        for (const group of memberGroups) {
-          const newMemberIds = group.memberIds.map((mid: string) => mid === editId ? memberId.trim() : mid);
-          if (updateGroup) await updateGroup(group.id, { ...group, memberIds: newMemberIds });
-        }
-      }
-
       const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
-      // TypeScript Error ကို ရှင်းရန် 'any' သုံးပြီး property အားလုံးကို ထည့်သွင်းပါမည်
       const memberData: any = {
         id: memberId,
         name: name.trim(),
         gender,
+        occupation: occupation.trim(),
         phone: phone.trim(),
         nrc: nrc.trim(),
         dob: dob.trim(),
@@ -219,74 +277,97 @@ export default function AddMemberScreen() {
         avatarColor: randomColor, // Missing 'color' (သို့) 'avatarColor' အတွက်
         color: randomColor, 
         profileImage: profileImage || undefined,
+        familyMembers: toFamilyPayload(familyMembers),
         createdAt: new Date().toISOString(),
       };
 
       if (editId) {
-        if (canEditMember) {
-          const existingMember = members.find((m: any) => m.id === editId);
-          const statusChanged = Boolean(
-            existingMember &&
-            (
-              String(existingMember.status || "") !== String(status || "") ||
-              String(existingMember.statusDate || existingMember.resignDate || "") !== String(statusDate || "") ||
-              String(existingMember.statusNote || "") !== String(statusNote || "")
-            )
-          );
-          const memberIdChanged = memberId.trim() !== editId;
-
-          if (statusChanged && memberIdChanged) {
-            Alert.alert("အသိပေးချက်", "Status ပြင်ဆင်မှုနှင့် Member ID ပြောင်းလဲမှုကို တစ်ခါတည်းမလုပ်နိုင်ပါ။ သီးခြားအဆင့်လိုက် ပြုလုပ်ပါ။");
+        const existingMember = members.find((m: any) => m.id === editId);
+        if (!existingMember) {
+          Alert.alert("Error", "Member not found.");
+          setSaving(false);
+          return;
+        }
+        if (memberId.trim() !== editId) {
+          const duplicate = members.find((m: any) => m.id === memberId.trim() && m.id !== editId);
+          if (duplicate) {
+            Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
             setSaving(false);
             return;
           }
+        }
 
-          const nonStatusPayload = { ...memberData };
-          delete nonStatusPayload.status;
-          delete nonStatusPayload.statusDate;
-          delete nonStatusPayload.statusNote;
+        const restrictedPatch: Partial<Record<RestrictedMemberField, any>> = {};
+        const restrictedCurrent: Record<RestrictedMemberField, any> = {
+          id: existingMember.id,
+          orgPosition: existingMember.orgPosition || "member",
+          status: existingMember.status || "active",
+          statusDate: existingMember.statusDate || existingMember.resignDate || "",
+        };
+        const restrictedNext: Record<RestrictedMemberField, any> = {
+          id: memberData.id,
+          orgPosition: memberData.orgPosition,
+          status: memberData.status,
+          statusDate: memberData.statusDate || "",
+        };
+        RESTRICTED_MEMBER_FIELDS.forEach((field) => {
+          if (hasValueChanged(restrictedCurrent[field], restrictedNext[field])) {
+            restrictedPatch[field] = restrictedNext[field];
+          }
+        });
 
-          await updateMember(editId, statusChanged ? nonStatusPayload : memberData);
+        const unrestrictedPayload: any = { ...memberData };
+        RESTRICTED_MEMBER_FIELDS.forEach((field) => delete unrestrictedPayload[field]);
+        delete unrestrictedPayload.createdAt;
+        const unrestrictedPatch: any = {};
+        Object.keys(unrestrictedPayload).forEach((key) => {
+          if (hasValueChanged((existingMember as any)[key], unrestrictedPayload[key])) {
+            unrestrictedPatch[key] = unrestrictedPayload[key];
+          }
+        });
 
-          if (statusChanged) {
-            if (!currentUser?.id || (!canProposeMemberChanges && !canApproveMemberChanges)) {
-              Alert.alert("ခွင့်မပြုပါ", "Status ပြင်ဆင်ရန် proposal လုပ်ပိုင်ခွင့်မရှိပါ။");
-              setSaving(false);
-              return;
-            }
-            await createMemberChangeRequest({
-              action: "update",
-              targetMemberId: editId,
-              payload: {
-                member: {
-                  status,
-                  statusDate: statusDate.trim(),
-                  statusNote: statusNote.trim(),
+        const hasRestrictedChanges = Object.keys(restrictedPatch).length > 0;
+        const hasUnrestrictedChanges = Object.keys(unrestrictedPatch).length > 0;
+        if (!hasRestrictedChanges && !hasUnrestrictedChanges) {
+          Alert.alert("အသိပေးချက်", "ပြင်ဆင်ထားသည့် အပြောင်းအလဲ မတွေ့ပါ။");
+          setSaving(false);
+          return;
+        }
+
+        if (isChairOrVice || canEditMember || canApproveMemberChanges) {
+          await updateMember(editId, { ...unrestrictedPatch, ...restrictedPatch });
+          Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
+        } else {
+          if (!canEditGeneralMemberInfo) {
+            Alert.alert("ခွင့်မပြုပါ", "ဤအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+            setSaving(false);
+            return;
+          }
+          if (hasUnrestrictedChanges) {
+            await updateMember(editId, unrestrictedPatch);
+          }
+          if (hasRestrictedChanges) {
+            if (!canProposeRestricted || !currentUser?.id) {
+              Alert.alert(
+                "ခွင့်မပြုပါ",
+                "Member ID / Position / Status / Status Date ကို ဥက္ကဋ္ဌ နှင့် ဒုတိယဥက္ကဋ္ဌသာ တိုက်ရိုက်ပြင်နိုင်ပါသည်။ အခြားကော်မတီဝင်များသာ proposal တင်နိုင်ပါသည်။"
+              );
+            } else {
+              await createMemberChangeRequest({
+                action: "update",
+                targetMemberId: editId,
+                payload: {
+                  member: restrictedPatch as any,
+                  note: "Restricted member fields update proposal",
                 },
-                note: "Member status update proposal",
-              },
-              createdByUserId: currentUser.id,
-              createdByMemberId: currentUser.memberId,
-            });
-            Alert.alert("အောင်မြင်ပါသည်", "Status ပြင်ဆင်မှုကို Approver ထံ Request အဖြစ်ပို့ပြီးပါပြီ။");
+                createdByUserId: currentUser.id,
+                createdByMemberId: currentUser.memberId,
+              });
+              Alert.alert("အောင်မြင်ပါသည်", "Restricted fields ပြင်ဆင်မှုကို Approver ထံ proposal ပို့ပြီးပါပြီ။");
+            }
+          } else {
+            Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
           }
-        } else if (canProposeMemberChanges && currentUser?.id) {
-          if (memberId.trim() !== editId) {
-            Alert.alert("အသိပေးချက်", "Proposal mode တွင် Member ID ပြောင်းလဲမှုကို မပံ့ပိုးသေးပါ။");
-            setSaving(false);
-            return;
-          }
-          await createMemberChangeRequest({
-            action: "update",
-            targetMemberId: editId,
-            payload: {
-              member: memberData,
-              note: "Member profile update proposal",
-            },
-            createdByUserId: currentUser.id,
-            createdByMemberId: currentUser.memberId,
-          });
-          Alert.alert("အောင်မြင်ပါသည်", "Member update request ကို approver ထံပို့ပြီးပါပြီ။");
         }
       } else {
         if (canCreateMember) {
@@ -306,8 +387,8 @@ export default function AddMemberScreen() {
       }
       router.back();
     } catch (error) {
-      console.error(error);
-      Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
+      console.error("member-save-error", error);
+      Alert.alert("အမှားအယွင်း", `သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။ (${String((error as any)?.message || "")})`);
     } finally {
       setSaving(false);
     }
@@ -369,7 +450,7 @@ export default function AddMemberScreen() {
     return new Date();
   };
 
-  if ((!editId && !canCreateMember && !canProposeMemberChanges) || (editId && !canEditMember && !canProposeMemberChanges)) {
+  if ((!editId && !canCreateMember && !canProposeMemberChanges) || (editId && !canEditGeneralMemberInfo && !canProposeMemberChanges)) {
     return <AccessDenied showBack={true} />;
   }
 
@@ -456,6 +537,15 @@ export default function AddMemberScreen() {
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
+            placeholderTextColor={Colors.light.textSecondary}
+          />
+
+          <Text style={styles.label}>အလုပ်အကိုင်</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="အလုပ်အကိုင်"
+            value={occupation}
+            onChangeText={setOccupation}
             placeholderTextColor={Colors.light.textSecondary}
           />
 
@@ -686,6 +776,81 @@ export default function AddMemberScreen() {
             multiline
             placeholderTextColor={Colors.light.textSecondary}
           />
+
+          <View style={styles.familySectionHeader}>
+            <Text style={styles.label}>မိသားစုဝင်များ</Text>
+            <Pressable style={styles.addFamilyBtn} onPress={addFamilyMember}>
+              <Ionicons name="add" size={16} color="#fff" />
+              <Text style={styles.addFamilyBtnText}>ထည့်မည်</Text>
+            </Pressable>
+          </View>
+          {familyMembers.length === 0 ? (
+            <Text style={styles.familyHint}>မိသားစုဝင်အချက်အလက် မထည့်ရသေးပါ။</Text>
+          ) : (
+            familyMembers.map((row, index) => (
+              <View key={row._localId} style={styles.familyCard}>
+                <View style={styles.familyCardHeader}>
+                  <Text style={styles.familyCardTitle}>မိသားစုဝင် #{index + 1}</Text>
+                  <Pressable onPress={() => removeFamilyMember(row._localId)}>
+                    <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                  </Pressable>
+                </View>
+
+                <TextInput
+                  style={styles.input}
+                  placeholder="အမည်"
+                  value={row.name}
+                  onChangeText={(value) => updateFamilyMember(row._localId, "name", value)}
+                  placeholderTextColor={Colors.light.textSecondary}
+                />
+
+                <View style={styles.statusRow}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {MEMBER_GENDER_VALUES.map((g) => (
+                      <Pressable
+                        key={`${row._localId}-${g}`}
+                        style={[styles.statusChip, row.gender === g ? styles.statusChipActive : undefined]}
+                        onPress={() => updateFamilyMember(row._localId, "gender", g)}
+                      >
+                        <Text style={[styles.statusChipText, row.gender === g ? styles.statusChipTextActive : undefined]}>
+                          {MEMBER_GENDER_LABELS[g]}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                <TextInput
+                  style={styles.input}
+                  placeholder="တော်စပ်ပုံ"
+                  value={row.relation || ""}
+                  onChangeText={(value) => updateFamilyMember(row._localId, "relation", value)}
+                  placeholderTextColor={Colors.light.textSecondary}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="မွေးသက္ကရာဇ် (DD/MM/YYYY)"
+                  value={row.dob || ""}
+                  onChangeText={(value) => updateFamilyMember(row._localId, "dob", value)}
+                  placeholderTextColor={Colors.light.textSecondary}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="နိုင်ငံသားစိစစ်ရေးကဒ်အမှတ်"
+                  value={row.nrc || ""}
+                  onChangeText={(value) => updateFamilyMember(row._localId, "nrc", value)}
+                  placeholderTextColor={Colors.light.textSecondary}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="အလုပ်အကိုင်"
+                  value={row.occupation || ""}
+                  onChangeText={(value) => updateFamilyMember(row._localId, "occupation", value)}
+                  placeholderTextColor={Colors.light.textSecondary}
+                />
+              </View>
+            ))
+          )}
         </ScrollView>
 
         <Modal
@@ -765,4 +930,41 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },
   modalOption: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   modalOptionText: { fontSize: 16, color: Colors.light.text },
+  familySectionHeader: {
+    marginTop: 16,
+    marginBottom: 4,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  addFamilyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: Colors.light.tint,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  addFamilyBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  familyHint: { color: Colors.light.textSecondary, fontSize: 12, marginTop: 2 },
+  familyCard: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    gap: 8,
+  },
+  familyCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  familyCardTitle: {
+    color: Colors.light.text,
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
 });

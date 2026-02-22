@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import {
   Member,
+  MemberFamilyMember,
   OrgEvent,
   Group,
   AttendanceRecord,
@@ -99,6 +100,218 @@ export function randomColor(): string {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 }
 
+function normalizeFamilyMembers(input: unknown): MemberFamilyMember[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const rows = input
+    .map((row) => {
+      const obj = (row || {}) as any;
+      const name = String(obj.name || "").trim();
+      if (!name) return null;
+      return {
+        id: obj.id ? String(obj.id) : undefined,
+        name,
+        gender: obj.gender === "male" || obj.gender === "female" || obj.gender === "other" ? obj.gender : undefined,
+        relation: obj.relation ? String(obj.relation).trim() : undefined,
+        dob: obj.dob ? String(obj.dob).trim() : undefined,
+        nrc: obj.nrc ? String(obj.nrc).trim() : undefined,
+        occupation: obj.occupation ? String(obj.occupation).trim() : undefined,
+      } as MemberFamilyMember;
+    })
+    .filter(Boolean) as MemberFamilyMember[];
+  return rows.length > 0 ? rows : [];
+}
+
+function normalizeMemberPatch(updates: any): Partial<Member> {
+  const next: any = { ...(updates || {}) };
+  if ("occupation" in next) {
+    next.occupation = next.occupation ? String(next.occupation).trim() : undefined;
+  }
+  if ("profileImage" in next) {
+    next.profileImage = next.profileImage ? String(next.profileImage) : undefined;
+  }
+  if ("familyMembers" in next) {
+    next.familyMembers = normalizeFamilyMembers(next.familyMembers);
+  }
+  return next;
+}
+
+async function remapMemberIdReferences(oldId: string, newId: string): Promise<void> {
+  const from = String(oldId || "").trim();
+  const to = String(newId || "").trim();
+  if (!from || !to || from === to) return;
+
+  const [
+    transactions,
+    loans,
+    groups,
+    users,
+    memberChangeRequests,
+    events,
+    expenseClaims,
+    memberPaymentRequests,
+    chatMessages,
+  ] = await Promise.all([
+    getTransactions(),
+    getLoans(),
+    getGroups(),
+    getUsers(),
+    getMemberChangeRequests(),
+    getEvents(),
+    getExpenseClaims(),
+    getMemberPaymentRequests(),
+    getChatMessages(),
+  ]);
+
+  let txChanged = false;
+  const nextTransactions = transactions.map((row: any) => {
+    if (String(row?.memberId || "") !== from) return row;
+    txChanged = true;
+    return { ...row, memberId: to };
+  });
+
+  let loanChanged = false;
+  const nextLoans = loans.map((row: any) => {
+    if (String(row?.memberId || "") !== from) return row;
+    loanChanged = true;
+    return { ...row, memberId: to };
+  });
+
+  let groupChanged = false;
+  const nextGroups = groups.map((row: any) => {
+    const ids = Array.isArray(row?.memberIds) ? row.memberIds : [];
+    if (!ids.includes(from)) return row;
+    groupChanged = true;
+    return {
+      ...row,
+      memberIds: ids.map((id: string) => (String(id) === from ? to : id)),
+    };
+  });
+
+  let userChanged = false;
+  const nextUsers = users.map((row: any) => {
+    if (String(row?.memberId || "") !== from) return row;
+    userChanged = true;
+    return { ...row, memberId: to };
+  });
+
+  let reqChanged = false;
+  const nextRequests = memberChangeRequests.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.targetMemberId || "") === from) {
+      next.targetMemberId = to;
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    const memberPayload = row?.payload?.member;
+    if (memberPayload && typeof memberPayload === "object") {
+      if (String(memberPayload.id || "") === from) {
+        next.payload = { ...(row.payload || {}), member: { ...memberPayload, id: to } };
+        changed = true;
+      }
+    }
+    if (changed) reqChanged = true;
+    return next;
+  });
+
+  let eventChanged = false;
+  const nextEvents = events.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (Array.isArray(row?.attendeeIds) && row.attendeeIds.includes(from)) {
+      next.attendeeIds = row.attendeeIds.map((id: string) => (String(id) === from ? to : id));
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    if (String(row?.senderMemberId || "") === from) {
+      next.senderMemberId = to;
+      changed = true;
+    }
+    if (String(row?.subjectMemberId || "") === from) {
+      next.subjectMemberId = to;
+      changed = true;
+    }
+    if (String(row?.healthPatientMemberId || "") === from) {
+      next.healthPatientMemberId = to;
+      changed = true;
+    }
+    if (changed) eventChanged = true;
+    return next;
+  });
+
+  let claimChanged = false;
+  const nextClaims = expenseClaims.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.claimantMemberId || "") === from) {
+      next.claimantMemberId = to;
+      changed = true;
+    }
+    if (String(row?.relatedMemberId || "") === from) {
+      next.relatedMemberId = to;
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    if (changed) claimChanged = true;
+    return next;
+  });
+
+  let paymentChanged = false;
+  const nextPayments = memberPaymentRequests.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.forMemberId || "") === from) {
+      next.forMemberId = to;
+      changed = true;
+    }
+    if (String(row?.payerMemberId || "") === from) {
+      next.payerMemberId = to;
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    if (changed) paymentChanged = true;
+    return next;
+  });
+
+  let chatChanged = false;
+  const nextChatMessages = chatMessages.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.senderMemberId || "") === from) {
+      next.senderMemberId = to;
+      changed = true;
+    }
+    if (changed) chatChanged = true;
+    return next;
+  });
+
+  const writes: Promise<any>[] = [];
+  if (txChanged) writes.push(saveTransactions(nextTransactions as any[]));
+  if (loanChanged) writes.push(AsyncStorage.setItem(KEYS.LOANS, JSON.stringify(nextLoans)));
+  if (groupChanged) writes.push(saveGroups(nextGroups as any[]));
+  if (userChanged) writes.push(saveUsers(nextUsers as any[]));
+  if (reqChanged) writes.push(saveMemberChangeRequests(nextRequests as any[]));
+  if (eventChanged) writes.push(AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify(nextEvents)));
+  if (claimChanged) writes.push(AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(nextClaims)));
+  if (paymentChanged) writes.push(AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(nextPayments)));
+  if (chatChanged) writes.push(saveChatMessages(nextChatMessages as any[]));
+  if (writes.length > 0) {
+    await Promise.all(writes);
+  }
+}
+
 // ဒေတာဖတ်တဲ့ function တိုင်းမှာ try-catch ထည့်ထားလို့ error တက်ရင်တောင် အဝိုင်းလည်မနေတော့ပါဘူး
 async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
   try {
@@ -185,7 +398,7 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
 
   let nextMembers = [...members];
   if (request.action === "create") {
-    const incoming = request.payload.member || {};
+    const incoming = normalizeMemberPatch(request.payload.member || {}) as any;
     const incomingId = String(incoming.id || "").trim();
     if (!incomingId) throw new Error("invalid_member_id");
     const exists = nextMembers.some((item) => item.id === incomingId);
@@ -210,6 +423,8 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
       statusDate: incoming.statusDate,
       statusNote: incoming.statusNote,
       profileImage: incoming.profileImage,
+      occupation: incoming.occupation,
+      familyMembers: normalizeFamilyMembers(incoming.familyMembers),
     };
     nextMembers = [...nextMembers, member];
   } else if (request.action === "update") {
@@ -218,15 +433,24 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
     const memberIndex = nextMembers.findIndex((item) => item.id === targetId);
     if (memberIndex === -1) throw new Error("target_not_found");
 
-    const updatePayload = { ...(request.payload.member || {}) };
-    if (updatePayload.id && updatePayload.id !== targetId) {
-      throw new Error("id_change_not_supported");
+    const updatePayload = normalizeMemberPatch(request.payload.member || {}) as any;
+    const requestedId = String(updatePayload.id || "").trim();
+    if (requestedId && requestedId !== targetId) {
+      const exists = nextMembers.some((item, idx) => idx !== memberIndex && item.id === requestedId);
+      if (exists) throw new Error("member_exists");
+      await remapMemberIdReferences(targetId, requestedId);
+      nextMembers[memberIndex] = {
+        ...nextMembers[memberIndex],
+        ...updatePayload,
+        id: requestedId,
+      };
+    } else {
+      delete (updatePayload as any).id;
+      nextMembers[memberIndex] = {
+        ...nextMembers[memberIndex],
+        ...updatePayload,
+      };
     }
-    delete (updatePayload as any).id;
-    nextMembers[memberIndex] = {
-      ...nextMembers[memberIndex],
-      ...updatePayload,
-    };
   } else if (request.action === "delete") {
     const targetId = String(request.targetMemberId || "").trim();
     if (!targetId) throw new Error("target_missing");
@@ -452,10 +676,11 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
+  const normalized = normalizeMemberPatch(member) as any;
   const newMember = {
-    ...member,
-    id: member.id || generateId(),
-    avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
+    ...normalized,
+    id: normalized.id || generateId(),
+    avatarColor: normalized.avatarColor || AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
     createdAt: new Date().toISOString()
   };
 
@@ -474,7 +699,14 @@ export async function updateMember(id: string, updates: any) {
   const members = await getMembers();
   const idx = members.findIndex(m => m.id === id);
   if (idx !== -1) {
-    members[idx] = { ...members[idx], ...updates };
+    const normalized = normalizeMemberPatch(updates) as any;
+    const nextId = String(normalized.id || id).trim() || id;
+    if (nextId !== id) {
+      const exists = members.some((m, i) => i !== idx && String(m.id || "") === nextId);
+      if (exists) throw new Error("member_exists");
+      await remapMemberIdReferences(id, nextId);
+    }
+    members[idx] = { ...members[idx], ...normalized, id: nextId };
     await saveMembers(members);
   }
 }

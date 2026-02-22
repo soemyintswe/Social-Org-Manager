@@ -448,11 +448,13 @@ export default function MembersScreen() {
                   {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || normalizedStatus)]}
                 </Text>
                 <Text style={[styles.metaText, { marginLeft: 8 }]}>
-                  {MEMBER_GENDER_LABELS[
-                    ((item as any).gender === "male" || (item as any).gender === "female" || (item as any).gender === "other")
-                      ? (item as any).gender
-                      : inferGenderFromName(item.name || "")
-                  ]}
+                  {(() => {
+                    const normalizedGender: "male" | "female" | "other" =
+                      (item as any).gender === "male" || (item as any).gender === "female" || (item as any).gender === "other"
+                        ? ((item as any).gender as "male" | "female" | "other")
+                        : inferGenderFromName(item.name || "");
+                    return MEMBER_GENDER_LABELS[normalizedGender];
+                  })()}
                 </Text>
                 {sortBy !== 'age' && (() => {
                   const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());

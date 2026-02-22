@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.19",
-  "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.19-202602221320.apk?raw=1",
-  "notes": "Version 1.1.19: desktop startup reliability improvements and updated release package.",
-  "force": false,
-  "publishedAt": "2026-02-22T06:20:00Z"
+    "latestVersion":  "1.1.21",
+    "minimumVersion":  "1.0.0",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.21-202602222344.apk?raw=1",
+    "notes":  "Version 1.1.21: member restricted-field approval flow, profile photo editing restored, and occupation/family profile fields added.",
+    "force":  false,
+    "publishedAt":  "2026-02-22T23:44:00Z"
 }

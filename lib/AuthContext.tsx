@@ -407,6 +407,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         memberStatusLabel: loginState.memberStatusLabel,
       };
     }
+    if (!user) {
+      return {
+        ok: false,
+        reason: "invalid_username",
+      };
+    }
 
     const isValid = await verifyPassword(user.id, passwordPlaintext);
     if (!isValid) {

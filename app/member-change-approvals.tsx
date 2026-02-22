@@ -16,7 +16,10 @@ import type { MemberChangeRequest } from "@/lib/types";
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
 const PENDING_OVERDUE_DAYS = 3;
 const MEMBER_FIELD_LABELS: Record<string, string> = {
+  id: "အသင်းဝင်အမှတ်",
   name: "အမည်",
+  gender: "ကျား/မ",
+  occupation: "အလုပ်အကိုင်",
   phone: "ဖုန်း",
   email: "အီးမေးလ်",
   dob: "မွေးသက္ကရာဇ်",
@@ -25,6 +28,8 @@ const MEMBER_FIELD_LABELS: Record<string, string> = {
   status: "အခြေအနေ",
   statusDate: "အခြေအနေရက်စွဲ",
   statusNote: "မှတ်ချက်",
+  profileImage: "Profile ပုံ",
+  familyMembers: "မိသားစုဝင်အချက်အလက်",
 };
 
 function mapRequestErrorMessage(error: unknown, fallback: string): string {

@@ -92,8 +92,8 @@ android {
         applicationId 'com.soemyintswe.orghub'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 21
-        versionName "1.1.19"
+        versionCode 22
+        versionName "1.1.21"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -180,3 +180,4 @@ dependencies {
         implementation jscFlavor
     }
 }
+
