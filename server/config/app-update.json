@@ -1,8 +1,8 @@
 {
-    "latestVersion":  "1.1.25",
+    "latestVersion":  "1.1.26",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.25-202602230246.apk?raw=1",
-    "notes":  "Version 1.1.25: fixed Android installer/launcher icon to MKS logo in native resources and improved auto-update install flow for MIUI/Package Installer compatibility.",
+    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.26-202602230257.apk?raw=1",
+    "notes":  "Version 1.1.26: updated System Information technology credit and expanded full User Guide content in System Management.",
     "force":  false,
-    "publishedAt":  "2026-02-22T20:16:30Z"
+    "publishedAt":  "2026-02-22T20:27:44Z"
 }

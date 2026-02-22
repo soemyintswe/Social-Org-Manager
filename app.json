@@ -2,7 +2,7 @@
   "expo": {
     "name": "Social Org Manager",
     "slug": "orghub",
-    "version": "1.1.25",
+    "version": "1.1.26",
     "orientation": "portrait",
     "extra": {
       "eas": {
@@ -87,5 +87,6 @@
     }
   }
 }
+
 
 
