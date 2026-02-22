@@ -4,6 +4,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -15,6 +16,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/AuthContext";
+import { getCurrentAppVersion } from "../lib/app-update";
 
 const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
   "နုတ်ထွက်": "နှုတ်ထွက်ထားပါသည်။",
@@ -28,6 +30,7 @@ const LOGIN_DENIED_SUFFIX = "Login ဝင်ခွင့်မရှိပါ။
 export default function SignInScreen() {
   const { attemptLogin, checkUsernameStatus, getLoginLockInfo, loading } = useAuth();
   const router = useRouter();
+  const appVersion = getCurrentAppVersion();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -154,11 +157,12 @@ export default function SignInScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <LinearGradient colors={["#0F766E", "#115E59"]} style={styles.heroCard}>
             <View style={styles.logoContainer}>
-              <Ionicons name="shield-checkmark" size={28} color="#fff" />
+              <Image source={require("../assets/images/icon.png")} style={styles.logoImage} />
             </View>
             <Text style={styles.appName}>Social Org Manager</Text>
             <Text style={styles.title}>User Login</Text>
             <Text style={styles.subtitle}>Member ID / Full Name / Phone / Email / ID### ဖြင့် ဝင်ရောက်နိုင်သည်</Text>
+            <Text style={styles.versionText}>Version {appVersion}</Text>
           </LinearGradient>
 
           <View style={styles.formCard}>
@@ -235,6 +239,47 @@ export default function SignInScreen() {
               <Text style={styles.hintText}>Name Login: ဦးစိုးမြင့်ဆွေ / စိုးမြင့်ဆွေ လည်းအသုံးပြုနိုင်သည်</Text>
               <Text style={styles.hintText}>Admin Account: Username = Admin, Password = Admin</Text>
             </View>
+
+            <View style={styles.guideCard}>
+              <Text style={styles.guideTitle}>App အသုံးပြုနည်း (အပြည့်အစုံ)</Text>
+              <Text style={styles.guideSectionTitle}>1) Login / Account</Text>
+              <Text style={styles.guideText}>1.1 Username ကို Member ID (ID001), Full Name, Phone, Email သို့မဟုတ် Admin ဖြင့်ဝင်နိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>1.2 Member Status သည် Active မဟုတ်ပါက Login ဝင်ခွင့်မရှိပါ။</Text>
+              <Text style={styles.guideText}>1.3 Password မေ့လျှင် Account Settings မှ Reset workflow ကိုအသုံးပြုပါ။</Text>
+
+              <Text style={styles.guideSectionTitle}>2) Dashboard</Text>
+              <Text style={styles.guideText}>2.1 အသင်းဝင်, ငွေစာရင်း, ချေးငွေ, Event နှင့် Message အနှစ်ချုပ်ကို Dashboard တွင်ကြည့်နိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>2.2 အမြန်လုပ်ဆောင်ချက်များမှ Sync Now, Messages, သတင်းပို့ရန်, ငွေတောင်းခံရန် စသည့်ခလုတ်များကိုနှိပ်ပြီး တိုက်ရိုက်ဝင်ရောက်နိုင်ပါသည်။</Text>
+
+              <Text style={styles.guideSectionTitle}>3) Members</Text>
+              <Text style={styles.guideText}>3.1 Member စာရင်းတွင် အခြေခံအချက်အလက်များကြည့်ရှုနိုင်ပြီး မိမိ profile ကိုပြင်ဆင်နိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>3.2 Profile Photo, Occupation နှင့် Family Member အချက်အလက်များကိုဖြည့်သွင်းနိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>3.3 MemberID / Position / Status / Status Date ပြင်ဆင်မှုများသည် လုပ်ပိုင်ခွင့်အလိုက် approval flow ဖြင့်ဆောင်ရွက်ပါသည်။</Text>
+
+              <Text style={styles.guideSectionTitle}>4) Events / News</Text>
+              <Text style={styles.guideText}>4.1 သတင်းပို့ရန်ကိုနှိပ်လျှင် Events Page သို့ဝင်ပြီး Event အသစ်တင်နိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>4.2 Event တိုင်းတွင် read status, reactions, comments, replies နှင့် mentions အသိပေးချက်များရရှိနိုင်ပါသည်။</Text>
+
+              <Text style={styles.guideSectionTitle}>5) Finance / Payments</Text>
+              <Text style={styles.guideText}>5.1 လစဉ်ကြေး, လှူဒါန်းငွေ, ချေးငွေဆပ်, အတိုးဆပ် စသည့် payment request များကို category ချိတ်ဆက်ပြီး အသုံးပြုနိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>5.2 ပြေစာပုံတင်ခြင်း, Wallet App ဖွင့်ခြင်း နှင့် ဘဏ္ဍာရေးမှူးစစ်ဆေးအတည်ပြုပြီးမှ ရငွေစာရင်းသို့သွင်းသည့် workflow ကိုအသုံးပြုပါ။</Text>
+
+              <Text style={styles.guideSectionTitle}>6) Messages</Text>
+              <Text style={styles.guideText}>6.1 Member အချင်းချင်း chat, group chat, image ပို့ခြင်းများလုပ်နိုင်ပါသည်။</Text>
+              <Text style={styles.guideText}>6.2 Mention/tag reply များအတွက် notification badge နှင့် unread count ကိုတွေ့ရပါမည်။</Text>
+
+              <Text style={styles.guideSectionTitle}>7) Sync / Backup / Restore</Text>
+              <Text style={styles.guideText}>7.1 Sync Now ကိုနှိပ်လျှင် LAN Pull/Push + Cloud Pull/Push ကိုအလိုအလျောက်လုပ်ဆောင်ပါသည် (Enable လုပ်ထားသည့် setting အလိုက်)။</Text>
+              <Text style={styles.guideText}>7.2 Backup/Restore တွင် Member, Events, Finance, Chat နှင့် Settings အချက်အလက်များအပါအဝင် စနစ်တကျသိမ်းဆည်း/ပြန်လည်ထည့်သွင်းနိုင်ပါသည်။</Text>
+
+              <Text style={styles.guideSectionTitle}>8) App Update</Text>
+              <Text style={styles.guideText}>8.1 App ဖွင့်ချိန်တွင် update ရှိ/မရှိကိုအလိုအလျောက်စစ်ပါသည်။</Text>
+              <Text style={styles.guideText}>8.2 Update ရှိပါက Update Now နှိပ်ပြီး APK auto-download နှင့် install prompt ဖြင့် update ဆက်လုပ်နိုင်ပါသည်။</Text>
+
+              <Text style={styles.guideSectionTitle}>9) Security</Text>
+              <Text style={styles.guideText}>9.1 အချိန်ကာလတစ်ခု မအသုံးပြုပါက auto logout ဖြစ်နိုင်ပြီး refresh/open ပြုလုပ်သည့်အခြေအနေတွင် session policy အတိုင်းလုပ်ဆောင်ပါသည်။</Text>
+              <Text style={styles.guideText}>9.2 မိမိ account အချက်အလက်များကို logout မထွက်မချင်း ကာကွယ်အသုံးပြုရန်အကြံပြုပါသည်။</Text>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -255,10 +300,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 12,
+    overflow: "hidden",
   },
+  logoImage: { width: 48, height: 48, borderRadius: 24 },
   appName: { color: "rgba(255,255,255,0.9)", fontSize: 14, marginBottom: 4 },
   title: { color: "#FFFFFF", fontSize: 28, fontWeight: "700", marginBottom: 8 },
   subtitle: { color: "rgba(255,255,255,0.9)", fontSize: 13, lineHeight: 19 },
+  versionText: { color: "rgba(255,255,255,0.95)", fontSize: 12, marginTop: 10, fontWeight: "600" },
   formCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
@@ -307,4 +355,8 @@ const styles = StyleSheet.create({
   hintCard: { marginTop: 16, borderRadius: 12, padding: 12, backgroundColor: "#F0FDFA", borderWidth: 1, borderColor: "#99F6E4" },
   hintTitle: { color: "#0F766E", fontWeight: "700", marginBottom: 6, fontSize: 13 },
   hintText: { color: "#115E59", fontSize: 12, lineHeight: 18 },
+  guideCard: { marginTop: 12, borderRadius: 12, padding: 12, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#CBD5E1" },
+  guideTitle: { color: "#0F172A", fontWeight: "700", marginBottom: 6, fontSize: 13 },
+  guideSectionTitle: { color: "#0F172A", fontWeight: "700", marginTop: 8, marginBottom: 4, fontSize: 12 },
+  guideText: { color: "#334155", fontSize: 12, lineHeight: 18 },
 });

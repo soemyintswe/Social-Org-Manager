@@ -14,6 +14,9 @@ export type AppUpdateInfo = {
   reason?: string;
 };
 
+const GITHUB_APP_UPDATE_JSON_URL =
+  "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/feature/expense-management-system/server/config/app-update.json";
+
 function parseVersion(version: string): number[] {
   return String(version || "")
     .split(".")
@@ -65,47 +68,54 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Respons
   ]);
 }
 
+function mapPayloadToInfo(payload: Partial<AppUpdateInfo>, currentVersion: string): AppUpdateInfo {
+  const latestVersion = String(payload.latestVersion || "");
+  const downloadUrl = String(payload.downloadUrl || "");
+  const hasUpdateByCompare = latestVersion ? compareVersion(latestVersion, currentVersion) > 0 : false;
+  const hasUpdate = Boolean(payload.hasUpdate ?? hasUpdateByCompare);
+  return {
+    ok: true,
+    hasUpdate,
+    latestVersion,
+    minimumVersion: String(payload.minimumVersion || ""),
+    downloadUrl,
+    notes: String(payload.notes || ""),
+    force: Boolean(payload.force),
+    publishedAt: String(payload.publishedAt || ""),
+  };
+}
+
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
+  const currentVersion = getCurrentAppVersion();
   try {
     const settings = await getAccountSettings();
     const baseUrl = normalizeUrl(settings.syncServerUrl || "");
-    if (!baseUrl) {
+    if (baseUrl) {
+      try {
+        const res = await fetchWithTimeout(
+          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}`
+        );
+        if (res.ok) {
+          const payload = (await res.json()) as Partial<AppUpdateInfo>;
+          return mapPayloadToInfo(payload, currentVersion);
+        }
+      } catch {
+        // fall through to GitHub manifest
+      }
+    }
+
+    const githubRes = await fetchWithTimeout(GITHUB_APP_UPDATE_JSON_URL);
+    if (!githubRes.ok) {
       return {
         ok: false,
         hasUpdate: false,
         latestVersion: "",
         downloadUrl: "",
-        reason: "sync_server_url_missing",
+        reason: `http_${githubRes.status}`,
       };
     }
-    const currentVersion = getCurrentAppVersion();
-    const res = await fetchWithTimeout(
-      `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}`
-    );
-    if (!res.ok) {
-      return {
-        ok: false,
-        hasUpdate: false,
-        latestVersion: "",
-        downloadUrl: "",
-        reason: `http_${res.status}`,
-      };
-    }
-    const payload = (await res.json()) as Partial<AppUpdateInfo>;
-    const latestVersion = String(payload.latestVersion || "");
-    const downloadUrl = String(payload.downloadUrl || "");
-    const hasUpdateByCompare = latestVersion ? compareVersion(latestVersion, currentVersion) > 0 : false;
-    const hasUpdate = Boolean(payload.hasUpdate ?? hasUpdateByCompare);
-    return {
-      ok: true,
-      hasUpdate,
-      latestVersion,
-      minimumVersion: String(payload.minimumVersion || ""),
-      downloadUrl,
-      notes: String(payload.notes || ""),
-      force: Boolean(payload.force),
-      publishedAt: String(payload.publishedAt || ""),
-    };
+    const githubPayload = (await githubRes.json()) as Partial<AppUpdateInfo>;
+    return mapPayloadToInfo(githubPayload, currentVersion);
   } catch (e: any) {
     return {
       ok: false,

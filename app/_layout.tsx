@@ -89,7 +89,7 @@ function RootLayoutNav() {
   }, [isAuthenticated, loading, segments, router]);
 
   useEffect(() => {
-    if (loading || !isAuthenticated || Platform.OS === "web") return;
+    if (loading || Platform.OS === "web") return;
 
     const checkForUpdateNow = async (force = false) => {
       if (updateCheckInFlightRef.current) return;
@@ -133,7 +133,7 @@ function RootLayoutNav() {
       clearInterval(timer);
       sub.remove();
     };
-  }, [loading, isAuthenticated]);
+  }, [loading]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

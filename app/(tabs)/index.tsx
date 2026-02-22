@@ -849,7 +849,7 @@ export default function DashboardScreen() {
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
         {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
-        <QuickAction icon="megaphone-outline" label="သတင်းပို့ရန်" onPress={() => router.push("/add-event" as any)} />
+        <QuickAction icon="megaphone-outline" label="သတင်းပို့ရန်" onPress={() => router.push("/events" as any)} />
         <QuickAction icon="card-outline" label="လစဉ်ကြေးပေးသွင်းရန်" onPress={() => openPaymentRequest("member_fees")} />
         <QuickAction icon="gift-outline" label="လှူဒါန်းရန်" onPress={() => openPaymentRequest("donations")} />
         <QuickAction icon="cash-outline" label="ချေးငွေဆပ်ရန်" onPress={() => openPaymentRequest("loan_repayment")} />
