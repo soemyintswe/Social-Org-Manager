@@ -171,22 +171,49 @@ function RootLayoutNav() {
 
       setUpdatingNow(true);
       setUpdateProgressText("Update APK ကို download လုပ်နေပါသည်...");
-      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory || "";
+      const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory || "";
       if (!baseDir) throw new Error("storage_unavailable");
 
-      const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}-${Date.now()}.apk`;
+      const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}.apk`;
+      try {
+        await FileSystem.deleteAsync(fileUri, { idempotent: true });
+      } catch {}
       const downloadResult = await FileSystem.downloadAsync(normalizedUrl, fileUri);
       if (!downloadResult?.uri || (downloadResult.status && downloadResult.status >= 400)) {
         throw new Error(`download_failed_${downloadResult?.status || "unknown"}`);
       }
+      const fileInfo = await FileSystem.getInfoAsync(downloadResult.uri, { size: true });
+      if (!fileInfo.exists || Number(fileInfo.size || 0) < 5 * 1024 * 1024) {
+        throw new Error("downloaded_apk_invalid_or_too_small");
+      }
 
       setUpdateProgressText("Install prompt ကိုဖွင့်နေပါသည်...");
       const contentUri = await FileSystem.getContentUriAsync(downloadResult.uri);
-      await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
-        data: contentUri,
-        type: "application/vnd.android.package-archive",
-        flags: 1 | 268435456,
-      });
+      let installStarted = false;
+      try {
+        await IntentLauncher.startActivityAsync("android.intent.action.INSTALL_PACKAGE", {
+          data: contentUri,
+          type: "application/vnd.android.package-archive",
+          flags: 1 | 2 | 268435456,
+          extra: {
+            "android.intent.extra.NOT_UNKNOWN_SOURCE": true,
+            "android.intent.extra.RETURN_RESULT": false,
+          },
+        } as any);
+        installStarted = true;
+      } catch {
+        try {
+          await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+            data: contentUri,
+            type: "application/vnd.android.package-archive",
+            flags: 1 | 2 | 268435456,
+          });
+          installStarted = true;
+        } catch {}
+      }
+      if (!installStarted) {
+        throw new Error("install_intent_failed");
+      }
       setShowUpdateModal(false);
     } catch (error: any) {
       Alert.alert(
