@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.18",
+  "latestVersion": "1.1.19",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.18-202602221238.apk?raw=1",
-  "notes": "Version 1.1.18: improved cloud+LAN sync reliability, fixed web cloud proxy flow, and stabilized desktop embedded server path handling.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.19-202602221320.apk?raw=1",
+  "notes": "Version 1.1.19: desktop startup reliability improvements and updated release package.",
   "force": false,
-  "publishedAt": "2026-02-22T05:38:00Z"
+  "publishedAt": "2026-02-22T06:20:00Z"
 }
