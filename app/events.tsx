@@ -25,6 +25,7 @@ import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
 
 type EventType = "activity" | "news" | "announcement";
 
@@ -94,7 +95,6 @@ interface OrgEventNotice {
 }
 
 const CUSTOM_TOPIC_KEY = "@org_notice_custom_topics";
-const CUSTOM_RELATION_KEY = "@org_notice_custom_relations";
 const CUSTOM_CONDITION_KEY = "@org_notice_custom_conditions";
 const PRESET_TOPICS = [
   "အလှူပွဲတက်ရောက်ရန်ဖိတ်ကြားခြင်း",
@@ -104,7 +104,7 @@ const PRESET_TOPICS = [
   "ပညာရေးဆိုင်ရာသတင်းပေးပို့ခြင်း",
   "အခြားကိစ္စ",
 ] as const;
-const PRESET_RELATIONS = ["ကိုယ်တိုင်", "ဖခင်", "မိခင်", "သား", "သမီး", "အတူနေမိသားစုဝင်"] as const;
+const PRESET_RELATIONS = DEFAULT_RELATION_OPTIONS_WITH_SELF;
 const PRESET_HEALTH_CONDITIONS = ["အသဲအသန်", "ခွဲစိတ်ကုသ", "ထိခိုက်ဒဏ်ရာရ", "ဖျားနာ"] as const;
 
 function formatYmd(date: Date): string {
@@ -277,7 +277,7 @@ export default function EventsScreen() {
   const [senderMemberIdInput, setSenderMemberIdInput] = useState(currentUser?.memberId || "");
 
   const allTopics = useMemo(() => [...PRESET_TOPICS, ...customTopics], [customTopics]);
-  const allRelations = useMemo(() => [...PRESET_RELATIONS, ...customRelations], [customRelations]);
+  const allRelations = useMemo(() => mergeRelationOptions(customRelations, true), [customRelations]);
   const allHealthConditions = useMemo(() => [...PRESET_HEALTH_CONDITIONS, ...customConditions], [customConditions]);
   const senderMembers = useMemo(
     () => [...(members || [])].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
@@ -362,7 +362,7 @@ export default function EventsScreen() {
     (async () => {
       try {
         const [rawRelations, rawConditions] = await Promise.all([
-          AsyncStorage.getItem(CUSTOM_RELATION_KEY),
+          AsyncStorage.getItem(CUSTOM_RELATION_STORAGE_KEY),
           AsyncStorage.getItem(CUSTOM_CONDITION_KEY),
         ]);
         if (!mounted) return;
@@ -492,7 +492,7 @@ export default function EventsScreen() {
     }
     const next = [...customRelations, value];
     setCustomRelations(next);
-    await AsyncStorage.setItem(CUSTOM_RELATION_KEY, JSON.stringify(next));
+    await AsyncStorage.setItem(CUSTOM_RELATION_STORAGE_KEY, JSON.stringify(next));
     if (isFuneralNotice) {
       applyFuneralRelation(value);
     } else {

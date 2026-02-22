@@ -10,6 +10,7 @@ import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
 import { normalizeOrgPosition, type ExpenseClaim, type StandardAmountChangeRequest, type StandardAmountRule } from "@/lib/types";
 
 type Tab = "claims" | "amounts";
@@ -40,7 +41,7 @@ const FUNERAL_SUBTYPES = [
   { id: "funeral_support_association_member", label: "နာရေးကူညီငွေ (ဆင်သေရွာအသင်းဝင်)" },
 ];
 
-const DEFAULT_RELATIONS = ["ကိုယ်တိုင်", "ဖခင်", "မိခင်", "သား", "သမီး", "အတူနေမိသားစုဝင်"];
+const DEFAULT_RELATIONS = DEFAULT_RELATION_OPTIONS_WITH_SELF;
 const CLAIM_DRAFT_KEY = "@orghub_expense_claim_draft";
 
 function todayYmd(): string {
@@ -133,7 +134,7 @@ export default function ExpenseClaimsScreen() {
   const [claimantType, setClaimantType] = useState<ClaimantType>("SELF");
   const [selectedMemberId, setSelectedMemberId] = useState(currentMember?.id || "");
   const [familyOwnerMemberId, setFamilyOwnerMemberId] = useState(currentMember?.id || "");
-  const [familyRelation, setFamilyRelation] = useState(DEFAULT_RELATIONS[0]);
+  const [familyRelation, setFamilyRelation] = useState<string>(DEFAULT_RELATIONS[0]);
   const [familyClaimantName, setFamilyClaimantName] = useState("");
   const [otherRelatedScope, setOtherRelatedScope] = useState<OtherRelatedScope>("org");
   const [otherRelatedMemberId, setOtherRelatedMemberId] = useState("");
@@ -175,7 +176,7 @@ export default function ExpenseClaimsScreen() {
       try {
         const [catRaw, relationRaw] = await Promise.all([
           AsyncStorage.getItem("@custom_categories"),
-          AsyncStorage.getItem("@org_notice_custom_relations"),
+          AsyncStorage.getItem(CUSTOM_RELATION_STORAGE_KEY),
         ]);
         if (!mounted) return;
         const parsedCats = catRaw ? JSON.parse(catRaw) : [];
@@ -201,7 +202,7 @@ export default function ExpenseClaimsScreen() {
     const extra = customExpenseCategories.filter((x) => !BASE_EXPENSE_CATEGORIES.some((y) => y.id === x.id));
     return [...BASE_EXPENSE_CATEGORIES, ...extra];
   }, [customExpenseCategories]);
-  const relationOptions = useMemo(() => [...DEFAULT_RELATIONS, ...customRelations], [customRelations]);
+  const relationOptions = useMemo(() => mergeRelationOptions(customRelations, true), [customRelations]);
 
   const selectedMember = useMemo(() => memberOptions.find((m: any) => String(m.id) === String(selectedMemberId)), [memberOptions, selectedMemberId]);
   const familyOwner = useMemo(() => memberOptions.find((m: any) => String(m.id) === String(familyOwnerMemberId)), [memberOptions, familyOwnerMemberId]);

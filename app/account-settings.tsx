@@ -76,6 +76,16 @@ export default function AccountSettingsScreen() {
     return withProtocol.replace(/\/+$/, "");
   };
 
+  const hasLanSyncConfigured = syncEnabled && !!normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+  const hasCloudSyncConfigured = cloudSyncEnabled && !!cloudSyncEndpoint.trim();
+  const storageModeLabel = hasLanSyncConfigured && hasCloudSyncConfigured
+    ? "Online + Offline (LAN + Cloud Sync)"
+    : hasLanSyncConfigured
+    ? "Online + Offline (LAN Sync)"
+    : hasCloudSyncConfigured
+    ? "Online + Offline (Cloud Sync)"
+    : "Offline (Local)";
+
   React.useEffect(() => {
     setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
     setSyncEnabled(accountSettings.syncEnabled !== false);
@@ -362,10 +372,14 @@ export default function AccountSettingsScreen() {
       >
         <View style={styles.storageCard}>
           <View style={styles.storageIcon}>
-            <Ionicons name={syncEnabled ? "cloud-done" : "cloud-offline"} size={24} color={syncEnabled ? "#16A34A" : "#F59E0B"} />
+            <Ionicons
+              name={hasLanSyncConfigured || hasCloudSyncConfigured ? "cloud-done" : "cloud-offline"}
+              size={24}
+              color={hasLanSyncConfigured || hasCloudSyncConfigured ? "#16A34A" : "#F59E0B"}
+            />
           </View>
           <View style={styles.storageTextContainer}>
-            <Text style={styles.storageTitle}>Storage: {syncEnabled ? "Online + Offline (LAN Sync)" : "Offline (Local)"}</Text>
+            <Text style={styles.storageTitle}>Storage: {storageModeLabel}</Text>
             <Text style={styles.storageDesc}>
               LAN Sync သို့မဟုတ် Google Drive Cloud Sync ကို Enable လုပ်ပါက အချက်အလက်များ မျှဝေညှိနှိုင်းနိုင်ပါမည်။
             </Text>

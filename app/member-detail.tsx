@@ -18,10 +18,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { isCommitteePosition } from "@/lib/access-control";
+import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
 import {
   CATEGORY_LABELS,
   ORG_POSITION_LABELS,
@@ -170,6 +172,11 @@ export default function MemberDetailScreen() {
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
   const [showPositionPicker, setShowPositionPicker] = useState(false);
+  const [familyDobPickerRowId, setFamilyDobPickerRowId] = useState<string | null>(null);
+  const [showFamilyRelationPicker, setShowFamilyRelationPicker] = useState(false);
+  const [familyRelationPickerRowId, setFamilyRelationPickerRowId] = useState<string | null>(null);
+  const [customRelations, setCustomRelations] = useState<string[]>([]);
+  const [newCustomRelation, setNewCustomRelation] = useState("");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
@@ -178,7 +185,15 @@ export default function MemberDetailScreen() {
     actorPosition === "chairperson" ||
     actorPosition === "vice_chairperson";
   const canProposeRestricted = Boolean(can("members.propose_changes") && !isChairOrVice && isCommitteePosition(actorPosition));
-  const canEditGeneralMemberInfo = Boolean(currentUser?.id && profile?.memberStatus !== "applicant");
+  const canEditRestrictedDirectly = isChairOrVice;
+  const isEditingOwnRecord =
+    !!member?.id &&
+    !!currentUser?.memberId &&
+    String(currentUser.memberId).trim() === String(member.id).trim();
+  const canEditGeneralOwnInfo = Boolean(currentUser?.id && profile?.memberStatus !== "applicant" && isEditingOwnRecord);
+  const canEditGeneralFields = canEditGeneralOwnInfo;
+  const canEditRestrictedFields = canEditRestrictedDirectly || canProposeRestricted;
+  const relationOptions = useMemo(() => mergeRelationOptions(customRelations, false), [customRelations]);
 
   const memberGroups = useMemo(
     () => groups?.filter((g: any) => g.memberIds.includes(memberId)) || [],
@@ -202,6 +217,25 @@ export default function MemberDetailScreen() {
     setEditOrgPosition((member.orgPosition as OrgPosition) || "member");
     setEditFamilyMembers(toFamilyFormRows((member as any).familyMembers));
   }, [member]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(CUSTOM_RELATION_STORAGE_KEY);
+        if (!mounted || !raw) return;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setCustomRelations(parsed.map((x: any) => String(x || "").trim()).filter(Boolean));
+        }
+      } catch {
+        // ignore malformed storage
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Financial Calculations
   const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === memberId) || [], [transactions, memberId]);
@@ -296,6 +330,59 @@ export default function MemberDetailScreen() {
 
   const removeFamilyMember = (localId: string) => {
     setEditFamilyMembers((prev) => prev.filter((row) => row._localId !== localId));
+    if (familyRelationPickerRowId === localId) {
+      setFamilyRelationPickerRowId(null);
+      setShowFamilyRelationPicker(false);
+    }
+    if (familyDobPickerRowId === localId) {
+      setFamilyDobPickerRowId(null);
+    }
+  };
+
+  const openFamilyRelationPicker = (localId: string) => {
+    if (!canEditGeneralFields) return;
+    setFamilyRelationPickerRowId(localId);
+    setShowFamilyRelationPicker(true);
+  };
+
+  const applyFamilyRelation = (relation: string) => {
+    if (!familyRelationPickerRowId) return;
+    updateFamilyMember(familyRelationPickerRowId, "relation", relation);
+    setShowFamilyRelationPicker(false);
+  };
+
+  const saveCustomRelation = async () => {
+    const value = String(newCustomRelation || "").trim();
+    if (!value) {
+      Alert.alert("လိုအပ်ချက်", "တော်စပ်ပုံအသစ်ကို ရိုက်ထည့်ပါ။");
+      return;
+    }
+    const alreadyExists = relationOptions.some((item) => item === value);
+    const nextCustomRelations = alreadyExists ? customRelations : [...customRelations, value];
+    try {
+      if (!alreadyExists) {
+        await AsyncStorage.setItem(CUSTOM_RELATION_STORAGE_KEY, JSON.stringify(nextCustomRelations));
+      }
+      setCustomRelations(nextCustomRelations);
+      if (familyRelationPickerRowId) {
+        updateFamilyMember(familyRelationPickerRowId, "relation", value);
+      }
+      setNewCustomRelation("");
+      setShowFamilyRelationPicker(false);
+    } catch {
+      Alert.alert("အမှား", "တော်စပ်ပုံအသစ် သိမ်းရာတွင် အဆင်မပြေပါ။");
+    }
+  };
+
+  const handleFamilyDobChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === "android") {
+      setFamilyDobPickerRowId(null);
+    }
+    if (!selectedDate || !familyDobPickerRowId) return;
+    const day = String(selectedDate.getDate()).padStart(2, "0");
+    const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+    const year = selectedDate.getFullYear();
+    updateFamilyMember(familyDobPickerRowId, "dob", `${day}/${month}/${year}`);
   };
 
   const pickProfileImage = async () => {
@@ -389,12 +476,29 @@ export default function MemberDetailScreen() {
         return;
       }
 
-      if (isChairOrVice) {
-        await updateMember(member.id, { ...unrestrictedPatch, ...restrictedPatch });
+      if (canEditRestrictedDirectly) {
+        if (hasUnrestrictedChanges && !canEditGeneralFields) {
+          Alert.alert("ခွင့်မပြုပါ", "အခြားအသင်းဝင်၏ ကိုယ်ရေးအချက်အလက်များကို တိုက်ရိုက်မပြင်နိုင်ပါ။");
+          setSaving(false);
+          return;
+        }
+        await updateMember(member.id, {
+          ...(hasUnrestrictedChanges ? unrestrictedPatch : {}),
+          ...(hasRestrictedChanges ? restrictedPatch : {}),
+        });
         Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
       } else {
-        if (!canEditGeneralMemberInfo) {
-          Alert.alert("ခွင့်မပြုပါ", "ဤအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+        if (hasUnrestrictedChanges && !canEditGeneralOwnInfo) {
+          Alert.alert("ခွင့်မပြုပါ", "မိမိနှင့်မသက်ဆိုင်သည့် ကိုယ်ရေးအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+          setSaving(false);
+          return;
+        }
+
+        if (hasRestrictedChanges && (!canProposeRestricted || !currentUser?.id)) {
+          Alert.alert(
+            "ခွင့်မပြုပါ",
+            "MemberID / Position / Status / Status Date ပြောင်းလိုပါက ကော်မတီဝင်ဖြစ်ရပြီး proposal တင်ရန်လိုပါသည်။ အတည်ပြုခြင်းကို ဥက္ကဋ္ဌ/ဒုဥက္ကဋ္ဌသာ လုပ်နိုင်ပါသည်။"
+          );
           setSaving(false);
           return;
         }
@@ -404,24 +508,27 @@ export default function MemberDetailScreen() {
         }
 
         if (hasRestrictedChanges) {
-          if (!canProposeRestricted || !currentUser?.id) {
-            Alert.alert(
-              "ခွင့်မပြုပါ",
-              "MemberID / Position / Status / Status Date ပြောင်းလိုပါက ကော်မတီဝင်ဖြစ်ရပြီး proposal တင်ရန်လိုပါသည်။ အတည်ပြုခြင်းကို ဥက္ကဋ္ဌ/ဒုဥက္ကဋ္ဌသာ လုပ်နိုင်ပါသည်။"
-            );
-          } else {
-            await createMemberChangeRequest({
-              action: "update",
-              targetMemberId: member.id,
-              payload: {
-                member: restrictedPatch as any,
-                note: "Restricted member fields update proposal",
-              },
-              createdByUserId: currentUser.id,
-              createdByMemberId: currentUser.memberId,
-            });
-            Alert.alert("အောင်မြင်ပါသည်", "Restricted fields proposal ကို approver ထံပို့ပြီးပါပြီ။");
+          if (!currentUser?.id) {
+            Alert.alert("ခွင့်မပြုပါ", "အသုံးပြုသူအချက်အလက် မပြည့်စုံသဖြင့် proposal မပို့နိုင်ပါ။");
+            setSaving(false);
+            return;
           }
+          await createMemberChangeRequest({
+            action: "update",
+            targetMemberId: member.id,
+            payload: {
+              member: restrictedPatch as any,
+              note: "Restricted member fields update proposal",
+            },
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+          });
+        }
+
+        if (hasRestrictedChanges && hasUnrestrictedChanges) {
+          Alert.alert("အောင်မြင်ပါသည်", "ကိုယ်ပိုင်အချက်အလက်များကို သိမ်းပြီး Restricted fields proposal ကိုလည်း Approver ထံပို့ပြီးပါပြီ။");
+        } else if (hasRestrictedChanges) {
+          Alert.alert("အောင်မြင်ပါသည်", "Restricted fields proposal ကို approver ထံပို့ပြီးပါပြီ။");
         } else {
           Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
         }
@@ -477,7 +584,7 @@ export default function MemberDetailScreen() {
 
   const canDeleteAll = can("members.delete");
   const canProposeChanges = can("members.propose_changes");
-  const canManage = canEditGeneralMemberInfo || isChairOrVice || canProposeRestricted;
+  const canManage = canEditGeneralFields || canEditRestrictedFields;
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
   const canViewFinanceSelf = can("finance.view_self") && currentUser?.memberId === member.id;
   const canViewFinanceSection = canViewFinanceDetail || canViewFinanceSelf;
@@ -536,18 +643,18 @@ export default function MemberDetailScreen() {
           <View style={styles.editForm}>
             <Text style={styles.editLabel}>Profile ပုံ</Text>
             <View style={styles.profileEditRow}>
-              <Pressable onPress={pickProfileImage} style={styles.profileEditBtn}>
+              <Pressable onPress={canEditGeneralFields ? pickProfileImage : undefined} style={[styles.profileEditBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]}>
                 {editProfileImage ? (
                   <Image source={{ uri: editProfileImage }} style={styles.profileEditPreview} resizeMode="cover" />
                 ) : (
                   <Ionicons name="camera-outline" size={22} color={Colors.light.textSecondary} />
                 )}
               </Pressable>
-              <Pressable style={styles.profileTextBtn} onPress={pickProfileImage}>
+              <Pressable style={[styles.profileTextBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]} onPress={canEditGeneralFields ? pickProfileImage : undefined}>
                 <Text style={styles.profileTextBtnLabel}>ပုံရွေးချယ်မည်</Text>
               </Pressable>
               {!!editProfileImage && (
-                <Pressable style={styles.profileRemoveBtn} onPress={() => setEditProfileImage(undefined)}>
+                <Pressable style={[styles.profileRemoveBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]} onPress={canEditGeneralFields ? () => setEditProfileImage(undefined) : undefined}>
                   <Text style={styles.profileRemoveBtnText}>ဖယ်ရှား</Text>
                 </Pressable>
               )}
@@ -555,22 +662,22 @@ export default function MemberDetailScreen() {
 
             <Text style={styles.editLabel}>Member ID</Text>
             <TextInput
-              style={[styles.editInput, !(isChairOrVice || canProposeRestricted) && styles.inputReadOnly]}
+              style={[styles.editInput, !canEditRestrictedFields && styles.inputReadOnly]}
               value={editMemberId}
               onChangeText={setEditMemberId}
-              editable={isChairOrVice || canProposeRestricted}
+              editable={canEditRestrictedFields}
             />
 
             <Text style={styles.editLabel}>Full Name</Text>
-            <TextInput style={styles.editInput} value={editName} onChangeText={setEditName} />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editName} onChangeText={setEditName} editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Gender</Text>
             <TextInput style={styles.editInput} value={MEMBER_GENDER_LABELS[resolvedGender]} editable={false} />
 
             <Text style={styles.editLabel}>Position</Text>
             <Pressable
-              style={[styles.dropdown, !(isChairOrVice || canProposeRestricted) && styles.inputReadOnly]}
-              onPress={() => (isChairOrVice || canProposeRestricted) && setShowPositionPicker(true)}
+              style={[styles.dropdown, !canEditRestrictedFields && styles.inputReadOnly]}
+              onPress={() => canEditRestrictedFields && setShowPositionPicker(true)}
             >
               <Text style={styles.dropdownText}>{ORG_POSITION_LABELS[editOrgPosition]}</Text>
               <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
@@ -579,17 +686,19 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Date of Birth</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
-                style={[styles.editInput, { flex: 1 }]}
+                style={[styles.editInput, { flex: 1 }, !canEditGeneralFields && styles.inputReadOnly]}
                 value={editDob}
                 onChangeText={setEditDob}
                 placeholder="DD/MM/YYYY"
+                editable={canEditGeneralFields}
               />
               {Platform.OS === 'web' ? (
-                <View style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }]}>
+                <View style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}>
                   <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
                   {React.createElement('input', {
                     type: 'date',
                     style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' },
+                    disabled: !canEditGeneralFields,
                     onChange: (e: any) => {
                       if (e.target.value) {
                         const [y, m, d] = e.target.value.split('-');
@@ -599,7 +708,7 @@ export default function MemberDetailScreen() {
                   })}
                 </View>
               ) : (
-                <Pressable onPress={() => setShowDobPicker(true)} style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }]}>
+                <Pressable onPress={() => canEditGeneralFields && setShowDobPicker(true)} style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}>
                   <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
                 </Pressable>
               )}
@@ -614,16 +723,16 @@ export default function MemberDetailScreen() {
             )}
 
             <Text style={styles.editLabel}>Email Address</Text>
-            <TextInput style={styles.editInput} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Phone Number</Text>
-            <TextInput style={styles.editInput} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Occupation</Text>
-            <TextInput style={styles.editInput} value={editOccupation} onChangeText={setEditOccupation} />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editOccupation} onChangeText={setEditOccupation} editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Address</Text>
-            <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editAddress} onChangeText={setEditAddress} multiline editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Status</Text>
             <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>
@@ -633,9 +742,9 @@ export default function MemberDetailScreen() {
                   style={[
                     styles.statusChip,
                     editStatus === s && styles.statusChipActive,
-                    !(isChairOrVice || canProposeRestricted) && styles.inputReadOnly,
+                    !canEditRestrictedFields && styles.inputReadOnly,
                   ]}
-                  onPress={() => (isChairOrVice || canProposeRestricted) && setEditStatus(s)}
+                  onPress={() => canEditRestrictedFields && setEditStatus(s)}
                 >
                   <Text style={[styles.statusChipText, editStatus === s && styles.statusChipTextActive]}>{MEMBER_STATUS_LABELS[s]}</Text>
                 </Pressable>
@@ -645,11 +754,11 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Status Date</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
-                style={[styles.editInput, { flex: 1 }, !(isChairOrVice || canProposeRestricted) && styles.inputReadOnly]}
+                style={[styles.editInput, { flex: 1 }, !canEditRestrictedFields && styles.inputReadOnly]}
                 value={editStatusDate}
                 onChangeText={setEditStatusDate}
                 placeholder="DD/MM/YYYY"
-                editable={isChairOrVice || canProposeRestricted}
+                editable={canEditRestrictedFields}
               />
               {Platform.OS === "web" ? (
                 <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0, position: "relative" }]}>
@@ -657,7 +766,7 @@ export default function MemberDetailScreen() {
                   {React.createElement("input", {
                     type: "date",
                     style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
-                    disabled: !(isChairOrVice || canProposeRestricted),
+                    disabled: !canEditRestrictedFields,
                     onChange: (e: any) => {
                       if (e.target.value) {
                         const [y, m, d] = e.target.value.split("-");
@@ -668,8 +777,8 @@ export default function MemberDetailScreen() {
                 </View>
               ) : (
                 <Pressable
-                  onPress={() => (isChairOrVice || canProposeRestricted) && setShowStatusDatePicker(true)}
-                  style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }, !(isChairOrVice || canProposeRestricted) && styles.inputReadOnly]}
+                  onPress={() => canEditRestrictedFields && setShowStatusDatePicker(true)}
+                  style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }, !canEditRestrictedFields && styles.inputReadOnly]}
                 >
                   <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
                 </Pressable>
@@ -680,11 +789,11 @@ export default function MemberDetailScreen() {
             )}
 
             <Text style={styles.editLabel}>Status Note</Text>
-            <TextInput style={styles.editInput} value={editStatusNote} onChangeText={setEditStatusNote} multiline />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editStatusNote} onChangeText={setEditStatusNote} multiline editable={canEditGeneralFields} />
 
             <View style={styles.familySectionHeader}>
               <Text style={styles.editLabel}>မိသားစုဝင်များ</Text>
-              <Pressable style={styles.addFamilyBtn} onPress={addFamilyMember}>
+              <Pressable style={[styles.addFamilyBtn, !canEditGeneralFields && styles.inputReadOnly]} onPress={canEditGeneralFields ? addFamilyMember : undefined}>
                 <Ionicons name="add" size={16} color="#fff" />
                 <Text style={styles.addFamilyBtnText}>ထည့်မည်</Text>
               </Pressable>
@@ -696,23 +805,26 @@ export default function MemberDetailScreen() {
                 <View key={row._localId} style={styles.familyCard}>
                   <View style={styles.familyCardHeader}>
                     <Text style={styles.familyCardTitle}>မိသားစုဝင် #{index + 1}</Text>
-                    <Pressable onPress={() => removeFamilyMember(row._localId)}>
+                    <Pressable onPress={canEditGeneralFields ? () => removeFamilyMember(row._localId) : undefined}>
                       <Ionicons name="trash-outline" size={18} color="#EF4444" />
                     </Pressable>
                   </View>
 
+                  <Text style={styles.familyInputLabel}>အမည်</Text>
                   <TextInput
-                    style={styles.editInput}
+                    style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
                     value={row.name}
                     onChangeText={(value) => updateFamilyMember(row._localId, "name", value)}
                     placeholder="အမည်"
+                    editable={canEditGeneralFields}
                   />
+                  <Text style={styles.familyInputLabel}>ကျား / မ / အခြား</Text>
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                     {MEMBER_GENDER_VALUES.map((g) => (
                       <Pressable
                         key={`${row._localId}-${g}`}
-                        style={[styles.statusChip, row.gender === g && styles.statusChipActive]}
-                        onPress={() => updateFamilyMember(row._localId, "gender", g)}
+                        style={[styles.statusChip, row.gender === g && styles.statusChipActive, !canEditGeneralFields && styles.inputReadOnly]}
+                        onPress={() => canEditGeneralFields && updateFamilyMember(row._localId, "gender", g)}
                       >
                         <Text style={[styles.statusChipText, row.gender === g && styles.statusChipTextActive]}>
                           {MEMBER_GENDER_LABELS[g]}
@@ -720,29 +832,66 @@ export default function MemberDetailScreen() {
                       </Pressable>
                     ))}
                   </View>
+                  <Text style={styles.familyInputLabel}>တော်စပ်ပုံ</Text>
+                  <Pressable
+                    style={[styles.dropdown, !canEditGeneralFields && styles.inputReadOnly]}
+                    onPress={() => openFamilyRelationPicker(row._localId)}
+                  >
+                    <Text style={[styles.dropdownText, !row.relation && styles.emptyText]}>
+                      {row.relation || "တော်စပ်ပုံရွေးချယ်ရန်"}
+                    </Text>
+                    <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+
+                  <Text style={styles.familyInputLabel}>မွေးသက္ကရာဇ်</Text>
+                  <View style={{ flexDirection: "row", gap: 10 }}>
+                    <TextInput
+                      style={[styles.editInput, { flex: 1 }, !canEditGeneralFields && styles.inputReadOnly]}
+                      value={row.dob || ""}
+                      onChangeText={(value) => updateFamilyMember(row._localId, "dob", value)}
+                      placeholder="DD/MM/YYYY"
+                      editable={canEditGeneralFields}
+                    />
+                    {Platform.OS === "web" ? (
+                      <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0, position: "relative" }, !canEditGeneralFields && styles.inputReadOnly]}>
+                        <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                        {React.createElement("input", {
+                          type: "date",
+                          style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
+                          disabled: !canEditGeneralFields,
+                          onChange: (e: any) => {
+                            if (e.target.value) {
+                              const [y, m, d] = e.target.value.split("-");
+                              updateFamilyMember(row._localId, "dob", `${d}/${m}/${y}`);
+                            }
+                          },
+                        })}
+                      </View>
+                    ) : (
+                      <Pressable
+                        onPress={() => canEditGeneralFields && setFamilyDobPickerRowId(row._localId)}
+                        style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}
+                      >
+                        <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                      </Pressable>
+                    )}
+                  </View>
+
+                  <Text style={styles.familyInputLabel}>နိုင်ငံသားစီစစ်ရေးကဒ်အမှတ်</Text>
                   <TextInput
-                    style={styles.editInput}
-                    value={row.relation || ""}
-                    onChangeText={(value) => updateFamilyMember(row._localId, "relation", value)}
-                    placeholder="တော်စပ်ပုံ"
-                  />
-                  <TextInput
-                    style={styles.editInput}
-                    value={row.dob || ""}
-                    onChangeText={(value) => updateFamilyMember(row._localId, "dob", value)}
-                    placeholder="မွေးသက္ကရာဇ်"
-                  />
-                  <TextInput
-                    style={styles.editInput}
+                    style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
                     value={row.nrc || ""}
                     onChangeText={(value) => updateFamilyMember(row._localId, "nrc", value)}
                     placeholder="နိုင်ငံသားစီစစ်ရေးကဒ်အမှတ်"
+                    editable={canEditGeneralFields}
                   />
+                  <Text style={styles.familyInputLabel}>အလုပ်အကိုင်</Text>
                   <TextInput
-                    style={styles.editInput}
+                    style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
                     value={row.occupation || ""}
                     onChangeText={(value) => updateFamilyMember(row._localId, "occupation", value)}
                     placeholder="အလုပ်အကိုင်"
+                    editable={canEditGeneralFields}
                   />
                 </View>
               ))
@@ -856,6 +1005,62 @@ export default function MemberDetailScreen() {
         )}
       </ScrollView>
 
+      {familyDobPickerRowId && Platform.OS !== "web" && (
+        Platform.OS === "ios" ? (
+          <View style={styles.datePickerContainer}>
+            <DateTimePicker
+              value={getParsedDate(editFamilyMembers.find((x) => x._localId === familyDobPickerRowId)?.dob || "")}
+              mode="date"
+              display="spinner"
+              onChange={handleFamilyDobChange}
+              style={{ alignSelf: "center" }}
+            />
+            <Pressable onPress={() => setFamilyDobPickerRowId(null)} style={styles.iosDateCloseBtn}>
+              <Text style={styles.iosDateCloseText}>Done</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <DateTimePicker
+            value={getParsedDate(editFamilyMembers.find((x) => x._localId === familyDobPickerRowId)?.dob || "")}
+            mode="date"
+            display="default"
+            onChange={handleFamilyDobChange}
+          />
+        )
+      )}
+
+      <Modal
+        visible={showFamilyRelationPicker}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowFamilyRelationPicker(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowFamilyRelationPicker(false)}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>တော်စပ်ပုံရွေးချယ်ရန်</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {relationOptions.map((item) => (
+                <Pressable key={item} style={styles.modalOption} onPress={() => applyFamilyRelation(item)}>
+                  <Text style={styles.modalOptionText}>{item}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Text style={styles.editLabel}>တော်စပ်ပုံအသစ်ထည့်ရန်</Text>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+              <TextInput
+                style={[styles.editInput, { flex: 1 }]}
+                value={newCustomRelation}
+                onChangeText={setNewCustomRelation}
+                placeholder="တော်စပ်ပုံအသစ်ထည့်ရန်"
+              />
+              <Pressable style={[styles.addFamilyBtn, { alignSelf: "stretch", justifyContent: "center" }]} onPress={() => void saveCustomRelation()}>
+                <Text style={styles.addFamilyBtnText}>ထည့်မည်</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
       <Modal
         visible={showPositionPicker}
         transparent={true}
@@ -909,6 +1114,7 @@ const styles = StyleSheet.create({
   editLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 12 },
   editInput: { backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
   inputReadOnly: { opacity: 0.65 },
+  familyInputLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 2, marginBottom: -2 },
   dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.light.border },
   dropdownText: { fontSize: 16, color: Colors.light.text },
   profileEditRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
@@ -983,6 +1189,9 @@ const styles = StyleSheet.create({
   txnDate: { fontSize: 11, color: Colors.light.textSecondary },
   txnAmount: { fontSize: 14, fontWeight: "700" },
   emptyState: { padding: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, marginBottom: 20 },
+  datePickerContainer: { backgroundColor: Colors.light.surface, marginHorizontal: 20, marginBottom: 8, borderRadius: 12, padding: 10, borderWidth: 1, borderColor: Colors.light.border },
+  iosDateCloseBtn: { alignItems: "center", padding: 10, backgroundColor: Colors.light.tint + "15", borderRadius: 8, marginTop: 8 },
+  iosDateCloseText: { color: Colors.light.tint, fontWeight: "600" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },

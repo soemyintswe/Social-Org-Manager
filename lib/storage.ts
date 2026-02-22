@@ -1700,13 +1700,24 @@ export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
 }
 
 async function postCloudSyncRequest(endpoint: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Response> {
-  // On web, route cloud calls through LAN server when available to avoid browser CORS issues.
+  // On web/desktop, prefer proxying cloud calls via the app server to avoid CORS issues.
   if (Platform.OS === "web") {
+    const candidates: string[] = [];
     try {
-      const { url, enabled } = await resolveSyncServerUrl();
-      if (enabled && url) {
-        return await fetchWithTimeout(
-          `${url}/api/cloud-sync/proxy`,
+      const origin = String((globalThis as any)?.location?.origin || "").trim().replace(/\/+$/, "");
+      if (/^https?:\/\//i.test(origin)) candidates.push(origin);
+    } catch {}
+    try {
+      const settings = await getAccountSettings();
+      const configuredUrl = normalizeSyncServerUrl(String(settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL));
+      if (configuredUrl) candidates.push(configuredUrl);
+    } catch {}
+
+    const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
+    for (const baseUrl of uniqueCandidates) {
+      try {
+        const res = await fetchWithTimeout(
+          `${baseUrl}/api/cloud-sync/proxy`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1714,8 +1725,13 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
           },
           timeoutMs
         );
+        // If proxy route does not exist on this host, continue to next candidate.
+        if (res.status === 404 || res.status === 405) continue;
+        return res;
+      } catch {
+        // try next candidate
       }
-    } catch {}
+    }
   }
 
   return await fetchWithTimeout(
@@ -1976,11 +1992,15 @@ export async function restoreData(jsonString: string): Promise<boolean> {
       }
     });
 
-    if (pairs.length > 0) {
-      await AsyncStorage.multiSet(pairs);
-      return true;
+    if (pairs.length === 0) return false;
+
+    // Replace mode: clear all shared keys first so stale keys do not remain.
+    const allSharedKeys = await getAllSharedBackupKeys();
+    if (allSharedKeys.length > 0) {
+      await AsyncStorage.multiRemove(allSharedKeys);
     }
-    return false;
+    await AsyncStorage.multiSet(pairs);
+    return true;
   } catch (error) {
     console.error("Restore failed:", error);
     return false;
