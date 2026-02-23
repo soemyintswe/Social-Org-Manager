@@ -1,108 +1,68 @@
-# Social Org Manager (OrgHub) 📱
+﻿# Social Org Manager (OrgHub)
 
-**Social Org Manager** is a comprehensive mobile and web application designed to manage social organizations, charities, or micro-finance groups efficiently. It handles member management, financial transactions, loans, and reporting.
+Social Org Manager is an offline-first organization management app for mobile and web.
+It supports member management, finance/loan records, events, messaging, backup/restore, and LAN/Cloud sync.
 
-> **Project Owner & Developer**: MR. SOE MYINT SWE  
-> **Assisted by**: Gemini AI (Google)
+## Maintainer
 
----
+- Project Owner: MR. SOE MYINT SWE
 
-## 🚀 Features
+## Key Features
 
-- **Dashboard**: Real-time overview of members, total balance, loan outstanding, and recent activities.
-- **Member Management**: Add, edit, and manage member profiles with photos and detailed information.
-- **Financial Management**: 
-  - Track Income & Expenses (Cash/Bank).
-  - Manage Bank Transfers (Deposit/Withdraw).
-  - Record Member Fees (Monthly/Yearly).
-- **Loan Management**: 
-  - Issue loans with interest rates.
-  - Track repayments and calculate outstanding balances automatically.
-- **Events & News**:
-  - Manage organization activities, news, and announcements.
-  - Attach images to events.
-- **Tools**:
-  - QR Code Scanner for quick member lookup.
-  - Digital Member Cards with QR codes.
-- **Reports**: 
-  - Income/Expense Statements.
-  - Loan Status Reports.
-  - Member Fee Payment Tables.
-- **Data Management**: 
-  - Full System Backup & Restore (JSON format).
-  - Offline-first architecture (Local Storage).
+- Member management with profile and family information
+- Income/expense, loan, and payment-request workflows
+- Events, reactions, comments, messaging
+- Role-based permissions and approval flows
+- LAN Sync + Google Apps Script Cloud Sync
+- App update check and in-app APK update flow
+- Backup and restore (JSON)
 
----
+## Tech Stack
 
-## 🛠 Tech Stack
+- React Native + Expo (TypeScript)
+- Expo Router
+- AsyncStorage
+- Express (LAN sync/API)
 
-- **Framework**: React Native (Expo)
-- **Language**: TypeScript
-- **Routing**: Expo Router
-- **Storage**: AsyncStorage (Local Persistence)
-- **UI**: Custom Styles with Vector Icons
+## Repository Security & Data Policy
 
----
+This repository is intended to stay as a **clean source-code repository**.
 
-## ℹ️ System Information
+- Do not commit real member data, backups, screenshots with personal data, or local databases.
+- `assets/data/default-data.json` now contains sanitized template data only.
+- Runtime data should stay on device/server runtime storage or private backup locations.
+- API keys/secrets must be stored in environment or private settings, not hardcoded in Git.
 
-- **App Name**: Social Org Manager (OrgHub)
-- **Package ID**: `com.soemyintswe.orghub`
-- **Current Release**: `1.1.15`
-- **Release Date**: `2026-02-21`
-- **Project Owner & Developer**: MR. SOE MYINT SWE
-- **Copyright**: Copyright (c) 2026 Social Org Manager. All rights reserved.
+## Quick Start
 
----
+```bash
+npm install
+npm start
+```
 
-## 🔐 Repository Data Policy
+Useful commands:
 
-- This GitHub repository is maintained as a **clean app source template**.
-- Personal/organization runtime data (sync snapshot, backups, private exports) is **not tracked** in Git.
-- Local data is stored on device/server runtime only and should be backed up separately.
+```bash
+npm run server:lan
+npm run lint
+```
 
----
+Android release build:
 
-## 📱 Installation & Usage
+```bash
+cd android
+.\gradlew.bat assembleRelease
+```
 
-To run this project locally, follow these steps:
+## Cloud Sync (Google Apps Script)
 
-### Prerequisites
-- Node.js installed on your computer.
-- Expo Go app installed on your phone (for mobile testing).
-
-### Steps
-
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/your-username/social-org-manager.git
-    cd social-org-manager
-    ```
-
-2.  **Install Dependencies**
-    ```bash
-    npm install
-    ```
-
-3.  **Run the App**
-    ```bash
-    npx expo start
-    ```
-    - Press `w` to run on Web Browser.
-    - Scan the QR code with **Expo Go** to run on Android/iOS.
-
----
-
-## ☁️ Google Drive Cloud Sync (MVP)
-
-- Cloud sync is available via Google Apps Script Web App endpoint.
 - Setup guide: `docs/google-drive-cloud-sync-mvp.md`
 - Script template: `docs/google-drive-cloud-sync-webapp.gs`
-- After setup, phones can sync without running LAN server on a computer.
 
----
+## Security Reporting
 
-## 📝 License
+If you find a security issue, please follow `SECURITY.md`.
 
-This project is developed by **MR. SOE MYINT SWE**.  
-Feel free to use this for educational purposes or adapt it for your organization.
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.
