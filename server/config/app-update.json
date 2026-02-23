@@ -1,8 +1,8 @@
 {
-    "latestVersion":  "1.1.29",
+    "latestVersion":  "1.1.30",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/v1.1.29/releases/release-lan-sync-v1.1.29-202602231038.apk",
-    "notes":  "Version 1.1.29: fixed cloud unauthorized false-positive on health/push, added sync hint for API key mismatch, and improved cloud sync diagnostics.",
+    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/v1.1.30/releases/release-lan-sync-v1.1.30-202602231110.apk",
+    "notes":  "Version 1.1.30: added cloud API key fallback candidates and stronger key sanitization to reduce unauthorized sync failures.",
     "force":  false,
-    "publishedAt":  "2026-02-23T04:08:34Z"
+    "publishedAt":  "2026-02-23T04:41:13Z"
 }

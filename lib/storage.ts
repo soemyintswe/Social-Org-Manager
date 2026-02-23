@@ -1543,6 +1543,24 @@ function normalizeCloudSyncEndpoint(raw: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function sanitizeCloudApiKey(raw: string): string {
+  return String(raw || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+}
+
+function buildCloudApiKeyCandidates(apiKey: string): string[] {
+  const clean = sanitizeCloudApiKey(apiKey);
+  const list: string[] = [clean];
+  // Backward compatibility for older Apps Script deployments that still use template key.
+  if (!clean) {
+    list.push("CHANGE_ME");
+  } else {
+    list.push("");
+  }
+  return Array.from(new Set(list));
+}
+
 async function resolveCloudSyncConfig(): Promise<{
   enabled: boolean;
   endpoint: string;
@@ -1553,7 +1571,7 @@ async function resolveCloudSyncConfig(): Promise<{
 }> {
   const settings = await getAccountSettings();
   const endpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const apiKey = String(settings.cloudSyncApiKey || "").trim();
+  const apiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
   const accountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
   const folderName = String(settings.cloudSyncFolderName || "OrgHub Sync").trim() || "OrgHub Sync";
@@ -1789,24 +1807,71 @@ async function readCloudApiPayload(res: Response): Promise<CloudApiPayload | nul
   }
 }
 
+type CloudPostResult = {
+  httpOk: boolean;
+  status: number;
+  body: CloudApiPayload | null;
+  usedApiKey: string;
+};
+
+async function postCloudSyncWithApiKeyFallback(
+  endpoint: string,
+  payload: Record<string, unknown>,
+  timeoutMs: number,
+  apiKey: string
+): Promise<CloudPostResult> {
+  const keyCandidates = buildCloudApiKeyCandidates(apiKey);
+  let last: CloudPostResult | null = null;
+
+  for (const candidate of keyCandidates) {
+    const res = await postCloudSyncRequest(
+      endpoint,
+      {
+        ...payload,
+        apiKey: candidate,
+      },
+      timeoutMs
+    );
+    const body = await readCloudApiPayload(res);
+    const result: CloudPostResult = {
+      httpOk: res.ok,
+      status: res.status,
+      body,
+      usedApiKey: candidate,
+    };
+    last = result;
+
+    const isUnauthorized = body?.ok === false && String(body.reason || "").trim() === "unauthorized";
+    if (!isUnauthorized) return result;
+  }
+
+  return (
+    last || {
+      httpOk: false,
+      status: 0,
+      body: { ok: false, reason: "request_failed" },
+      usedApiKey: "",
+    }
+  );
+}
+
 export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
   try {
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
-    const res = await postCloudSyncRequest(endpoint, {
+    const result = await postCloudSyncWithApiKeyFallback(endpoint, {
       action: "health",
-      apiKey,
       provider,
       accountEmail,
       folderName,
-    }, 15000);
-    if (!res.ok) return { ok: false, reason: "cloud_health_http_error", status: res.status, endpoint };
-    const payload = await readCloudApiPayload(res);
+    }, 15000, apiKey);
+    if (!result.httpOk) return { ok: false, reason: "cloud_health_http_error", status: result.status, endpoint };
+    const payload = result.body;
     if (payload?.ok === false) {
       const reason = String(payload.reason || "unknown");
-      return { ok: false, reason: `cloud_health_${reason}`, status: res.status, endpoint };
+      return { ok: false, reason: `cloud_health_${reason}`, status: result.status, endpoint };
     }
-    return { ok: true, status: res.status, endpoint };
+    return { ok: true, status: result.status, endpoint };
   } catch (e: any) {
     return { ok: false, reason: String(e?.message || "cloud_health_failed") };
   }
@@ -1897,7 +1962,6 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
     const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
     const payload = {
       action: "pushSnapshot",
-      apiKey,
       provider,
       accountEmail,
       folderName,
@@ -1907,18 +1971,23 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
         data,
       },
     };
-    const res = await postCloudSyncRequest(endpoint, payload as unknown as Record<string, unknown>, 30000);
-    if (!res.ok) return { ok: false, reason: "cloud_push_http_error", status: res.status, endpoint };
-    const responsePayload = await readCloudApiPayload(res);
+    const result = await postCloudSyncWithApiKeyFallback(
+      endpoint,
+      payload as unknown as Record<string, unknown>,
+      30000,
+      apiKey
+    );
+    if (!result.httpOk) return { ok: false, reason: "cloud_push_http_error", status: result.status, endpoint };
+    const responsePayload = result.body;
     if (responsePayload?.ok === false) {
       return {
         ok: false,
         reason: `cloud_push_${String(responsePayload.reason || "unknown")}`,
-        status: res.status,
+        status: result.status,
         endpoint,
       };
     }
-    return { ok: true, changed: true, reason: "cloud_pushed", status: res.status, endpoint };
+    return { ok: true, changed: true, reason: "cloud_pushed", status: result.status, endpoint };
   } catch (e: any) {
     return { ok: false, reason: String(e?.message || "cloud_push_failed") };
   }
@@ -1958,19 +2027,18 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
   try {
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
-    const res = await postCloudSyncRequest(endpoint, {
+    const result = await postCloudSyncWithApiKeyFallback(endpoint, {
       action: "pullSnapshot",
-      apiKey,
       provider,
       accountEmail,
       folderName,
-    }, 30000);
-    if (res.status === 404) {
-      return { ok: true, changed: false, reason: "cloud_snapshot_not_found", status: res.status, endpoint };
+    }, 30000, apiKey);
+    if (result.status === 404) {
+      return { ok: true, changed: false, reason: "cloud_snapshot_not_found", status: result.status, endpoint };
     }
-    if (!res.ok) return { ok: false, reason: "cloud_pull_http_error", status: res.status, endpoint };
+    if (!result.httpOk) return { ok: false, reason: "cloud_pull_http_error", status: result.status, endpoint };
 
-    const payload = (await res.json()) as {
+    const payload = (result.body || {}) as {
       ok?: boolean;
       snapshot?: unknown;
       updatedAt?: string;
