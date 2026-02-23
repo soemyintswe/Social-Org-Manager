@@ -28,6 +28,11 @@ import type {
   ChatMessage,
 } from "./types";
 import * as store from "./storage";
+import {
+  DEFAULT_CLOUD_SYNC_ENDPOINT,
+  DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+  DEFAULT_LAN_SYNC_URL,
+} from "./sync-defaults";
 
 interface DataContextValue {
   members: Member[];
@@ -180,14 +185,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     asOfDate: new Date().toISOString(),
-    syncServerUrl: "",
-    syncEnabled: true,
-    cloudSyncEnabled: false,
+    syncServerUrl: DEFAULT_LAN_SYNC_URL,
+    syncEnabled: false,
+    cloudSyncEnabled: true,
     cloudSyncProvider: "google_drive_apps_script",
-    cloudSyncEndpoint: "",
+    cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,
     cloudSyncApiKey: "",
     cloudSyncGoogleAccountEmail: "",
-    cloudSyncFolderName: "OrgHub Sync",
+    cloudSyncFolderName: DEFAULT_CLOUD_SYNC_FOLDER_NAME,
     receivingBankName: "",
     receivingBankAccountNumber: "",
     receivingBankAccountName: "",

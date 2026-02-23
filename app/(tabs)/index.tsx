@@ -4,6 +4,7 @@ import {
   Text,
   View,
   ScrollView,
+  RefreshControl,
   Pressable,
   ActivityIndicator,
   Linking,
@@ -31,6 +32,7 @@ import {
   pushLanSnapshotFromLocalDetailed,
 } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
+import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
 
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
 
@@ -123,6 +125,7 @@ export default function DashboardScreen() {
   };
   const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
   const [syncingNow, setSyncingNow] = useState(false);
+  const [refreshingDashboard, setRefreshingDashboard] = useState(false);
 
   const normalizeUrl = (raw: string): string => {
     const trimmed = String(raw || "").trim();
@@ -136,7 +139,7 @@ export default function DashboardScreen() {
     setSyncingNow(true);
     try {
       const lanEnabled = accountSettings?.syncEnabled !== false;
-      const syncServerUrl = normalizeUrl(accountSettings?.syncServerUrl || "http://192.168.99.9:5000");
+      const syncServerUrl = normalizeUrl(accountSettings?.syncServerUrl || DEFAULT_LAN_SYNC_URL);
       const cloudEnabled = accountSettings?.cloudSyncEnabled === true;
       const cloudEndpoint = String(accountSettings?.cloudSyncEndpoint || "").trim();
 
@@ -214,8 +217,19 @@ export default function DashboardScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadMemberChangeLastSeen();
-    }, [loadMemberChangeLastSeen])
+      void refreshData();
+    }, [loadMemberChangeLastSeen, refreshData])
   );
+
+  const handleDashboardRefresh = useCallback(async () => {
+    if (refreshingDashboard) return;
+    setRefreshingDashboard(true);
+    try {
+      await refreshData();
+    } finally {
+      setRefreshingDashboard(false);
+    }
+  }, [refreshData, refreshingDashboard]);
 
   const getMemberName = (id?: string) => {
     if (!id) return "";
@@ -705,6 +719,14 @@ export default function DashboardScreen() {
       style={styles.container} 
       contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshingDashboard}
+          onRefresh={() => void handleDashboardRefresh()}
+          tintColor={Colors.light.tint}
+          colors={[Colors.light.tint]}
+        />
+      }
     >
       <View style={styles.header}>
         <View>

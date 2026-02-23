@@ -95,6 +95,7 @@ function RootLayoutNav() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [updatingNow, setUpdatingNow] = useState(false);
   const [updateProgressText, setUpdateProgressText] = useState("");
+  const [updateProgressRatio, setUpdateProgressRatio] = useState<number>(0);
   const updateCheckInFlightRef = useRef(false);
   const lastActiveCheckAtRef = useRef(0);
 
@@ -193,6 +194,7 @@ function RootLayoutNav() {
 
       setUpdatingNow(true);
       setUpdateProgressText("Update APK ကို download လုပ်နေပါသည်...");
+      setUpdateProgressRatio(0);
       const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory || "";
       if (!baseDir) throw new Error("storage_unavailable");
 
@@ -202,11 +204,32 @@ function RootLayoutNav() {
       let lastDownloadError = "";
       for (const candidateUrl of candidateUrls) {
         try {
+          setUpdateProgressRatio(0);
           try {
             await FileSystem.deleteAsync(fileUri, { idempotent: true });
           } catch {}
 
-          const downloadResult = await FileSystem.downloadAsync(candidateUrl, fileUri);
+          const downloadResumable = FileSystem.createDownloadResumable(
+            candidateUrl,
+            fileUri,
+            {},
+            (progress: any) => {
+              const written = Number(progress?.totalBytesWritten || 0);
+              const total = Number(progress?.totalBytesExpectedToWrite || 0);
+              if (total > 0) {
+                const ratio = Math.max(0, Math.min(1, written / total));
+                setUpdateProgressRatio(ratio);
+                setUpdateProgressText(
+                  `Update APK ကို download လုပ်နေပါသည်... ${(written / (1024 * 1024)).toFixed(1)}MB / ${(total / (1024 * 1024)).toFixed(1)}MB`
+                );
+              } else {
+                setUpdateProgressText(
+                  `Update APK ကို download လုပ်နေပါသည်... ${(written / (1024 * 1024)).toFixed(1)}MB`
+                );
+              }
+            }
+          );
+          const downloadResult = await downloadResumable.downloadAsync();
           if (!downloadResult?.uri || (downloadResult.status && downloadResult.status >= 400)) {
             lastDownloadError = `download_failed_${downloadResult?.status || "unknown"}`;
             continue;
@@ -235,6 +258,7 @@ function RootLayoutNav() {
 
           downloadedUri = downloadResult.uri;
           usedCandidate = candidateUrl;
+          setUpdateProgressRatio(1);
           break;
         } catch (err: any) {
           lastDownloadError = String(err?.message || "download_candidate_failed");
@@ -284,6 +308,7 @@ function RootLayoutNav() {
     } finally {
       setUpdatingNow(false);
       setUpdateProgressText("");
+      setUpdateProgressRatio(0);
     }
   };
 
@@ -342,13 +367,29 @@ function RootLayoutNav() {
             <Text style={styles.modalText}>Latest: {updateInfo?.latestVersion || "-"}</Text>
             {updateInfo?.notes ? <Text style={styles.modalNotes}>{updateInfo.notes}</Text> : null}
             {updatingNow ? (
-              <View style={styles.updateProgressRow}>
-                <ActivityIndicator size="small" color={Colors.light.tint} />
-                <Text style={styles.updateProgressText}>{updateProgressText || "Updating..."}</Text>
-              </View>
+              <>
+                <View style={styles.updateProgressRow}>
+                  <ActivityIndicator size="small" color={Colors.light.tint} />
+                  <Text style={styles.updateProgressText}>{updateProgressText || "Updating..."}</Text>
+                </View>
+                <View style={styles.updateProgressTrack}>
+                  <View
+                    style={[
+                      styles.updateProgressFill,
+                      { width: `${Math.max(4, Math.round(updateProgressRatio * 100))}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.updateProgressPercent}>{Math.round(updateProgressRatio * 100)}%</Text>
+              </>
             ) : null}
 
             <View style={styles.modalActions}>
+              {updatingNow && (
+                <Pressable style={styles.btnGhost} onPress={handleUpdateLater}>
+                  <Text style={styles.btnGhostText}>Hide</Text>
+                </Pressable>
+              )}
               {!updateInfo?.force && !updatingNow && (
                 <Pressable style={styles.btnGhost} onPress={() => void handleSkipThisVersion()}>
                   <Text style={styles.btnGhostText}>Skip</Text>
@@ -453,6 +494,26 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     fontFamily: "Inter_500Medium",
     fontSize: 12,
+  },
+  updateProgressTrack: {
+    marginTop: 8,
+    width: "100%",
+    height: 6,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "#E2E8F0",
+  },
+  updateProgressFill: {
+    height: "100%",
+    borderRadius: 999,
+    backgroundColor: Colors.light.tint,
+  },
+  updateProgressPercent: {
+    marginTop: 4,
+    fontSize: 11,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+    textAlign: "right",
   },
   btnGhost: {
     paddingHorizontal: 12,

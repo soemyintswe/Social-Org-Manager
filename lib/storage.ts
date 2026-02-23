@@ -26,6 +26,11 @@ import {
   ChatMessage,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
+import {
+  DEFAULT_CLOUD_SYNC_ENDPOINT as DEFAULT_CLOUD_SYNC_ENDPOINT_BASE,
+  DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+  DEFAULT_LAN_SYNC_URL as DEFAULT_LAN_SYNC_URL_BASE,
+} from "./sync-defaults";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -88,7 +93,8 @@ async function getAllSharedBackupKeys(): Promise<string[]> {
 
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
 const CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY = "@orghub_cloud_sync_last_remote_updated_at";
-const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || "http://192.168.99.9:5000");
+const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || DEFAULT_LAN_SYNC_URL_BASE);
+const DEFAULT_CLOUD_SYNC_ENDPOINT = String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_ENDPOINT || DEFAULT_CLOUD_SYNC_ENDPOINT_BASE);
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
 
@@ -1500,20 +1506,20 @@ export async function deleteLoan(id: string) {
 
 // --- Settings ---
 export async function getAccountSettings(): Promise<AccountSettings> {
-  return safeGet<AccountSettings>(KEYS.ACCOUNT_SETTINGS, {
+  const defaults: AccountSettings = {
     orgName: "My Organization",
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     currency: "MMK",
     asOfDate: new Date().toISOString(),
     syncServerUrl: DEFAULT_SYNC_SERVER_URL,
-    syncEnabled: true,
-    cloudSyncEnabled: false,
+    syncEnabled: false,
+    cloudSyncEnabled: true,
     cloudSyncProvider: "google_drive_apps_script",
-    cloudSyncEndpoint: "",
+    cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,
     cloudSyncApiKey: "",
     cloudSyncGoogleAccountEmail: "",
-    cloudSyncFolderName: "OrgHub Sync",
+    cloudSyncFolderName: DEFAULT_CLOUD_SYNC_FOLDER_NAME,
     receivingBankName: "",
     receivingBankAccountNumber: "",
     receivingBankAccountName: "",
@@ -1523,7 +1529,31 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     receivingWavePayAccountName: "",
     receivingAyaPayPhone: "",
     receivingAyaPayAccountName: "",
-  });
+  };
+  const stored = await safeGet<Partial<AccountSettings> | null>(KEYS.ACCOUNT_SETTINGS, null);
+  if (!stored || typeof stored !== "object") return defaults;
+
+  const merged: AccountSettings = {
+    ...defaults,
+    ...stored,
+  };
+
+  if (!String(stored.syncServerUrl || "").trim()) {
+    merged.syncServerUrl = defaults.syncServerUrl;
+  }
+  if (stored.syncEnabled === undefined || stored.syncEnabled === null) {
+    merged.syncEnabled = defaults.syncEnabled;
+  }
+  if (stored.cloudSyncEnabled === undefined || stored.cloudSyncEnabled === null) {
+    merged.cloudSyncEnabled = defaults.cloudSyncEnabled;
+  }
+  if (!String(stored.cloudSyncEndpoint || "").trim()) {
+    merged.cloudSyncEndpoint = defaults.cloudSyncEndpoint;
+  }
+  if (!String(stored.cloudSyncFolderName || "").trim()) {
+    merged.cloudSyncFolderName = defaults.cloudSyncFolderName;
+  }
+  return merged;
 }
 
 export async function saveAccountSettings(settings: AccountSettings) {
@@ -1574,7 +1604,7 @@ async function resolveCloudSyncConfig(): Promise<{
   const apiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
   const accountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
-  const folderName = String(settings.cloudSyncFolderName || "OrgHub Sync").trim() || "OrgHub Sync";
+  const folderName = String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
   const enabled = settings.cloudSyncEnabled === true && !!endpoint;
   return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
 }

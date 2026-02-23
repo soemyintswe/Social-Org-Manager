@@ -26,8 +26,11 @@ import {
   pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
 } from "@/lib/storage";
-
-const DEFAULT_LAN_SYNC_URL = "http://192.168.99.9:5000";
+import {
+  DEFAULT_CLOUD_SYNC_ENDPOINT,
+  DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+  DEFAULT_LAN_SYNC_URL,
+} from "@/lib/sync-defaults";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -52,10 +55,10 @@ export default function AccountSettingsScreen() {
   const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
   const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(accountSettings.cloudSyncEnabled === true);
-  const [cloudSyncEndpoint, setCloudSyncEndpoint] = useState(accountSettings.cloudSyncEndpoint || "");
+  const [cloudSyncEndpoint, setCloudSyncEndpoint] = useState(accountSettings.cloudSyncEndpoint || DEFAULT_CLOUD_SYNC_ENDPOINT);
   const [cloudSyncApiKey, setCloudSyncApiKey] = useState(accountSettings.cloudSyncApiKey || "");
   const [cloudSyncGoogleAccountEmail, setCloudSyncGoogleAccountEmail] = useState(accountSettings.cloudSyncGoogleAccountEmail || "");
-  const [cloudSyncFolderName, setCloudSyncFolderName] = useState(accountSettings.cloudSyncFolderName || "OrgHub Sync");
+  const [cloudSyncFolderName, setCloudSyncFolderName] = useState(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
   const [receivingBankName, setReceivingBankName] = useState(accountSettings.receivingBankName || "");
   const [receivingBankAccountNumber, setReceivingBankAccountNumber] = useState(accountSettings.receivingBankAccountNumber || "");
   const [receivingBankAccountName, setReceivingBankAccountName] = useState(accountSettings.receivingBankAccountName || "");
@@ -90,10 +93,10 @@ export default function AccountSettingsScreen() {
     setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
     setSyncEnabled(accountSettings.syncEnabled !== false);
     setCloudSyncEnabled(accountSettings.cloudSyncEnabled === true);
-    setCloudSyncEndpoint(accountSettings.cloudSyncEndpoint || "");
+    setCloudSyncEndpoint(accountSettings.cloudSyncEndpoint || DEFAULT_CLOUD_SYNC_ENDPOINT);
     setCloudSyncApiKey(accountSettings.cloudSyncApiKey || "");
     setCloudSyncGoogleAccountEmail(accountSettings.cloudSyncGoogleAccountEmail || "");
-    setCloudSyncFolderName(accountSettings.cloudSyncFolderName || "OrgHub Sync");
+    setCloudSyncFolderName(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
     setReceivingBankName(accountSettings.receivingBankName || "");
     setReceivingBankAccountNumber(accountSettings.receivingBankAccountNumber || "");
     setReceivingBankAccountName(accountSettings.receivingBankAccountName || "");
@@ -163,10 +166,10 @@ export default function AccountSettingsScreen() {
         syncEnabled,
         cloudSyncEnabled,
         cloudSyncProvider: "google_drive_apps_script",
-        cloudSyncEndpoint: cloudSyncEndpoint.trim(),
+        cloudSyncEndpoint: cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
         cloudSyncApiKey: cloudSyncApiKey.trim(),
         cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
-        cloudSyncFolderName: cloudSyncFolderName.trim() || "OrgHub Sync",
+        cloudSyncFolderName: cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
         ...receiving,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -286,10 +289,10 @@ export default function AccountSettingsScreen() {
         syncEnabled,
         cloudSyncEnabled,
         cloudSyncProvider: "google_drive_apps_script",
-        cloudSyncEndpoint: cloudSyncEndpoint.trim(),
+        cloudSyncEndpoint: cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
         cloudSyncApiKey: cloudSyncApiKey.trim(),
         cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
-        cloudSyncFolderName: cloudSyncFolderName.trim() || "OrgHub Sync",
+        cloudSyncFolderName: cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
         ...receiving,
       });
       if (syncEnabled && normalizedUrl) {
