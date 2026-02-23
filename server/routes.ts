@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import rateLimit from "express-rate-limit";
 
 type SyncSnapshot = {
   updatedAt: string;
@@ -79,9 +80,51 @@ function writeSnapshot(snapshot: SyncSnapshot): void {
   fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), "utf-8");
 }
 
+function getAllowedCloudProxyHosts(): Set<string> {
+  const defaults = ["script.google.com", "script.googleusercontent.com"];
+  const extra = String(process.env.ORGHUB_CLOUD_PROXY_ALLOWED_HOSTS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set([...defaults, ...extra]);
+}
+
+function normalizeCloudProxyEndpoint(raw: string): string | null {
+  try {
+    const parsed = new URL(String(raw || "").trim());
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.username || parsed.password) return null;
+    if (parsed.search || parsed.hash) return null;
+    const host = parsed.hostname.toLowerCase();
+    if (!getAllowedCloudProxyHosts().has(host)) return null;
+    if (host === "script.google.com") {
+      const pathOk = /^\/macros\/s\/[A-Za-z0-9_-]+\/exec\/?$/.test(parsed.pathname);
+      if (!pathOk) return null;
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // put application routes here
   // prefix all routes with /api
+  const snapshotWriteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.ORGHUB_SNAPSHOT_WRITE_RATE_LIMIT_MAX || 30),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { ok: false, reason: "rate_limited" },
+  });
+  const cloudProxyLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.ORGHUB_CLOUD_PROXY_RATE_LIMIT_MAX || 20),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { ok: false, reason: "rate_limited" },
+  });
+
   app.get("/api/sync/health", (_req, res) => {
     res.json({ ok: true, ts: new Date().toISOString() });
   });
@@ -94,7 +137,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(snapshot);
   });
 
-  app.post("/api/sync/snapshot", (req, res) => {
+  app.post("/api/sync/snapshot", snapshotWriteLimiter, (req, res) => {
     const body = (req.body || {}) as Partial<SyncSnapshot>;
     if (!body || typeof body !== "object" || !body.data || typeof body.data !== "object") {
       return res.status(400).json({ message: "invalid_payload" });
@@ -108,25 +151,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json({ ok: true, updatedAt: snapshot.updatedAt });
   });
 
-  app.post("/api/cloud-sync/proxy", async (req, res) => {
+  app.post("/api/cloud-sync/proxy", cloudProxyLimiter, async (req, res) => {
     try {
       const body = (req.body || {}) as Record<string, unknown>;
       const endpoint = String(body.endpoint || "").trim();
       if (!endpoint) {
         return res.status(400).json({ ok: false, reason: "missing_endpoint" });
       }
-      if (!/^https?:\/\//i.test(endpoint)) {
+      const normalizedEndpoint = normalizeCloudProxyEndpoint(endpoint);
+      if (!normalizedEndpoint) {
         return res.status(400).json({ ok: false, reason: "invalid_endpoint" });
       }
 
       const payload = { ...body };
       delete (payload as any).endpoint;
 
-      const upstream = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      let upstream: Response;
+      try {
+        upstream = await fetch(normalizedEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          redirect: "error",
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       const text = await upstream.text();
       const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
       res.status(upstream.status);
