@@ -1949,19 +1949,25 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
       reason?: string;
     };
 
-    if (payload?.ok === false && payload?.reason === "snapshot_not_found") {
+    const payloadReason = String(payload?.reason || "").trim();
+    if (payloadReason === "snapshot_not_found") {
       return { ok: true, changed: false, reason: "cloud_snapshot_not_found", endpoint };
+    }
+    // Corrupted/empty remote snapshot ကို push flow နဲ့ self-heal လုပ်နိုင်ရန် pull failure မဖြစ်စေဘဲ skip ပြန်ပေးပါ။
+    if (payloadReason === "snapshot_read_failed" || payloadReason === "snapshot_empty") {
+      return { ok: true, changed: false, reason: payloadReason, endpoint };
+    }
+    if (payload?.ok === false && payloadReason) {
+      return { ok: false, reason: `cloud_pull_${payloadReason}`, endpoint };
     }
 
     const snapshot = extractCloudSnapshot(payload);
     if (!snapshot || !snapshot.data) {
-      const message =
-        payload && typeof payload === "object"
+      const message = payloadReason
+        ? `cloud_pull_${payloadReason}`
+        : payload && typeof payload === "object"
           ? `cloud_invalid_snapshot_payload:${Object.keys(payload as Record<string, unknown>).join(",")}`
           : "cloud_invalid_snapshot_payload";
-      if (payload?.reason === "snapshot_not_found") {
-        return { ok: true, changed: false, reason: "cloud_snapshot_not_found", endpoint };
-      }
       return { ok: false, reason: message, endpoint };
     }
 

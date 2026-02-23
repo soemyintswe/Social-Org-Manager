@@ -1,8 +1,8 @@
 {
-    "latestVersion":  "1.1.27",
+    "latestVersion":  "1.1.28",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://github.com/soemyintswe/Social-Org-Manager/blob/feature/expense-management-system/releases/release-lan-sync-v1.1.27-202602230851.apk?raw=1",
-    "notes":  "Version 1.1.27: fixed Cloud Pull payload compatibility, skipped LAN sync calls when LAN is disabled, and replaced Android launch splash logo with MKS.",
+    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/v1.1.28/releases/release-lan-sync-v1.1.28-202602230931.apk",
+    "notes":  "Version 1.1.28: fixed auto-update GitHub LFS download issue, improved Cloud Pull compatibility, and improved sync behavior when LAN is disabled.",
     "force":  false,
-    "publishedAt":  "2026-02-23T02:22:47Z"
+    "publishedAt":  "2026-02-23T03:06:20Z"
 }

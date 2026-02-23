@@ -38,31 +38,53 @@ const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
 const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
 
-function normalizeUpdateDownloadUrl(rawUrl: string): string {
+function buildUpdateDownloadUrlCandidates(rawUrl: string): string[] {
   const text = String(rawUrl || "").trim();
-  if (!text) return "";
+  if (!text) return [];
   try {
     const u = new URL(text);
     const host = u.hostname.toLowerCase();
+    const candidates: string[] = [];
+
     if (host === "github.com") {
       const parts = u.pathname.split("/").filter(Boolean);
-      const blobIdx = parts.indexOf("blob");
-      if (parts.length >= 5 && blobIdx === 2) {
+      if (parts.length >= 5) {
         const owner = parts[0];
         const repo = parts[1];
-        const branch = parts[3];
-        const filePath = parts.slice(4).join("/");
-        return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+        const blobIdx = parts.indexOf("blob");
+        const rawIdx = parts.indexOf("raw");
+        if (blobIdx === 2 || rawIdx === 2) {
+          const branch = parts[3];
+          const filePath = parts.slice(4).join("/");
+          candidates.push(`https://media.githubusercontent.com/media/${owner}/${repo}/${branch}/${filePath}`);
+          candidates.push(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`);
+        }
       }
-      if (u.searchParams.get("raw") !== "1") {
-        u.searchParams.set("raw", "1");
+      if (u.searchParams.get("raw") !== "1") u.searchParams.set("raw", "1");
+      candidates.push(u.toString());
+    } else if (host === "raw.githubusercontent.com") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (parts.length >= 4) {
+        const owner = parts[0];
+        const repo = parts[1];
+        const branch = parts[2];
+        const filePath = parts.slice(3).join("/");
+        candidates.push(`https://media.githubusercontent.com/media/${owner}/${repo}/${branch}/${filePath}`);
       }
-      return u.toString();
+      candidates.push(u.toString());
+    } else {
+      candidates.push(u.toString());
     }
-    return u.toString();
+
+    return Array.from(new Set(candidates.filter(Boolean)));
   } catch {
-    return text;
+    return [text];
   }
+}
+
+function isLikelyGitLfsPointer(content: string): boolean {
+  const text = String(content || "").trim();
+  return text.startsWith("version https://git-lfs.github.com/spec/v1") && text.includes("oid sha256:");
 }
 
 function RootLayoutNav() {
@@ -163,9 +185,9 @@ function RootLayoutNav() {
     if (!updateInfo?.downloadUrl) return;
     if (updatingNow) return;
     try {
-      const normalizedUrl = normalizeUpdateDownloadUrl(updateInfo.downloadUrl);
+      const candidateUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
       if (Platform.OS !== "android") {
-        await Linking.openURL(normalizedUrl);
+        if (candidateUrls[0]) await Linking.openURL(candidateUrls[0]);
         return;
       }
 
@@ -174,21 +196,54 @@ function RootLayoutNav() {
       const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory || "";
       if (!baseDir) throw new Error("storage_unavailable");
 
-      const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}.apk`;
-      try {
-        await FileSystem.deleteAsync(fileUri, { idempotent: true });
-      } catch {}
-      const downloadResult = await FileSystem.downloadAsync(normalizedUrl, fileUri);
-      if (!downloadResult?.uri || (downloadResult.status && downloadResult.status >= 400)) {
-        throw new Error(`download_failed_${downloadResult?.status || "unknown"}`);
+      const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}-${Date.now()}.apk`;
+      let downloadedUri = "";
+      let usedCandidate = "";
+      let lastDownloadError = "";
+      for (const candidateUrl of candidateUrls) {
+        try {
+          try {
+            await FileSystem.deleteAsync(fileUri, { idempotent: true });
+          } catch {}
+
+          const downloadResult = await FileSystem.downloadAsync(candidateUrl, fileUri);
+          if (!downloadResult?.uri || (downloadResult.status && downloadResult.status >= 400)) {
+            lastDownloadError = `download_failed_${downloadResult?.status || "unknown"}`;
+            continue;
+          }
+
+          const fileInfo = await FileSystem.getInfoAsync(downloadResult.uri, { size: true });
+          const size = Number(fileInfo.size || 0);
+          if (!fileInfo.exists || size <= 0) {
+            lastDownloadError = "downloaded_file_missing";
+            continue;
+          }
+
+          // GitHub LFS pointer file (text) ကိုမှတ်မိလျှင် နောက် candidate ကို try လုပ်ပါ။
+          if (size < 1024 * 1024) {
+            const maybeText = await FileSystem.readAsStringAsync(downloadResult.uri);
+            if (isLikelyGitLfsPointer(maybeText)) {
+              lastDownloadError = "downloaded_lfs_pointer_instead_of_apk";
+              continue;
+            }
+          }
+
+          if (size < 5 * 1024 * 1024) {
+            lastDownloadError = "downloaded_apk_invalid_or_too_small";
+            continue;
+          }
+
+          downloadedUri = downloadResult.uri;
+          usedCandidate = candidateUrl;
+          break;
+        } catch (err: any) {
+          lastDownloadError = String(err?.message || "download_candidate_failed");
+        }
       }
-      const fileInfo = await FileSystem.getInfoAsync(downloadResult.uri, { size: true });
-      if (!fileInfo.exists || Number(fileInfo.size || 0) < 5 * 1024 * 1024) {
-        throw new Error("downloaded_apk_invalid_or_too_small");
-      }
+      if (!downloadedUri) throw new Error(lastDownloadError || "download_failed_all_candidates");
 
       setUpdateProgressText("Install prompt ကိုဖွင့်နေပါသည်...");
-      const contentUri = await FileSystem.getContentUriAsync(downloadResult.uri);
+      const contentUri = await FileSystem.getContentUriAsync(downloadedUri);
       let installStarted = false;
       try {
         await IntentLauncher.startActivityAsync("android.intent.action.INSTALL_PACKAGE", {
@@ -214,6 +269,7 @@ function RootLayoutNav() {
       if (!installStarted) {
         throw new Error("install_intent_failed");
       }
+      console.log("update_now_download_url_used", usedCandidate);
       setShowUpdateModal(false);
     } catch (error: any) {
       Alert.alert(
@@ -221,7 +277,8 @@ function RootLayoutNav() {
         "Auto install မဖြစ်သေးပါ။ Download link ကို browser ဖြင့်ဖွင့်ပေးပါမည်။"
       );
       try {
-        await Linking.openURL(normalizeUpdateDownloadUrl(updateInfo.downloadUrl));
+        const fallbackUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
+        if (fallbackUrls[0]) await Linking.openURL(fallbackUrls[0]);
       } catch {}
       console.log("update_now_error", String(error?.message || error));
     } finally {
