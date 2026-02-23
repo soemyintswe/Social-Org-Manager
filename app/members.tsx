@@ -19,6 +19,7 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import {
+  MEMBER_GENDER_LABELS,
   MEMBER_STATUS_LABELS,
   MEMBER_STATUS_VALUES,
   normalizeMemberStatus,
@@ -35,6 +36,15 @@ import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
 type SortOption = "id" | "name" | "joinDate" | "dob" | "age";
 type MemberListItem = Member & { profileImage?: string };
 
+function getMemberStatusPalette(status: MemberStatus): { text: string; bg: string } {
+  if (status === "active") return { text: "#059669", bg: "#D1FAE5" };
+  if (status === "expelled") return { text: "#DC2626", bg: "#FEE2E2" };
+  if (status === "resigned") return { text: "#D97706", bg: "#FEF3C7" };
+  if (status === "deceased") return { text: "#6B7280", bg: "#E5E7EB" };
+  if (status === "suspended") return { text: "#7C3AED", bg: "#EDE9FE" };
+  return { text: "#0EA5E9", bg: "#E0F2FE" };
+}
+
 export default function MembersScreen() {
   const insets = useSafeAreaInsets();
   const { members, loading, memberChangeRequests } = useData();
@@ -43,7 +53,7 @@ export default function MembersScreen() {
   const [sortBy, setSortBy] = useState<SortOption>("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [filterStatus, setFilterStatus] = useState<"all" | MemberStatus>("all");
-  const [filterGender, setFilterGender] = useState<"all" | "male" | "female">("all");
+  const [filterGender, setFilterGender] = useState<"all" | "male" | "female" | "other">("all");
   const [filterAge, setFilterAge] = useState<"all" | "18-60" | "60-75" | "over75" | "upcoming" | "custom" | "unknown">("all");
   const [showSortModal, setShowSortModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -129,6 +139,33 @@ export default function MembersScreen() {
     return null;
   }, []);
 
+  const inferGenderFromName = useCallback((rawName: string): "male" | "female" | "other" => {
+    const name = String(rawName || "").trim();
+    if (!name) return "other";
+    const n = name.toLowerCase();
+    if (
+      name.startsWith("ဆရာတော်") ||
+      name.startsWith("ဦး") ||
+      name.startsWith("ကို") ||
+      name.startsWith("မောင်") ||
+      name.startsWith("ကိုရင်") ||
+      name.startsWith("ဦးဇင်း") ||
+      n.startsWith("u ") ||
+      n.startsWith("ko ") ||
+      n.startsWith("mg ")
+    ) return "male";
+    if (
+      name.startsWith("ဒေါ်") ||
+      name.startsWith("မ") ||
+      name.startsWith("မိ") ||
+      name.startsWith("သီလရှင်") ||
+      name.startsWith("ဆရာလေး") ||
+      n.startsWith("daw ") ||
+      n.startsWith("ma ")
+    ) return "female";
+    return "other";
+  }, []);
+
   const sortedMembers = useMemo(() => {
     let data: MemberListItem[] = [...sourceMembers];
 
@@ -161,29 +198,11 @@ export default function MembersScreen() {
 
     if (filterGender !== "all") {
       data = data.filter((m) => {
-        const name = (m.name || "").trim();
-        const isMale = 
-          name.startsWith("ဦး") || 
-          name.startsWith("ကို") || 
-          name.startsWith("မောင်") || 
-          name.startsWith("ဆရာတော်") || 
-          name.startsWith("ကိုရင်") || 
-          name.startsWith("ဦးဇင်း") || 
-          name.toLowerCase().startsWith("u ") || 
-          name.toLowerCase().startsWith("ko ") || 
-          name.toLowerCase().startsWith("mg ");
-        
-        const isFemale = 
-          name.startsWith("ဒေါ်") || 
-          name.startsWith("မ") || 
-          name.startsWith("ဆရာလေး") || 
-          name.startsWith("သီလရှင်") || 
-          name.toLowerCase().startsWith("daw ") || 
-          name.toLowerCase().startsWith("ma ");
-
-        if (filterGender === "male") return isMale;
-        if (filterGender === "female") return isFemale;
-        return true;
+        const explicit = String((m as any)?.gender || "").toLowerCase();
+        const gender = (explicit === "male" || explicit === "female" || explicit === "other")
+          ? explicit
+          : inferGenderFromName(m.name || "");
+        return gender === filterGender;
       });
     }
 
@@ -236,7 +255,7 @@ export default function MembersScreen() {
           return 0;
       }
     });
-  }, [sourceMembers, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate]);
+  }, [sourceMembers, search, sortBy, sortOrder, filterStatus, filterGender, filterAge, targetDate, minAge, maxAge, parseDate, compareDateValues, calculateAge, getUpcomingBirthdayDate, inferGenderFromName]);
 
   const getAvatarLabel = (name: string) => {
     if (!name) return "?";
@@ -406,6 +425,11 @@ export default function MembersScreen() {
             style={styles.memberItem} 
             onPress={() => router.push({ pathname: "/member-detail", params: { id: String(item.id) } } as any)}
           >
+            {(() => {
+              const normalizedStatus = normalizeMemberStatus(item.status);
+              const statusPalette = getMemberStatusPalette(normalizedStatus);
+              return (
+                <>
             {item.profileImage ? (
               <Image source={{ uri: item.profileImage }} style={styles.avatar} resizeMode="cover" />
             ) : (
@@ -417,9 +441,20 @@ export default function MembersScreen() {
               <Text style={styles.memberName}>{item.name}</Text>
               <Text style={styles.memberId}>ID: {item.id}</Text>
               <View style={styles.metaRow}>
-                <Text style={styles.metaText}>{MEMBER_STATUS_LABELS[normalizeMemberStatus(item.status)]}</Text>
+                <Text style={[styles.memberStatusText, { color: statusPalette.text, backgroundColor: statusPalette.bg }]}>
+                  {MEMBER_STATUS_LABELS[normalizedStatus]}
+                </Text>
                 <Text style={[styles.metaText, { marginLeft: 8 }]}>
-                  {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || item.status)]}
+                  {ORG_POSITION_LABELS[normalizeOrgPosition((item as any).orgPosition || normalizedStatus)]}
+                </Text>
+                <Text style={[styles.metaText, { marginLeft: 8 }]}>
+                  {(() => {
+                    const normalizedGender: "male" | "female" | "other" =
+                      (item as any).gender === "male" || (item as any).gender === "female" || (item as any).gender === "other"
+                        ? ((item as any).gender as "male" | "female" | "other")
+                        : inferGenderFromName(item.name || "");
+                    return MEMBER_GENDER_LABELS[normalizedGender];
+                  })()}
                 </Text>
                 {sortBy !== 'age' && (() => {
                   const age = calculateAge(item.dob, filterAge === "custom" ? targetDate : new Date());
@@ -469,6 +504,9 @@ export default function MembersScreen() {
               )}
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+                </>
+              );
+            })()}
           </Pressable>
         )}
       />
@@ -548,6 +586,9 @@ export default function MembersScreen() {
                 </Pressable>
                 <Pressable style={[styles.statusChip, filterGender === "female" && styles.statusChipActive]} onPress={() => setFilterGender("female")}>
                   <Text style={[styles.statusChipText, filterGender === "female" && styles.statusChipTextActive]}>အမျိုးသမီး</Text>
+                </Pressable>
+                <Pressable style={[styles.statusChip, filterGender === "other" && styles.statusChipActive]} onPress={() => setFilterGender("other")}>
+                  <Text style={[styles.statusChipText, filterGender === "other" && styles.statusChipTextActive]}>အခြား</Text>
                 </Pressable>
               </View>
 
@@ -723,6 +764,14 @@ const styles = StyleSheet.create({
   memberId: { fontSize: 12, color: Colors.light.textSecondary },
   metaRow: { marginTop: 4, flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
   metaText: { fontSize: 12, color: Colors.light.tint, fontFamily: "Inter_500Medium" },
+  memberStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    overflow: "hidden",
+  },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },

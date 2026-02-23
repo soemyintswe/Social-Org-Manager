@@ -1,6 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import {
   Member,
+  MemberFamilyMember,
   OrgEvent,
   Group,
   AttendanceRecord,
@@ -10,8 +14,23 @@ import {
   UserAccount,
   MemberChangeRequest,
   MemberChangeAction,
+  ExpenseClaim,
+  MemberPaymentRequest,
+  MemberPaymentRequestKind,
+  MobileWalletProvider,
+  StandardAmountRule,
+  StandardAmountChangeRequest,
+  DEFAULT_STANDARD_AMOUNT_RULES,
+  DisbursementMethod,
+  ChatThread,
+  ChatMessage,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
+import {
+  DEFAULT_CLOUD_SYNC_ENDPOINT as DEFAULT_CLOUD_SYNC_ENDPOINT_BASE,
+  DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+  DEFAULT_LAN_SYNC_URL as DEFAULT_LAN_SYNC_URL_BASE,
+} from "./sync-defaults";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -24,7 +43,58 @@ const KEYS = {
   USERS: "@orghub_users",
   USER_PASSWORDS: "@orghub_user_passwords",
   MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
+  EXPENSE_CLAIMS: "@orghub_expense_claims",
+  MEMBER_PAYMENT_REQUESTS: "@orghub_member_payment_requests",
+  STANDARD_AMOUNTS: "@orghub_standard_amounts",
+  STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
+  CHAT_THREADS: "@orghub_chat_threads",
+  CHAT_MESSAGES: "@orghub_chat_messages",
 };
+
+const EXTRA_SHARED_KEYS = [
+  "@custom_categories",
+  "@org_notice_custom_topics",
+  "@org_notice_custom_relations",
+  "@org_notice_custom_conditions",
+] as const;
+
+const BACKUP_EXCLUDED_KEYS = new Set<string>([
+  "@orghub_auth_session",
+  "@orghub_login_guard",
+  "@orghub_sync_last_server_updated_at",
+  "@orghub_expense_claim_draft",
+  "@member_change_last_seen_at",
+  "@auto_backup_enabled",
+  "@last_birthday_notification",
+  "@app_update_last_checked_at",
+  "@app_update_skipped_version",
+  "@orghub_cloud_sync_last_remote_updated_at",
+]);
+
+function isSharedBackupKey(key: string): boolean {
+  if (!key) return false;
+  if (BACKUP_EXCLUDED_KEYS.has(key)) return false;
+  if (key.startsWith("@event_notification_seen_ids_")) return false;
+  if (key.startsWith("@comment_notification_seen_ids_")) return false;
+  if (key.startsWith("@chat_notification_seen_ids_")) return false;
+  if (Object.values(KEYS).includes(key as any)) return true;
+  if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
+  return false;
+}
+
+async function getAllSharedBackupKeys(): Promise<string[]> {
+  try {
+    const all = await AsyncStorage.getAllKeys();
+    const dynamic = all.filter((key) => isSharedBackupKey(String(key || "")));
+    if (dynamic.length > 0) return dynamic;
+  } catch {}
+  return [...Object.values(KEYS), ...EXTRA_SHARED_KEYS];
+}
+
+const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
+const CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY = "@orghub_cloud_sync_last_remote_updated_at";
+const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || DEFAULT_LAN_SYNC_URL_BASE);
+const DEFAULT_CLOUD_SYNC_ENDPOINT = String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_ENDPOINT || DEFAULT_CLOUD_SYNC_ENDPOINT_BASE);
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
 
@@ -34,6 +104,218 @@ function generateId(): string {
 
 export function randomColor(): string {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+}
+
+function normalizeFamilyMembers(input: unknown): MemberFamilyMember[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const rows = input
+    .map((row) => {
+      const obj = (row || {}) as any;
+      const name = String(obj.name || "").trim();
+      if (!name) return null;
+      return {
+        id: obj.id ? String(obj.id) : undefined,
+        name,
+        gender: obj.gender === "male" || obj.gender === "female" || obj.gender === "other" ? obj.gender : undefined,
+        relation: obj.relation ? String(obj.relation).trim() : undefined,
+        dob: obj.dob ? String(obj.dob).trim() : undefined,
+        nrc: obj.nrc ? String(obj.nrc).trim() : undefined,
+        occupation: obj.occupation ? String(obj.occupation).trim() : undefined,
+      } as MemberFamilyMember;
+    })
+    .filter(Boolean) as MemberFamilyMember[];
+  return rows.length > 0 ? rows : [];
+}
+
+function normalizeMemberPatch(updates: any): Partial<Member> {
+  const next: any = { ...(updates || {}) };
+  if ("occupation" in next) {
+    next.occupation = next.occupation ? String(next.occupation).trim() : undefined;
+  }
+  if ("profileImage" in next) {
+    next.profileImage = next.profileImage ? String(next.profileImage) : undefined;
+  }
+  if ("familyMembers" in next) {
+    next.familyMembers = normalizeFamilyMembers(next.familyMembers);
+  }
+  return next;
+}
+
+async function remapMemberIdReferences(oldId: string, newId: string): Promise<void> {
+  const from = String(oldId || "").trim();
+  const to = String(newId || "").trim();
+  if (!from || !to || from === to) return;
+
+  const [
+    transactions,
+    loans,
+    groups,
+    users,
+    memberChangeRequests,
+    events,
+    expenseClaims,
+    memberPaymentRequests,
+    chatMessages,
+  ] = await Promise.all([
+    getTransactions(),
+    getLoans(),
+    getGroups(),
+    getUsers(),
+    getMemberChangeRequests(),
+    getEvents(),
+    getExpenseClaims(),
+    getMemberPaymentRequests(),
+    getChatMessages(),
+  ]);
+
+  let txChanged = false;
+  const nextTransactions = transactions.map((row: any) => {
+    if (String(row?.memberId || "") !== from) return row;
+    txChanged = true;
+    return { ...row, memberId: to };
+  });
+
+  let loanChanged = false;
+  const nextLoans = loans.map((row: any) => {
+    if (String(row?.memberId || "") !== from) return row;
+    loanChanged = true;
+    return { ...row, memberId: to };
+  });
+
+  let groupChanged = false;
+  const nextGroups = groups.map((row: any) => {
+    const ids = Array.isArray(row?.memberIds) ? row.memberIds : [];
+    if (!ids.includes(from)) return row;
+    groupChanged = true;
+    return {
+      ...row,
+      memberIds: ids.map((id: string) => (String(id) === from ? to : id)),
+    };
+  });
+
+  let userChanged = false;
+  const nextUsers = users.map((row: any) => {
+    if (String(row?.memberId || "") !== from) return row;
+    userChanged = true;
+    return { ...row, memberId: to };
+  });
+
+  let reqChanged = false;
+  const nextRequests = memberChangeRequests.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.targetMemberId || "") === from) {
+      next.targetMemberId = to;
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    const memberPayload = row?.payload?.member;
+    if (memberPayload && typeof memberPayload === "object") {
+      if (String(memberPayload.id || "") === from) {
+        next.payload = { ...(row.payload || {}), member: { ...memberPayload, id: to } };
+        changed = true;
+      }
+    }
+    if (changed) reqChanged = true;
+    return next;
+  });
+
+  let eventChanged = false;
+  const nextEvents = events.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (Array.isArray(row?.attendeeIds) && row.attendeeIds.includes(from)) {
+      next.attendeeIds = row.attendeeIds.map((id: string) => (String(id) === from ? to : id));
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    if (String(row?.senderMemberId || "") === from) {
+      next.senderMemberId = to;
+      changed = true;
+    }
+    if (String(row?.subjectMemberId || "") === from) {
+      next.subjectMemberId = to;
+      changed = true;
+    }
+    if (String(row?.healthPatientMemberId || "") === from) {
+      next.healthPatientMemberId = to;
+      changed = true;
+    }
+    if (changed) eventChanged = true;
+    return next;
+  });
+
+  let claimChanged = false;
+  const nextClaims = expenseClaims.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.claimantMemberId || "") === from) {
+      next.claimantMemberId = to;
+      changed = true;
+    }
+    if (String(row?.relatedMemberId || "") === from) {
+      next.relatedMemberId = to;
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    if (changed) claimChanged = true;
+    return next;
+  });
+
+  let paymentChanged = false;
+  const nextPayments = memberPaymentRequests.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.forMemberId || "") === from) {
+      next.forMemberId = to;
+      changed = true;
+    }
+    if (String(row?.payerMemberId || "") === from) {
+      next.payerMemberId = to;
+      changed = true;
+    }
+    if (String(row?.createdByMemberId || "") === from) {
+      next.createdByMemberId = to;
+      changed = true;
+    }
+    if (changed) paymentChanged = true;
+    return next;
+  });
+
+  let chatChanged = false;
+  const nextChatMessages = chatMessages.map((row: any) => {
+    let changed = false;
+    const next: any = { ...row };
+    if (String(row?.senderMemberId || "") === from) {
+      next.senderMemberId = to;
+      changed = true;
+    }
+    if (changed) chatChanged = true;
+    return next;
+  });
+
+  const writes: Promise<any>[] = [];
+  if (txChanged) writes.push(saveTransactions(nextTransactions as any[]));
+  if (loanChanged) writes.push(AsyncStorage.setItem(KEYS.LOANS, JSON.stringify(nextLoans)));
+  if (groupChanged) writes.push(saveGroups(nextGroups as any[]));
+  if (userChanged) writes.push(saveUsers(nextUsers as any[]));
+  if (reqChanged) writes.push(saveMemberChangeRequests(nextRequests as any[]));
+  if (eventChanged) writes.push(AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify(nextEvents)));
+  if (claimChanged) writes.push(AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(nextClaims)));
+  if (paymentChanged) writes.push(AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(nextPayments)));
+  if (chatChanged) writes.push(saveChatMessages(nextChatMessages as any[]));
+  if (writes.length > 0) {
+    await Promise.all(writes);
+  }
 }
 
 // ဒေတာဖတ်တဲ့ function တိုင်းမှာ try-catch ထည့်ထားလို့ error တက်ရင်တောင် အဝိုင်းလည်မနေတော့ပါဘူး
@@ -122,7 +404,7 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
 
   let nextMembers = [...members];
   if (request.action === "create") {
-    const incoming = request.payload.member || {};
+    const incoming = normalizeMemberPatch(request.payload.member || {}) as any;
     const incomingId = String(incoming.id || "").trim();
     if (!incomingId) throw new Error("invalid_member_id");
     const exists = nextMembers.some((item) => item.id === incomingId);
@@ -147,6 +429,8 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
       statusDate: incoming.statusDate,
       statusNote: incoming.statusNote,
       profileImage: incoming.profileImage,
+      occupation: incoming.occupation,
+      familyMembers: normalizeFamilyMembers(incoming.familyMembers),
     };
     nextMembers = [...nextMembers, member];
   } else if (request.action === "update") {
@@ -155,15 +439,24 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
     const memberIndex = nextMembers.findIndex((item) => item.id === targetId);
     if (memberIndex === -1) throw new Error("target_not_found");
 
-    const updatePayload = { ...(request.payload.member || {}) };
-    if (updatePayload.id && updatePayload.id !== targetId) {
-      throw new Error("id_change_not_supported");
+    const updatePayload = normalizeMemberPatch(request.payload.member || {}) as any;
+    const requestedId = String(updatePayload.id || "").trim();
+    if (requestedId && requestedId !== targetId) {
+      const exists = nextMembers.some((item, idx) => idx !== memberIndex && item.id === requestedId);
+      if (exists) throw new Error("member_exists");
+      await remapMemberIdReferences(targetId, requestedId);
+      nextMembers[memberIndex] = {
+        ...nextMembers[memberIndex],
+        ...updatePayload,
+        id: requestedId,
+      };
+    } else {
+      delete (updatePayload as any).id;
+      nextMembers[memberIndex] = {
+        ...nextMembers[memberIndex],
+        ...updatePayload,
+      };
     }
-    delete (updatePayload as any).id;
-    nextMembers[memberIndex] = {
-      ...nextMembers[memberIndex],
-      ...updatePayload,
-    };
   } else if (request.action === "delete") {
     const targetId = String(request.targetMemberId || "").trim();
     if (!targetId) throw new Error("target_missing");
@@ -389,10 +682,11 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
+  const normalized = normalizeMemberPatch(member) as any;
   const newMember = {
-    ...member,
-    id: member.id || generateId(),
-    avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
+    ...normalized,
+    id: normalized.id || generateId(),
+    avatarColor: normalized.avatarColor || AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
     createdAt: new Date().toISOString()
   };
 
@@ -411,7 +705,14 @@ export async function updateMember(id: string, updates: any) {
   const members = await getMembers();
   const idx = members.findIndex(m => m.id === id);
   if (idx !== -1) {
-    members[idx] = { ...members[idx], ...updates };
+    const normalized = normalizeMemberPatch(updates) as any;
+    const nextId = String(normalized.id || id).trim() || id;
+    if (nextId !== id) {
+      const exists = members.some((m, i) => i !== idx && String(m.id || "") === nextId);
+      if (exists) throw new Error("member_exists");
+      await remapMemberIdReferences(id, nextId);
+    }
+    members[idx] = { ...members[idx], ...normalized, id: nextId };
     await saveMembers(members);
   }
 }
@@ -426,7 +727,517 @@ export async function clearAllMembers(): Promise<void> {
 }
 
 export async function clearAllData(): Promise<void> {
-  await AsyncStorage.multiRemove(Object.values(KEYS));
+  const keys = await getAllSharedBackupKeys();
+  if (keys.length > 0) {
+    await AsyncStorage.multiRemove(keys);
+  }
+}
+
+function toYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function toHm(date: Date): string {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function makeClaimNumber(existing: ExpenseClaim[]): string {
+  const today = new Date();
+  const ymd = toYmd(today).replace(/-/g, "");
+  const prefix = `EC-${ymd}-`;
+  let max = 0;
+  for (const item of existing) {
+    const value = String(item.claimNumber || "");
+    if (!value.startsWith(prefix)) continue;
+    const seq = Number(value.slice(prefix.length));
+    if (Number.isFinite(seq) && seq > max) max = seq;
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+
+function makePaymentRequestNumber(existing: MemberPaymentRequest[]): string {
+  const today = new Date();
+  const ymd = toYmd(today).replace(/-/g, "");
+  const prefix = `PR-${ymd}-`;
+  let max = 0;
+  for (const item of existing) {
+    const value = String(item.requestNumber || "");
+    if (!value.startsWith(prefix)) continue;
+    const seq = Number(value.slice(prefix.length));
+    if (Number.isFinite(seq) && seq > max) max = seq;
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+
+function mapPaymentRequestKindToIncomeCategory(
+  kind: MemberPaymentRequestKind
+): { category: string; categoryLabel: string } {
+  if (kind === "member_fees") return { category: "member_fees", categoryLabel: "လစဉ်ကြေးရငွေ" };
+  if (kind === "donations") return { category: "donations", categoryLabel: "အလှူငွေရရှိ" };
+  if (kind === "loan_repayment") return { category: "loan_repayment", categoryLabel: "ချေးငွေပြန်ဆပ်ရရှိငွေ" };
+  return { category: "interest_income", categoryLabel: "အတိုးရငွေ" };
+}
+
+async function pushSystemEvent(input: {
+  title: string;
+  description: string;
+  createdByUserId?: string;
+  createdByMemberId?: string;
+}) {
+  try {
+    const events = await getEvents();
+    const now = new Date();
+    const event: OrgEvent = {
+      id: generateId(),
+      title: input.title,
+      description: input.description,
+      date: toYmd(now),
+      time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+      location: "System",
+      attendeeIds: [],
+      createdAt: now.toISOString(),
+      createdByUserId: input.createdByUserId,
+      createdByMemberId: input.createdByMemberId,
+    };
+    await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify([event, ...events]));
+  } catch (error) {
+    console.log("pushSystemEvent failed", error);
+  }
+}
+
+function defaultStandardRules(): StandardAmountRule[] {
+  const now = new Date().toISOString();
+  return DEFAULT_STANDARD_AMOUNT_RULES.map((item) => ({ ...item, updatedAt: now }));
+}
+
+export async function getStandardAmountRules(): Promise<StandardAmountRule[]> {
+  const rules = await safeGet<StandardAmountRule[]>(KEYS.STANDARD_AMOUNTS, []);
+  if (!Array.isArray(rules) || rules.length === 0) {
+    const defaults = defaultStandardRules();
+    await AsyncStorage.setItem(KEYS.STANDARD_AMOUNTS, JSON.stringify(defaults));
+    return defaults;
+  }
+
+  const mergedByKey = new Map<string, StandardAmountRule>();
+  defaultStandardRules().forEach((item) => mergedByKey.set(item.key, item));
+  rules.forEach((item) => {
+    const key = String(item?.key || "").trim();
+    if (!key) return;
+    mergedByKey.set(key, {
+      ...mergedByKey.get(key),
+      ...item,
+      key,
+      label: String(item.label || mergedByKey.get(key)?.label || key),
+      amount: Number(item.amount || 0),
+      enabled: Boolean(item.enabled),
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    });
+  });
+  const merged = Array.from(mergedByKey.values());
+  await AsyncStorage.setItem(KEYS.STANDARD_AMOUNTS, JSON.stringify(merged));
+  return merged;
+}
+
+export async function getStandardAmountRuleByKey(key: string): Promise<StandardAmountRule | undefined> {
+  const rules = await getStandardAmountRules();
+  return rules.find((item) => item.key === key);
+}
+
+export async function getStandardAmountChangeRequests(): Promise<StandardAmountChangeRequest[]> {
+  const rows = await safeGet<StandardAmountChangeRequest[]>(KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function createStandardAmountChangeRequest(input: {
+  ruleKey: string;
+  ruleLabel: string;
+  requestedAmount: number;
+  reason: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+}): Promise<StandardAmountChangeRequest> {
+  const [rules, requests] = await Promise.all([getStandardAmountRules(), getStandardAmountChangeRequests()]);
+  const existingRule = rules.find((item) => item.key === input.ruleKey);
+  const request: StandardAmountChangeRequest = {
+    id: generateId(),
+    ruleKey: input.ruleKey,
+    ruleLabel: input.ruleLabel || existingRule?.label || input.ruleKey,
+    previousAmount: Number(existingRule?.amount || 0),
+    requestedAmount: Number(input.requestedAmount || 0),
+    reason: String(input.reason || "").trim(),
+    status: "pending_approval",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, JSON.stringify([request, ...requests]));
+  await pushSystemEvent({
+    title: `Amount change request: ${request.ruleLabel}`,
+    description: `${request.previousAmount.toLocaleString()} KS → ${request.requestedAmount.toLocaleString()} KS`,
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+  });
+  return request;
+}
+
+export async function approveStandardAmountChangeRequest(requestId: string, approverUserId: string, approvalNote?: string): Promise<void> {
+  const [rules, requests] = await Promise.all([getStandardAmountRules(), getStandardAmountChangeRequests()]);
+  const idx = requests.findIndex((item) => item.id === requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  if (requests[idx].status !== "pending_approval") throw new Error("request_not_pending");
+
+  const req = requests[idx];
+  const nextRules = [...rules];
+  const ruleIdx = nextRules.findIndex((item) => item.key === req.ruleKey);
+  if (ruleIdx === -1) {
+    nextRules.push({
+      key: req.ruleKey,
+      label: req.ruleLabel,
+      amount: req.requestedAmount,
+      enabled: false,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: approverUserId,
+    });
+  } else {
+    nextRules[ruleIdx] = {
+      ...nextRules[ruleIdx],
+      amount: req.requestedAmount,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: approverUserId,
+    };
+  }
+
+  requests[idx] = {
+    ...req,
+    status: "approved",
+    approverUserId,
+    approvalNote: approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+  };
+
+  await AsyncStorage.multiSet([
+    [KEYS.STANDARD_AMOUNTS, JSON.stringify(nextRules)],
+    [KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, JSON.stringify(requests)],
+  ]);
+
+  await pushSystemEvent({
+    title: `Amount updated: ${req.ruleLabel}`,
+    description: `${req.previousAmount.toLocaleString()} KS → ${req.requestedAmount.toLocaleString()} KS`,
+    createdByUserId: approverUserId,
+  });
+}
+
+export async function rejectStandardAmountChangeRequest(requestId: string, approverUserId: string, approvalNote?: string): Promise<void> {
+  const requests = await getStandardAmountChangeRequests();
+  const idx = requests.findIndex((item) => item.id === requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  if (requests[idx].status !== "pending_approval") throw new Error("request_not_pending");
+  requests[idx] = {
+    ...requests[idx],
+    status: "rejected",
+    approverUserId,
+    approvalNote: approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.STANDARD_AMOUNT_CHANGE_REQUESTS, JSON.stringify(requests));
+}
+
+export async function getExpenseClaims(): Promise<ExpenseClaim[]> {
+  const rows = await safeGet<ExpenseClaim[]>(KEYS.EXPENSE_CLAIMS, []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function createExpenseClaim(input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">): Promise<ExpenseClaim> {
+  const claims = await getExpenseClaims();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const claim: ExpenseClaim = {
+    id: generateId(),
+    claimNumber: makeClaimNumber(claims),
+    claimDate: input.claimDate || toYmd(nowDate),
+    claimTime: input.claimTime || toHm(nowDate),
+    expenseCategory: String(input.expenseCategory || "other_expenses"),
+    expenseCategoryLabel: String(input.expenseCategoryLabel || input.expenseCategory || "Other"),
+    claimantType: input.claimantType,
+    claimantMemberId: input.claimantMemberId,
+    relatedMemberId: input.relatedMemberId,
+    relatedMemberName: input.relatedMemberName,
+    claimantName: String(input.claimantName || "").trim(),
+    claimantAddress: input.claimantAddress?.trim() || undefined,
+    familyMemberName: input.familyMemberName?.trim() || undefined,
+    familyRelation: input.familyRelation?.trim() || undefined,
+    relationDescription: input.relationDescription?.trim() || undefined,
+    nrc: input.nrc?.trim() || undefined,
+    phone: input.phone?.trim() || undefined,
+    reason: String(input.reason || "").trim(),
+    linkedEventId: input.linkedEventId?.trim() || undefined,
+    linkedEventTitle: input.linkedEventTitle?.trim() || undefined,
+    requestedAmount: Number(input.requestedAmount || 0),
+    approvedAmount: undefined,
+    status: "pending_approval",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify([claim, ...claims]));
+  await pushSystemEvent({
+    title: `Expense Claim Submitted (${claim.claimNumber})`,
+    description: `${claim.claimantName} - ${claim.requestedAmount.toLocaleString()} KS (${claim.expenseCategoryLabel})`,
+    createdByUserId: claim.createdByUserId,
+    createdByMemberId: claim.createdByMemberId,
+  });
+  return claim;
+}
+
+export async function approveExpenseClaim(input: {
+  claimId: string;
+  approverUserId: string;
+  approvedAmount: number;
+  approvalNote?: string;
+}): Promise<void> {
+  const claims = await getExpenseClaims();
+  const idx = claims.findIndex((item) => item.id === input.claimId);
+  if (idx === -1) throw new Error("claim_not_found");
+  if (claims[idx].status !== "pending_approval") throw new Error("claim_not_pending");
+  claims[idx] = {
+    ...claims[idx],
+    status: "approved",
+    approvedAmount: Number(input.approvedAmount || 0),
+    approverUserId: input.approverUserId,
+    approvalNote: input.approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(claims));
+  await pushSystemEvent({
+    title: `Expense Claim Approved (${claims[idx].claimNumber})`,
+    description: `${claims[idx].approvedAmount?.toLocaleString() || 0} KS approved`,
+    createdByUserId: input.approverUserId,
+  });
+}
+
+export async function rejectExpenseClaim(input: {
+  claimId: string;
+  approverUserId: string;
+  approvalNote: string;
+}): Promise<void> {
+  const claims = await getExpenseClaims();
+  const idx = claims.findIndex((item) => item.id === input.claimId);
+  if (idx === -1) throw new Error("claim_not_found");
+  if (claims[idx].status !== "pending_approval") throw new Error("claim_not_pending");
+  claims[idx] = {
+    ...claims[idx],
+    status: "rejected",
+    approverUserId: input.approverUserId,
+    approvalNote: input.approvalNote?.trim() || undefined,
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(claims));
+  await pushSystemEvent({
+    title: `Expense Claim Rejected (${claims[idx].claimNumber})`,
+    description: claims[idx].approvalNote || "Claim rejected",
+    createdByUserId: input.approverUserId,
+  });
+}
+
+export async function disburseExpenseClaim(input: {
+  claimId: string;
+  disburserUserId: string;
+  method: DisbursementMethod;
+  disbursementDate: string;
+  disbursementTime?: string;
+  voucherNumber?: string;
+  note?: string;
+}): Promise<void> {
+  const claims = await getExpenseClaims();
+  const idx = claims.findIndex((item) => item.id === input.claimId);
+  if (idx === -1) throw new Error("claim_not_found");
+  const claim = claims[idx];
+  if (claim.status !== "approved") throw new Error("claim_not_approved");
+  const amount = Number(claim.approvedAmount || claim.requestedAmount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("invalid_approved_amount");
+
+  const txn = await addTransaction({
+    memberId: claim.claimantMemberId || undefined,
+    payerPayee: claim.claimantName,
+    amount,
+    type: "expense",
+    category: claim.expenseCategory,
+    paymentMethod: input.method,
+    date: input.disbursementDate,
+    notes: claim.reason,
+    receiptNumber: input.voucherNumber?.trim() || claim.claimNumber,
+    categoryLabel: claim.expenseCategoryLabel,
+  });
+
+  claims[idx] = {
+    ...claim,
+    status: "disbursed",
+    disburserUserId: input.disburserUserId,
+    disbursementMethod: input.method,
+    disbursementDate: input.disbursementDate,
+    disbursementTime: input.disbursementTime || toHm(new Date()),
+    voucherNumber: input.voucherNumber?.trim() || undefined,
+    disbursementNote: input.note?.trim() || undefined,
+    disbursedAt: new Date().toISOString(),
+    linkedTransactionId: txn.id,
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.EXPENSE_CLAIMS, JSON.stringify(claims));
+  await pushSystemEvent({
+    title: `Expense Disbursed (${claim.claimNumber})`,
+    description: `${amount.toLocaleString()} KS • ${input.method.toUpperCase()}`,
+    createdByUserId: input.disburserUserId,
+  });
+}
+
+export async function getMemberPaymentRequests(): Promise<MemberPaymentRequest[]> {
+  const rows = await safeGet<MemberPaymentRequest[]>(KEYS.MEMBER_PAYMENT_REQUESTS, []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function createMemberPaymentRequest(input: {
+  kind: MemberPaymentRequestKind;
+  amount: number;
+  forMemberId?: string;
+  forMemberName?: string;
+  payerMemberId?: string;
+  payerName: string;
+  walletProvider: MobileWalletProvider;
+  walletAccountName?: string;
+  walletAccountNumber?: string;
+  walletReference?: string;
+  proofImage?: string;
+  note?: string;
+  requestedDate?: string;
+  requestedTime?: string;
+  feePeriodStart?: string;
+  feePeriodEnd?: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+}): Promise<MemberPaymentRequest> {
+  const requests = await getMemberPaymentRequests();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const mapping = mapPaymentRequestKindToIncomeCategory(input.kind);
+  const request: MemberPaymentRequest = {
+    id: generateId(),
+    requestNumber: makePaymentRequestNumber(requests),
+    kind: input.kind,
+    category: mapping.category,
+    categoryLabel: mapping.categoryLabel,
+    amount: Number(input.amount || 0),
+    forMemberId: input.forMemberId?.trim() || undefined,
+    forMemberName: input.forMemberName?.trim() || undefined,
+    payerMemberId: input.payerMemberId,
+    payerName: String(input.payerName || "").trim(),
+    walletProvider: input.walletProvider,
+    walletAccountName: input.walletAccountName?.trim() || undefined,
+    walletAccountNumber: input.walletAccountNumber?.trim() || undefined,
+    walletReference: input.walletReference?.trim() || undefined,
+    proofImage: input.proofImage || undefined,
+    note: input.note?.trim() || undefined,
+    status: "pending_treasurer_review",
+    requestedDate: input.requestedDate || toYmd(nowDate),
+    requestedTime: input.requestedTime || toHm(nowDate),
+    feePeriodStart: input.feePeriodStart || undefined,
+    feePeriodEnd: input.feePeriodEnd || undefined,
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: now,
+    updatedAt: now,
+    notifiedRoles: ["treasurer", "chairperson", "vice_chairperson", "secretary", "joint_secretary", "auditor"],
+  };
+  await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify([request, ...requests]));
+  await pushSystemEvent({
+    title: `Payment Request Submitted (${request.requestNumber})`,
+    description: `${request.payerName} • ${request.amount.toLocaleString()} KS • ${request.categoryLabel}`,
+    createdByUserId: request.createdByUserId,
+    createdByMemberId: request.createdByMemberId,
+  });
+  return request;
+}
+
+export async function approveMemberPaymentRequest(input: {
+  requestId: string;
+  reviewerUserId: string;
+  reviewNote?: string;
+  acceptedDate?: string;
+  acceptedTime?: string;
+}): Promise<void> {
+  const requests = await getMemberPaymentRequests();
+  const idx = requests.findIndex((item) => item.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const request = requests[idx];
+  if (request.status !== "pending_treasurer_review") throw new Error("request_not_pending");
+
+  const acceptedDate = input.acceptedDate || toYmd(new Date());
+  const txn = await addTransaction({
+    memberId: request.forMemberId || request.payerMemberId || undefined,
+    payerPayee: request.forMemberName || request.payerName,
+    amount: Number(request.amount || 0),
+    type: "income",
+    category: request.category,
+    paymentMethod: "bank",
+    date: acceptedDate,
+    notes:
+      request.note ||
+      `${request.categoryLabel} (${request.walletProvider})`,
+    receiptNumber: request.requestNumber,
+    categoryLabel: request.categoryLabel,
+    feePeriodStart: request.feePeriodStart,
+    feePeriodEnd: request.feePeriodEnd,
+  });
+
+  requests[idx] = {
+    ...request,
+    status: "approved",
+    reviewedByUserId: input.reviewerUserId,
+    reviewNote: input.reviewNote?.trim() || undefined,
+    reviewedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    linkedTransactionId: txn.id,
+    acceptedDate,
+    acceptedTime: input.acceptedTime || toHm(new Date()),
+  };
+  await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(requests));
+  await pushSystemEvent({
+    title: `Payment Request Approved (${request.requestNumber})`,
+    description: `${request.amount.toLocaleString()} KS ကို ရငွေစာရင်းသို့ ထည့်သွင်းပြီးပါပြီ`,
+    createdByUserId: input.reviewerUserId,
+  });
+}
+
+export async function rejectMemberPaymentRequest(input: {
+  requestId: string;
+  reviewerUserId: string;
+  reviewNote: string;
+}): Promise<void> {
+  const requests = await getMemberPaymentRequests();
+  const idx = requests.findIndex((item) => item.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const request = requests[idx];
+  if (request.status !== "pending_treasurer_review") throw new Error("request_not_pending");
+
+  requests[idx] = {
+    ...request,
+    status: "rejected",
+    reviewedByUserId: input.reviewerUserId,
+    reviewNote: input.reviewNote?.trim() || undefined,
+    reviewedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(requests));
+  await pushSystemEvent({
+    title: `Payment Request Rejected (${request.requestNumber})`,
+    description: requests[idx].reviewNote || "Rejected by treasurer",
+    createdByUserId: input.reviewerUserId,
+  });
 }
 
 // --- Events ---
@@ -451,6 +1262,145 @@ export async function updateEvent(id: string, updates: any) {
 export async function deleteEvent(id: string) {
   const events = await getEvents();
   await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify(events.filter(e => e.id !== id)));
+}
+
+// --- Chat ---
+export const getChatThreads = () => safeGet<ChatThread[]>(KEYS.CHAT_THREADS, []);
+export const getChatMessages = () => safeGet<ChatMessage[]>(KEYS.CHAT_MESSAGES, []);
+
+export async function saveChatThreads(data: ChatThread[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.CHAT_THREADS, JSON.stringify(data));
+}
+
+export async function saveChatMessages(data: ChatMessage[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.CHAT_MESSAGES, JSON.stringify(data));
+}
+
+function normalizeUserIdList(ids: string[]): string[] {
+  return Array.from(
+    new Set(
+      (ids || [])
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+    )
+  ).sort();
+}
+
+export async function createDirectChatThread(input: {
+  userAId: string;
+  userBId: string;
+  createdByUserId: string;
+}): Promise<ChatThread> {
+  const [a, b] = normalizeUserIdList([input.userAId, input.userBId]);
+  if (!a || !b) throw new Error("invalid_participants");
+  const threads = await getChatThreads();
+  const existing = threads.find((row) => {
+    if (row.type !== "direct") return false;
+    const ids = normalizeUserIdList(row.participantUserIds || []);
+    return ids.length === 2 && ids[0] === a && ids[1] === b;
+  });
+  if (existing) return existing;
+
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id: generateId(),
+    type: "direct",
+    participantUserIds: [a, b],
+    createdByUserId: input.createdByUserId,
+    createdAt: now,
+    updatedAt: now,
+    lastReadAtBy: {},
+  };
+  await saveChatThreads([thread, ...threads]);
+  return thread;
+}
+
+export async function createGroupChatThread(input: {
+  name: string;
+  participantUserIds: string[];
+  createdByUserId: string;
+}): Promise<ChatThread> {
+  const participants = normalizeUserIdList(input.participantUserIds);
+  if (!input.name.trim() || participants.length < 2) {
+    throw new Error("invalid_group");
+  }
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id: generateId(),
+    type: "group",
+    name: input.name.trim(),
+    participantUserIds: participants,
+    createdByUserId: input.createdByUserId,
+    createdAt: now,
+    updatedAt: now,
+    lastReadAtBy: {},
+  };
+  const threads = await getChatThreads();
+  await saveChatThreads([thread, ...threads]);
+  return thread;
+}
+
+export async function sendChatMessage(input: {
+  threadId: string;
+  senderUserId: string;
+  senderMemberId?: string;
+  senderDisplayName?: string;
+  text?: string;
+  image?: string;
+  replyToMessageId?: string;
+  replyToUserId?: string;
+  replyToDisplayName?: string;
+  mentionUserIds?: string[];
+}): Promise<ChatMessage> {
+  const text = String(input.text || "").trim();
+  const image = String(input.image || "").trim();
+  if (!text && !image) throw new Error("empty_message");
+
+  const [threads, messages] = await Promise.all([getChatThreads(), getChatMessages()]);
+  const idx = threads.findIndex((row) => row.id === input.threadId);
+  if (idx === -1) throw new Error("thread_not_found");
+  if (!threads[idx].participantUserIds.includes(input.senderUserId)) throw new Error("sender_not_in_thread");
+
+  const now = new Date().toISOString();
+  const message: ChatMessage = {
+    id: generateId(),
+    threadId: input.threadId,
+    senderUserId: input.senderUserId,
+    senderMemberId: input.senderMemberId,
+    senderDisplayName: input.senderDisplayName,
+    text: text || undefined,
+    image: image || undefined,
+    createdAt: now,
+    replyToMessageId: input.replyToMessageId,
+    replyToUserId: input.replyToUserId,
+    replyToDisplayName: input.replyToDisplayName,
+    mentionUserIds: (input.mentionUserIds || []).map((v) => String(v || "").trim()).filter(Boolean),
+  };
+  await saveChatMessages([...messages, message]);
+
+  threads[idx] = {
+    ...threads[idx],
+    lastMessageAt: now,
+    lastMessageText: message.text || (message.image ? "[Image]" : ""),
+    updatedAt: now,
+  };
+  await saveChatThreads(threads);
+  return message;
+}
+
+export async function markChatThreadRead(threadId: string, userId: string): Promise<void> {
+  if (!threadId || !userId) return;
+  const threads = await getChatThreads();
+  const idx = threads.findIndex((row) => row.id === threadId);
+  if (idx === -1) return;
+  const prevReadAt = String(threads[idx].lastReadAtBy?.[userId] || "");
+  const lastMessageAt = String(threads[idx].lastMessageAt || "");
+  if (prevReadAt && (!lastMessageAt || new Date(prevReadAt).getTime() >= new Date(lastMessageAt).getTime())) {
+    return;
+  }
+  const nextMap = { ...(threads[idx].lastReadAtBy || {}), [userId]: new Date().toISOString() };
+  threads[idx] = { ...threads[idx], lastReadAtBy: nextMap, updatedAt: new Date().toISOString() };
+  await saveChatThreads(threads);
 }
 
 // --- Groups ---
@@ -556,17 +1506,632 @@ export async function deleteLoan(id: string) {
 
 // --- Settings ---
 export async function getAccountSettings(): Promise<AccountSettings> {
-  return safeGet<AccountSettings>(KEYS.ACCOUNT_SETTINGS, {
+  const defaults: AccountSettings = {
     orgName: "My Organization",
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     currency: "MMK",
-    asOfDate: new Date().toISOString()
-  });
+    asOfDate: new Date().toISOString(),
+    syncServerUrl: DEFAULT_SYNC_SERVER_URL,
+    syncEnabled: false,
+    cloudSyncEnabled: true,
+    cloudSyncProvider: "google_drive_apps_script",
+    cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,
+    cloudSyncApiKey: "",
+    cloudSyncGoogleAccountEmail: "",
+    cloudSyncFolderName: DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+    receivingBankName: "",
+    receivingBankAccountNumber: "",
+    receivingBankAccountName: "",
+    receivingKbzPayPhone: "",
+    receivingKbzPayAccountName: "",
+    receivingWavePayPhone: "",
+    receivingWavePayAccountName: "",
+    receivingAyaPayPhone: "",
+    receivingAyaPayAccountName: "",
+  };
+  const stored = await safeGet<Partial<AccountSettings> | null>(KEYS.ACCOUNT_SETTINGS, null);
+  if (!stored || typeof stored !== "object") return defaults;
+
+  const merged: AccountSettings = {
+    ...defaults,
+    ...stored,
+  };
+
+  if (!String(stored.syncServerUrl || "").trim()) {
+    merged.syncServerUrl = defaults.syncServerUrl;
+  }
+  if (stored.syncEnabled === undefined || stored.syncEnabled === null) {
+    merged.syncEnabled = defaults.syncEnabled;
+  }
+  if (stored.cloudSyncEnabled === undefined || stored.cloudSyncEnabled === null) {
+    merged.cloudSyncEnabled = defaults.cloudSyncEnabled;
+  }
+  if (!String(stored.cloudSyncEndpoint || "").trim()) {
+    merged.cloudSyncEndpoint = defaults.cloudSyncEndpoint;
+  }
+  if (!String(stored.cloudSyncFolderName || "").trim()) {
+    merged.cloudSyncFolderName = defaults.cloudSyncFolderName;
+  }
+  return merged;
 }
 
 export async function saveAccountSettings(settings: AccountSettings) {
   await AsyncStorage.setItem(KEYS.ACCOUNT_SETTINGS, JSON.stringify(settings));
+}
+
+function normalizeSyncServerUrl(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+function normalizeCloudSyncEndpoint(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+function sanitizeCloudApiKey(raw: string): string {
+  return String(raw || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+}
+
+function buildCloudApiKeyCandidates(apiKey: string): string[] {
+  const clean = sanitizeCloudApiKey(apiKey);
+  const list: string[] = [clean];
+  // Backward compatibility for older Apps Script deployments that still use template key.
+  if (!clean) {
+    list.push("CHANGE_ME");
+  } else {
+    list.push("");
+  }
+  return Array.from(new Set(list));
+}
+
+async function resolveCloudSyncConfig(): Promise<{
+  enabled: boolean;
+  endpoint: string;
+  apiKey: string;
+  provider: string;
+  accountEmail: string;
+  folderName: string;
+}> {
+  const settings = await getAccountSettings();
+  const endpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+  const apiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
+  const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
+  const accountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
+  const folderName = String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
+  const enabled = settings.cloudSyncEnabled === true && !!endpoint;
+  return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
+}
+
+function parseImageDataUrl(value: string): { mime: string; base64: string } | null {
+  const matched = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i);
+  if (!matched) return null;
+  return { mime: matched[1], base64: matched[2] };
+}
+
+async function compressImageDataUrl(value: string): Promise<string> {
+  const looksLikeImageDataUrl = /^data:image\//i.test(value);
+  if (!looksLikeImageDataUrl) return value;
+  if (value.length <= 4096) return value;
+  if (Platform.OS === "web") return value;
+
+  const parsed = parseImageDataUrl(value);
+  if (!parsed) return value;
+
+  const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+  if (!baseDir) return value;
+
+  const isPng = /png/i.test(parsed.mime);
+  const srcExt = isPng ? "png" : "jpg";
+  const tempUri = `${baseDir}sync_img_${Date.now()}_${Math.random().toString(36).slice(2)}.${srcExt}`;
+
+  try {
+    await FileSystem.writeAsStringAsync(tempUri, parsed.base64, {
+      // @ts-ignore
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const result = await ImageManipulator.manipulateAsync(
+      tempUri,
+      [{ resize: { width: 768 } }],
+      {
+        compress: 0.58,
+        format: ImageManipulator.SaveFormat.JPEG,
+        base64: true,
+      }
+    );
+    if (!result?.base64) return value;
+    return `data:image/jpeg;base64,${result.base64}`;
+  } catch {
+    return value;
+  } finally {
+    try {
+      await FileSystem.deleteAsync(tempUri, { idempotent: true });
+    } catch {}
+  }
+}
+
+async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
+  const settings = await getAccountSettings();
+  const url = normalizeSyncServerUrl(
+    settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL
+  );
+  const enabled = settings.syncEnabled !== false && !!url;
+  return { url, enabled };
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 8000): Promise<Response> {
+  return await Promise.race([
+    fetch(input, init),
+    new Promise<Response>((_, reject) => {
+      const timer = setTimeout(() => {
+        clearTimeout(timer);
+        reject(new Error("timeout"));
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+async function compressLargeDataUrlDeep(input: unknown): Promise<unknown> {
+  if (Array.isArray(input)) {
+    return await Promise.all(input.map((row) => compressLargeDataUrlDeep(row)));
+  }
+  if (!input || typeof input !== "object") return input;
+
+  const obj = input as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === "string") {
+      next[key] = await compressImageDataUrl(value);
+      continue;
+    }
+    next[key] = await compressLargeDataUrlDeep(value);
+  }
+  return next;
+}
+
+export async function sanitizeExportForLanSync(data: Record<string, string>): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(data)) {
+    try {
+      const parsed = JSON.parse(raw);
+      const cleaned = await compressLargeDataUrlDeep(parsed);
+      result[key] = JSON.stringify(cleaned);
+    } catch {
+      result[key] = raw;
+    }
+  }
+  return result;
+}
+
+export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string; reason?: string; status?: number }> {
+  try {
+    const { url, enabled } = await resolveSyncServerUrl();
+    if (!enabled) return { ok: false, url, reason: "disabled_or_empty_url" };
+    const res = await fetchWithTimeout(`${url}/api/sync/health`, { method: "GET" }, 12000);
+    if (!res.ok) return { ok: false, url, status: res.status, reason: "health_http_error" };
+    return { ok: true, url, status: res.status };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "health_fetch_failed") };
+  }
+}
+
+export type CloudSyncResult = {
+  ok: boolean;
+  changed?: boolean;
+  reason?: string;
+  status?: number;
+  endpoint?: string;
+};
+
+type CloudSnapshotPayload = {
+  updatedAt?: string;
+  source?: string;
+  data?: Record<string, string>;
+};
+
+type CloudApiPayload = {
+  ok?: boolean;
+  reason?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+function safeParseJsonObject(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return null;
+}
+
+function normalizeCloudSnapshotData(input: unknown): Record<string, string> | null {
+  const parsed = safeParseJsonObject(input);
+  if (!parsed) return null;
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string") {
+      normalized[key] = value;
+    } else if (value !== undefined) {
+      normalized[key] = JSON.stringify(value);
+    }
+  }
+  return normalized;
+}
+
+function looksLikeExportDataMap(candidate: Record<string, unknown>): boolean {
+  const keys = Object.keys(candidate);
+  if (keys.length === 0) return false;
+  if (!keys.some((k) => k.startsWith("@"))) return false;
+  const meta = new Set([
+    "ok",
+    "reason",
+    "action",
+    "service",
+    "hint",
+    "status",
+    "message",
+    "error",
+    "updatedAt",
+    "source",
+    "snapshot",
+    "result",
+    "payload",
+    "data",
+  ]);
+  return keys.every((k) => !meta.has(k));
+}
+
+function extractCloudSnapshot(payload: unknown): CloudSnapshotPayload | null {
+  const root = safeParseJsonObject(payload);
+  if (!root) return null;
+
+  const candidateContainers: Record<string, unknown>[] = [
+    root,
+    safeParseJsonObject(root.snapshot),
+    safeParseJsonObject(root.result),
+    safeParseJsonObject(root.payload),
+    safeParseJsonObject(root.data),
+    safeParseJsonObject((safeParseJsonObject(root.result) || {}).snapshot),
+    safeParseJsonObject((safeParseJsonObject(root.payload) || {}).snapshot),
+  ].filter(Boolean) as Record<string, unknown>[];
+
+  for (const candidate of candidateContainers) {
+    const nestedSnapshot = safeParseJsonObject(candidate.snapshot);
+    const snapshotLike = nestedSnapshot || candidate;
+    const snapshotData = snapshotLike.data;
+    const data =
+      snapshotData !== undefined
+        ? normalizeCloudSnapshotData(snapshotData)
+        : looksLikeExportDataMap(snapshotLike)
+          ? normalizeCloudSnapshotData(snapshotLike)
+          : null;
+    if (!data) continue;
+
+    return {
+      updatedAt: String(snapshotLike.updatedAt || candidate.updatedAt || root.updatedAt || ""),
+      source: String(snapshotLike.source || candidate.source || root.source || "cloud"),
+      data,
+    };
+  }
+
+  return null;
+}
+
+async function readCloudApiPayload(res: Response): Promise<CloudApiPayload | null> {
+  try {
+    return (await res.json()) as CloudApiPayload;
+  } catch {
+    return null;
+  }
+}
+
+type CloudPostResult = {
+  httpOk: boolean;
+  status: number;
+  body: CloudApiPayload | null;
+  usedApiKey: string;
+};
+
+async function postCloudSyncWithApiKeyFallback(
+  endpoint: string,
+  payload: Record<string, unknown>,
+  timeoutMs: number,
+  apiKey: string
+): Promise<CloudPostResult> {
+  const keyCandidates = buildCloudApiKeyCandidates(apiKey);
+  let last: CloudPostResult | null = null;
+
+  for (const candidate of keyCandidates) {
+    const res = await postCloudSyncRequest(
+      endpoint,
+      {
+        ...payload,
+        apiKey: candidate,
+      },
+      timeoutMs
+    );
+    const body = await readCloudApiPayload(res);
+    const result: CloudPostResult = {
+      httpOk: res.ok,
+      status: res.status,
+      body,
+      usedApiKey: candidate,
+    };
+    last = result;
+
+    const isUnauthorized = body?.ok === false && String(body.reason || "").trim() === "unauthorized";
+    if (!isUnauthorized) return result;
+  }
+
+  return (
+    last || {
+      httpOk: false,
+      status: 0,
+      body: { ok: false, reason: "request_failed" },
+      usedApiKey: "",
+    }
+  );
+}
+
+export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
+  try {
+    const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
+    if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
+    const result = await postCloudSyncWithApiKeyFallback(endpoint, {
+      action: "health",
+      provider,
+      accountEmail,
+      folderName,
+    }, 15000, apiKey);
+    if (!result.httpOk) return { ok: false, reason: "cloud_health_http_error", status: result.status, endpoint };
+    const payload = result.body;
+    if (payload?.ok === false) {
+      const reason = String(payload.reason || "unknown");
+      return { ok: false, reason: `cloud_health_${reason}`, status: result.status, endpoint };
+    }
+    return { ok: true, status: result.status, endpoint };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "cloud_health_failed") };
+  }
+}
+
+async function postCloudSyncRequest(endpoint: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Response> {
+  // On web/desktop, prefer proxying cloud calls via the app server to avoid CORS issues.
+  if (Platform.OS === "web") {
+    const candidates: string[] = [];
+    try {
+      const origin = String((globalThis as any)?.location?.origin || "").trim().replace(/\/+$/, "");
+      if (/^https?:\/\//i.test(origin)) candidates.push(origin);
+    } catch {}
+    try {
+      const settings = await getAccountSettings();
+      const configuredUrl = normalizeSyncServerUrl(String(settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL));
+      if (configuredUrl) candidates.push(configuredUrl);
+    } catch {}
+
+    const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
+    for (const baseUrl of uniqueCandidates) {
+      try {
+        const res = await fetchWithTimeout(
+          `${baseUrl}/api/cloud-sync/proxy`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint, ...payload }),
+          },
+          timeoutMs
+        );
+        // If proxy route does not exist on this host, continue to next candidate.
+        if (res.status === 404 || res.status === 405) continue;
+        return res;
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  return await fetchWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs
+  );
+}
+
+export type LanSyncResult = {
+  ok: boolean;
+  changed?: boolean;
+  reason?: string;
+  status?: number;
+  url?: string;
+};
+
+export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult> {
+  try {
+    const { url, enabled } = await resolveSyncServerUrl();
+    if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
+    const raw = await exportData();
+    const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      source: "mobile",
+      data,
+    };
+    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }, 20000);
+    if (!res.ok) return { ok: false, reason: "push_http_error", status: res.status, url };
+    return { ok: true, changed: true, reason: "pushed", status: res.status, url };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "push_failed") };
+  }
+}
+
+export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncResult> {
+  try {
+    const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
+    if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
+    const raw = await exportData();
+    const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const payload = {
+      action: "pushSnapshot",
+      provider,
+      accountEmail,
+      folderName,
+      snapshot: {
+        updatedAt: new Date().toISOString(),
+        source: "mobile_cloud_sync",
+        data,
+      },
+    };
+    const result = await postCloudSyncWithApiKeyFallback(
+      endpoint,
+      payload as unknown as Record<string, unknown>,
+      30000,
+      apiKey
+    );
+    if (!result.httpOk) return { ok: false, reason: "cloud_push_http_error", status: result.status, endpoint };
+    const responsePayload = result.body;
+    if (responsePayload?.ok === false) {
+      return {
+        ok: false,
+        reason: `cloud_push_${String(responsePayload.reason || "unknown")}`,
+        status: result.status,
+        endpoint,
+      };
+    }
+    return { ok: true, changed: true, reason: "cloud_pushed", status: result.status, endpoint };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "cloud_push_failed") };
+  }
+}
+
+export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
+  try {
+    const { url, enabled } = await resolveSyncServerUrl();
+    if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
+    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
+    if (res.status === 404) {
+      return { ok: true, changed: false, reason: "snapshot_not_found", status: res.status, url };
+    }
+    if (!res.ok) return { ok: false, reason: "pull_http_error", status: res.status, url };
+    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string> };
+    if (!payload || typeof payload !== "object" || !payload.data) {
+      return { ok: false, reason: "invalid_snapshot_payload", url };
+    }
+
+    const incomingUpdatedAt = String(payload.updatedAt || "");
+    const lastApplied = String((await AsyncStorage.getItem(SYNC_LAST_SERVER_UPDATED_AT_KEY)) || "");
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
+      return { ok: true, changed: false, reason: "already_applied", url };
+    }
+
+    const merged = await mergeData(JSON.stringify(payload.data));
+    if (incomingUpdatedAt) {
+      await AsyncStorage.setItem(SYNC_LAST_SERVER_UPDATED_AT_KEY, incomingUpdatedAt);
+    }
+    return { ok: true, changed: merged, reason: merged ? "pulled_applied" : "pulled_no_change", url };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "pull_failed") };
+  }
+}
+
+export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResult> {
+  try {
+    const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
+    if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
+    const result = await postCloudSyncWithApiKeyFallback(endpoint, {
+      action: "pullSnapshot",
+      provider,
+      accountEmail,
+      folderName,
+    }, 30000, apiKey);
+    if (result.status === 404) {
+      return { ok: true, changed: false, reason: "cloud_snapshot_not_found", status: result.status, endpoint };
+    }
+    if (!result.httpOk) return { ok: false, reason: "cloud_pull_http_error", status: result.status, endpoint };
+
+    const payload = (result.body || {}) as {
+      ok?: boolean;
+      snapshot?: unknown;
+      updatedAt?: string;
+      data?: unknown;
+      reason?: string;
+    };
+
+    const payloadReason = String(payload?.reason || "").trim();
+    if (payloadReason === "snapshot_not_found") {
+      return { ok: true, changed: false, reason: "cloud_snapshot_not_found", endpoint };
+    }
+    // Corrupted/empty remote snapshot ကို push flow နဲ့ self-heal လုပ်နိုင်ရန် pull failure မဖြစ်စေဘဲ skip ပြန်ပေးပါ။
+    if (payloadReason === "snapshot_read_failed" || payloadReason === "snapshot_empty") {
+      return { ok: true, changed: false, reason: payloadReason, endpoint };
+    }
+    if (payload?.ok === false && payloadReason) {
+      return { ok: false, reason: `cloud_pull_${payloadReason}`, endpoint };
+    }
+
+    const snapshot = extractCloudSnapshot(payload);
+    if (!snapshot || !snapshot.data) {
+      const message = payloadReason
+        ? `cloud_pull_${payloadReason}`
+        : payload && typeof payload === "object"
+          ? `cloud_invalid_snapshot_payload:${Object.keys(payload as Record<string, unknown>).join(",")}`
+          : "cloud_invalid_snapshot_payload";
+      return { ok: false, reason: message, endpoint };
+    }
+
+    const incomingUpdatedAt = String(snapshot.updatedAt || "");
+    const lastApplied = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY)) || "");
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
+      return { ok: true, changed: false, reason: "already_applied", endpoint };
+    }
+
+    const merged = await mergeData(JSON.stringify(snapshot.data));
+    if (incomingUpdatedAt) {
+      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
+    }
+    return { ok: true, changed: merged, reason: merged ? "cloud_pulled_applied" : "cloud_pulled_no_change", endpoint };
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message || "cloud_pull_failed") };
+  }
+}
+
+export async function pushLanSnapshotFromLocal(): Promise<boolean> {
+  const result = await pushLanSnapshotFromLocalDetailed();
+  return result.ok;
+}
+
+export async function pullLanSnapshotToLocal(): Promise<boolean> {
+  const result = await pullLanSnapshotToLocalDetailed();
+  return result.ok && !!result.changed;
+}
+
+export async function pushCloudSnapshotFromLocal(): Promise<boolean> {
+  const result = await pushCloudSnapshotFromLocalDetailed();
+  return result.ok;
+}
+
+export async function pullCloudSnapshotToLocal(): Promise<boolean> {
+  const result = await pullCloudSnapshotToLocalDetailed();
+  return result.ok && !!result.changed;
 }
 
 // --- Users ---
@@ -636,7 +2201,7 @@ export async function deleteUserAccount(id: string) {
 
 // Backup Data (Export All)
 export async function exportData(): Promise<string> {
-  const keys = Object.values(KEYS);
+  const keys = await getAllSharedBackupKeys();
   const result = await AsyncStorage.multiGet(keys);
   const exportObj: Record<string, string> = {};
   
@@ -655,17 +2220,21 @@ export async function restoreData(jsonString: string): Promise<boolean> {
     const exportObj = JSON.parse(jsonString);
     const pairs: [string, string][] = [];
     
-    Object.values(KEYS).forEach((key) => {
-      if (exportObj[key]) {
+    Object.keys(exportObj || {}).forEach((key) => {
+      if (isSharedBackupKey(key) && typeof exportObj[key] === "string") {
         pairs.push([key, exportObj[key]]);
       }
     });
 
-    if (pairs.length > 0) {
-      await AsyncStorage.multiSet(pairs);
-      return true;
+    if (pairs.length === 0) return false;
+
+    // Replace mode: clear all shared keys first so stale keys do not remain.
+    const allSharedKeys = await getAllSharedBackupKeys();
+    if (allSharedKeys.length > 0) {
+      await AsyncStorage.multiRemove(allSharedKeys);
     }
-    return false;
+    await AsyncStorage.multiSet(pairs);
+    return true;
   } catch (error) {
     console.error("Restore failed:", error);
     return false;
@@ -712,11 +2281,53 @@ function mergeRecordsById<T extends { id?: string }>(existing: T[], incoming: T[
   return result;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeArrayItemKey(value: unknown): string {
+  if (isPlainObject(value)) {
+    const id = String((value as any).id || "").trim();
+    if (id) return `id:${id}`;
+  }
+  try {
+    return `json:${JSON.stringify(value)}`;
+  } catch {
+    return `str:${String(value)}`;
+  }
+}
+
+function mergeArrayValues(existing: unknown[], incoming: unknown[]): unknown[] {
+  const allWithId =
+    existing.concat(incoming).every((row) => {
+      if (!isPlainObject(row)) return false;
+      return String((row as any).id || "").trim().length > 0;
+    });
+  if (allWithId) {
+    return mergeRecordsById(existing as any[], incoming as any[]);
+  }
+
+  const map = new Map<string, unknown>();
+  for (const row of existing) map.set(normalizeArrayItemKey(row), row);
+  for (const row of incoming) map.set(normalizeArrayItemKey(row), row);
+  return Array.from(map.values());
+}
+
+function mergeStorageValues(existingValue: unknown, incomingValue: unknown): unknown {
+  if (Array.isArray(existingValue) && Array.isArray(incomingValue)) {
+    return mergeArrayValues(existingValue, incomingValue);
+  }
+  if (isPlainObject(existingValue) && isPlainObject(incomingValue)) {
+    return { ...existingValue, ...incomingValue };
+  }
+  return incomingValue;
+}
+
 export async function mergeData(jsonString: string): Promise<boolean> {
   try {
     const exportObj = JSON.parse(jsonString) as Record<string, unknown>;
 
-    const keys = Object.values(KEYS);
+    const keys = Object.keys(exportObj || {}).filter((key) => isSharedBackupKey(key));
     let changed = false;
 
     for (const key of keys) {
@@ -728,8 +2339,11 @@ export async function mergeData(jsonString: string): Promise<boolean> {
         const existingSettings = parseJsonSafe<Record<string, unknown>>(existingRaw, {});
         const incomingSettings = parseJsonSafe<Record<string, unknown>>(incomingRaw, {});
         const mergedSettings = { ...existingSettings, ...incomingSettings };
-        await AsyncStorage.setItem(key, JSON.stringify(mergedSettings));
-        changed = true;
+        const mergedSerialized = JSON.stringify(mergedSettings);
+        if (String(existingRaw || "") !== mergedSerialized) {
+          await AsyncStorage.setItem(key, mergedSerialized);
+          changed = true;
+        }
         continue;
       }
 
@@ -737,18 +2351,22 @@ export async function mergeData(jsonString: string): Promise<boolean> {
         const existingPasswords = parseJsonSafe<Record<string, string>>(existingRaw, {});
         const incomingPasswords = parseJsonSafe<Record<string, string>>(incomingRaw, {});
         const mergedPasswords = { ...existingPasswords, ...incomingPasswords };
-        await AsyncStorage.setItem(key, JSON.stringify(mergedPasswords));
-        changed = true;
+        const mergedSerialized = JSON.stringify(mergedPasswords);
+        if (String(existingRaw || "") !== mergedSerialized) {
+          await AsyncStorage.setItem(key, mergedSerialized);
+          changed = true;
+        }
         continue;
       }
 
-      const existingArray = parseJsonSafe<any[]>(existingRaw, []);
-      const incomingArray = parseJsonSafe<any[]>(incomingRaw, []);
-      if (!Array.isArray(incomingArray)) continue;
-
-      const mergedArray = mergeRecordsById(existingArray, incomingArray);
-      await AsyncStorage.setItem(key, JSON.stringify(mergedArray));
-      changed = true;
+      const existingParsed = parseJsonSafe<unknown>(existingRaw, existingRaw || null);
+      const incomingParsed = parseJsonSafe<unknown>(incomingRaw, incomingRaw);
+      const mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      const mergedSerialized = typeof mergedValue === "string" ? mergedValue : JSON.stringify(mergedValue);
+      if (String(existingRaw || "") !== mergedSerialized) {
+        await AsyncStorage.setItem(key, mergedSerialized);
+        changed = true;
+      }
     }
 
     return changed;

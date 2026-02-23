@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -16,11 +16,26 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { CATEGORY_LABELS, ORG_POSITION_LABELS, OrgPosition, MEMBER_STATUS_LABELS, MemberStatus, MEMBER_STATUS_VALUES } from "@/lib/types";
+import { isCommitteePosition } from "@/lib/access-control";
+import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
+import {
+  CATEGORY_LABELS,
+  ORG_POSITION_LABELS,
+  OrgPosition,
+  MEMBER_GENDER_LABELS,
+  MEMBER_STATUS_LABELS,
+  MemberStatus,
+  MEMBER_STATUS_VALUES,
+  MEMBER_GENDER_VALUES,
+  MemberFamilyMember,
+  normalizeOrgPosition,
+} from "@/lib/types";
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -38,6 +53,81 @@ const getAvatarLabel = (name: string) => {
   }
   return text.charAt(0).toUpperCase();
 };
+
+const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
+  const name = String(rawName || "").trim();
+  if (!name) return "other";
+  const n = name.toLowerCase();
+  if (
+    name.startsWith("ဆရာတော်") ||
+    name.startsWith("ဦး") ||
+    name.startsWith("ကို") ||
+    name.startsWith("မောင်") ||
+    name.startsWith("ကိုရင်") ||
+    name.startsWith("ဦးဇင်း") ||
+    n.startsWith("u ") ||
+    n.startsWith("ko ") ||
+    n.startsWith("mg ")
+  ) return "male";
+  if (
+    name.startsWith("ဒေါ်") ||
+    name.startsWith("မ") ||
+    name.startsWith("မိ") ||
+    name.startsWith("သီလရှင်") ||
+    name.startsWith("ဆရာလေး") ||
+    n.startsWith("daw ") ||
+    n.startsWith("ma ")
+  ) return "female";
+  return "other";
+};
+
+const RESTRICTED_MEMBER_FIELDS = ["id", "orgPosition", "status", "statusDate"] as const;
+type RestrictedMemberField = (typeof RESTRICTED_MEMBER_FIELDS)[number];
+
+function hasValueChanged(before: unknown, after: unknown): boolean {
+  try {
+    return JSON.stringify(before ?? null) !== JSON.stringify(after ?? null);
+  } catch {
+    return String(before ?? "") !== String(after ?? "");
+  }
+}
+
+type FamilyFormMember = MemberFamilyMember & { _localId: string };
+
+function toFamilyFormRows(input: unknown): FamilyFormMember[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((row, index) => {
+      const item = (row || {}) as any;
+      const name = String(item.name || "").trim();
+      if (!name) return null;
+      return {
+        _localId: String(item.id || `fm-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`),
+        id: item.id ? String(item.id) : undefined,
+        name,
+        gender: item.gender === "male" || item.gender === "female" || item.gender === "other" ? item.gender : "other",
+        relation: item.relation ? String(item.relation) : "",
+        dob: item.dob ? String(item.dob) : "",
+        nrc: item.nrc ? String(item.nrc) : "",
+        occupation: item.occupation ? String(item.occupation) : "",
+      } as FamilyFormMember;
+    })
+    .filter(Boolean) as FamilyFormMember[];
+}
+
+function toFamilyPayload(rows: FamilyFormMember[]): MemberFamilyMember[] {
+  return rows
+    .map((row) => ({
+      id: row.id,
+      name: String(row.name || "").trim(),
+      gender: row.gender,
+      relation: row.relation ? String(row.relation).trim() : undefined,
+      dob: row.dob ? String(row.dob).trim() : undefined,
+      nrc: row.nrc ? String(row.nrc).trim() : undefined,
+      occupation: row.occupation ? String(row.occupation).trim() : undefined,
+    }))
+    .filter((row) => row.name);
+}
 
 function InfoRow({ icon, label, value }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -61,8 +151,8 @@ function InfoRow({ icon, label, value }: {
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { members, groups, updateMember, deleteMember, createMemberChangeRequest, transactions, loans, getLoanOutstanding, updateTransaction, updateLoan, updateGroup } = useData() as any;
-  const { can, currentUser } = useAuth();
+  const { members, groups, updateMember, deleteMember, createMemberChangeRequest, transactions, loans, getLoanOutstanding } = useData() as any;
+  const { can, currentUser, profile } = useAuth();
   const member = members?.find((m: any) => m.id === id);
   const memberId = member?.id || "";
 
@@ -71,21 +161,81 @@ export default function MemberDetailScreen() {
   const [editEmail, setEditEmail] = useState(member?.email || "");
   const [editDob, setEditDob] = useState(member?.dob || "");
   const [editPhone, setEditPhone] = useState(member?.phone || "");
+  const [editOccupation, setEditOccupation] = useState((member as any)?.occupation || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
+  const [editProfileImage, setEditProfileImage] = useState<string | undefined>(member?.profileImage || undefined);
   const [editStatus, setEditStatus] = useState<MemberStatus>(member?.status || "active");
   const [editStatusDate, setEditStatusDate] = useState(member?.statusDate || member?.resignDate || "");
   const [editStatusNote, setEditStatusNote] = useState(member?.statusNote || "");
   const [editOrgPosition, setEditOrgPosition] = useState<OrgPosition>(member?.orgPosition || "member");
+  const [editFamilyMembers, setEditFamilyMembers] = useState<FamilyFormMember[]>(toFamilyFormRows((member as any)?.familyMembers));
   const [showDobPicker, setShowDobPicker] = useState(false);
+  const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
   const [showPositionPicker, setShowPositionPicker] = useState(false);
+  const [familyDobPickerRowId, setFamilyDobPickerRowId] = useState<string | null>(null);
+  const [showFamilyRelationPicker, setShowFamilyRelationPicker] = useState(false);
+  const [familyRelationPickerRowId, setFamilyRelationPickerRowId] = useState<string | null>(null);
+  const [customRelations, setCustomRelations] = useState<string[]>([]);
+  const [newCustomRelation, setNewCustomRelation] = useState("");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
+  const isChairOrVice =
+    currentUser?.systemRole === "admin" ||
+    actorPosition === "chairperson" ||
+    actorPosition === "vice_chairperson";
+  const canProposeRestricted = Boolean(can("members.propose_changes") && !isChairOrVice && isCommitteePosition(actorPosition));
+  const canEditRestrictedDirectly = isChairOrVice;
+  const isEditingOwnRecord =
+    !!member?.id &&
+    !!currentUser?.memberId &&
+    String(currentUser.memberId).trim() === String(member.id).trim();
+  const canEditGeneralOwnInfo = Boolean(currentUser?.id && profile?.memberStatus !== "applicant" && isEditingOwnRecord);
+  const canEditGeneralFields = canEditGeneralOwnInfo;
+  const canEditRestrictedFields = canEditRestrictedDirectly || canProposeRestricted;
+  const relationOptions = useMemo(() => mergeRelationOptions(customRelations, false), [customRelations]);
 
   const memberGroups = useMemo(
     () => groups?.filter((g: any) => g.memberIds.includes(memberId)) || [],
     [groups, memberId]
   );
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  useEffect(() => {
+    if (!member) return;
+    setEditName(member.name || "");
+    setEditMemberId(member.id || "");
+    setEditEmail(member.email || "");
+    setEditDob(member.dob || "");
+    setEditPhone(member.phone || "");
+    setEditOccupation((member as any).occupation || "");
+    setEditAddress(member.address || "");
+    setEditProfileImage(member.profileImage || undefined);
+    setEditStatus((member.status as MemberStatus) || "active");
+    setEditStatusDate(member.statusDate || member.resignDate || "");
+    setEditStatusNote(member.statusNote || "");
+    setEditOrgPosition((member.orgPosition as OrgPosition) || "member");
+    setEditFamilyMembers(toFamilyFormRows((member as any).familyMembers));
+  }, [member]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(CUSTOM_RELATION_STORAGE_KEY);
+        if (!mounted || !raw) return;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setCustomRelations(parsed.map((x: any) => String(x || "").trim()).filter(Boolean));
+        }
+      } catch {
+        // ignore malformed storage
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Financial Calculations
   const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === memberId) || [], [transactions, memberId]);
@@ -125,6 +275,18 @@ export default function MemberDetailScreen() {
     }
   };
 
+  const handleStatusDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === "android") {
+      setShowStatusDatePicker(false);
+    }
+    if (selectedDate) {
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setEditStatusDate(`${day}/${month}/${year}`);
+    }
+  };
+
   const getInitialDate = () => {
     if (!editDob) return new Date();
     const parts = editDob.split(/[\/\.\-]/);
@@ -133,6 +295,114 @@ export default function MemberDetailScreen() {
       if (!isNaN(d.getTime())) return d;
     }
     return new Date();
+  };
+
+  const getParsedDate = (value: string) => {
+    if (!value) return new Date();
+    const parts = value.split(/[\/\.\-]/);
+    if (parts.length === 3) {
+      const dt = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      if (!isNaN(dt.getTime())) return dt;
+    }
+    return new Date();
+  };
+
+  const addFamilyMember = () => {
+    setEditFamilyMembers((prev) => [
+      ...prev,
+      {
+        _localId: `fm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: "",
+        gender: "other",
+        relation: "",
+        dob: "",
+        nrc: "",
+        occupation: "",
+      },
+    ]);
+  };
+
+  const updateFamilyMember = (localId: string, key: keyof FamilyFormMember, value: string) => {
+    setEditFamilyMembers((prev) =>
+      prev.map((row) => (row._localId === localId ? { ...row, [key]: value } : row))
+    );
+  };
+
+  const removeFamilyMember = (localId: string) => {
+    setEditFamilyMembers((prev) => prev.filter((row) => row._localId !== localId));
+    if (familyRelationPickerRowId === localId) {
+      setFamilyRelationPickerRowId(null);
+      setShowFamilyRelationPicker(false);
+    }
+    if (familyDobPickerRowId === localId) {
+      setFamilyDobPickerRowId(null);
+    }
+  };
+
+  const openFamilyRelationPicker = (localId: string) => {
+    if (!canEditGeneralFields) return;
+    setFamilyRelationPickerRowId(localId);
+    setShowFamilyRelationPicker(true);
+  };
+
+  const applyFamilyRelation = (relation: string) => {
+    if (!familyRelationPickerRowId) return;
+    updateFamilyMember(familyRelationPickerRowId, "relation", relation);
+    setShowFamilyRelationPicker(false);
+  };
+
+  const saveCustomRelation = async () => {
+    const value = String(newCustomRelation || "").trim();
+    if (!value) {
+      Alert.alert("လိုအပ်ချက်", "တော်စပ်ပုံအသစ်ကို ရိုက်ထည့်ပါ။");
+      return;
+    }
+    const alreadyExists = relationOptions.some((item) => item === value);
+    const nextCustomRelations = alreadyExists ? customRelations : [...customRelations, value];
+    try {
+      if (!alreadyExists) {
+        await AsyncStorage.setItem(CUSTOM_RELATION_STORAGE_KEY, JSON.stringify(nextCustomRelations));
+      }
+      setCustomRelations(nextCustomRelations);
+      if (familyRelationPickerRowId) {
+        updateFamilyMember(familyRelationPickerRowId, "relation", value);
+      }
+      setNewCustomRelation("");
+      setShowFamilyRelationPicker(false);
+    } catch {
+      Alert.alert("အမှား", "တော်စပ်ပုံအသစ် သိမ်းရာတွင် အဆင်မပြေပါ။");
+    }
+  };
+
+  const handleFamilyDobChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === "android") {
+      setFamilyDobPickerRowId(null);
+    }
+    if (!selectedDate || !familyDobPickerRowId) return;
+    const day = String(selectedDate.getDate()).padStart(2, "0");
+    const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+    const year = selectedDate.getFullYear();
+    updateFamilyMember(familyDobPickerRowId, "dob", `${day}/${month}/${year}`);
+  };
+
+  const pickProfileImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.3,
+        base64: true,
+      });
+      if (!result.canceled) {
+        const source = result.assets[0].base64
+          ? `data:image/jpeg;base64,${result.assets[0].base64}`
+          : result.assets[0].uri;
+        setEditProfileImage(source);
+      }
+    } catch {
+      Alert.alert("Error", "Profile ပုံရွေးချယ်၍ မရပါ။");
+    }
   };
 
   const handleUpdate = async () => {
@@ -147,75 +417,130 @@ export default function MemberDetailScreen() {
 
     setSaving(true);
     try {
-      // ID ပြောင်းလဲမှုရှိမရှိ စစ်ဆေးခြင်း
-      if ((canEditAll || canEditOwn) && editMemberId.trim() !== member.id) {
-        const existing = members.find((m: any) => m.id === editMemberId.trim());
-        if (existing) {
-          Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
-          setSaving(false);
-          return;
-        }
-
-        // Cascade Update: Transactions
-        const memberTxns = transactions.filter((t: any) => t.memberId === member.id);
-        for (const txn of memberTxns) {
-          if (updateTransaction) await updateTransaction(txn.id, { ...txn, memberId: editMemberId.trim() });
-        }
-
-        // Cascade Update: Loans
-        const memberLoans = loans.filter((l: any) => l.memberId === member.id);
-        for (const loan of memberLoans) {
-          if (updateLoan) await updateLoan(loan.id, { ...loan, memberId: editMemberId.trim() });
-        }
-
-        // Cascade Update: Groups
-        const memberGroups = groups.filter((g: any) => g.memberIds.includes(member.id));
-        for (const group of memberGroups) {
-          const newMemberIds = group.memberIds.map((mid: string) => mid === member.id ? editMemberId.trim() : mid);
-          if (updateGroup) await updateGroup(group.id, { ...group, memberIds: newMemberIds });
-        }
+      const duplicate = members.find((m: any) => m.id === editMemberId.trim() && m.id !== member.id);
+      if (duplicate) {
+        Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
+        setSaving(false);
+        return;
       }
 
-      const nextPayload = {
+      const nextPayload: any = {
         id: editMemberId.trim(),
         name: editName.trim(),
         dob: editDob.trim(),
         email: editEmail.trim(),
         phone: editPhone.trim(),
+        occupation: editOccupation.trim(),
         address: editAddress.trim(),
+        profileImage: editProfileImage || undefined,
+        familyMembers: toFamilyPayload(editFamilyMembers),
         status: editStatus,
         statusDate: editStatusDate.trim(),
         statusNote: editStatusNote.trim(),
         orgPosition: editOrgPosition,
       };
-      if (canEditAll || canEditOwn) {
-        await updateMember(member.id, nextPayload);
-      } else if (canProposeChanges && currentUser?.id) {
-        if (editMemberId.trim() !== member.id) {
-          Alert.alert("အသိပေးချက်", "Proposal mode တွင် Member ID ပြောင်းလဲမှုကို မပံ့ပိုးသေးပါ။");
+
+      const restrictedCurrent: Record<RestrictedMemberField, any> = {
+        id: member.id,
+        orgPosition: member.orgPosition || "member",
+        status: member.status || "active",
+        statusDate: member.statusDate || member.resignDate || "",
+      };
+      const restrictedNext: Record<RestrictedMemberField, any> = {
+        id: nextPayload.id,
+        orgPosition: nextPayload.orgPosition,
+        status: nextPayload.status,
+        statusDate: nextPayload.statusDate || "",
+      };
+      const restrictedPatch: Partial<Record<RestrictedMemberField, any>> = {};
+      RESTRICTED_MEMBER_FIELDS.forEach((field) => {
+        if (hasValueChanged(restrictedCurrent[field], restrictedNext[field])) {
+          restrictedPatch[field] = restrictedNext[field];
+        }
+      });
+
+      const unrestrictedPayload: any = { ...nextPayload };
+      RESTRICTED_MEMBER_FIELDS.forEach((field) => delete unrestrictedPayload[field]);
+      const unrestrictedPatch: any = {};
+      Object.keys(unrestrictedPayload).forEach((key) => {
+        if (hasValueChanged((member as any)[key], unrestrictedPayload[key])) {
+          unrestrictedPatch[key] = unrestrictedPayload[key];
+        }
+      });
+
+      const hasRestrictedChanges = Object.keys(restrictedPatch).length > 0;
+      const hasUnrestrictedChanges = Object.keys(unrestrictedPatch).length > 0;
+      if (!hasRestrictedChanges && !hasUnrestrictedChanges) {
+        Alert.alert("အသိပေးချက်", "ပြင်ဆင်ထားသည့် အပြောင်းအလဲ မတွေ့ပါ။");
+        setSaving(false);
+        return;
+      }
+
+      if (canEditRestrictedDirectly) {
+        if (hasUnrestrictedChanges && !canEditGeneralFields) {
+          Alert.alert("ခွင့်မပြုပါ", "အခြားအသင်းဝင်၏ ကိုယ်ရေးအချက်အလက်များကို တိုက်ရိုက်မပြင်နိုင်ပါ။");
           setSaving(false);
           return;
         }
-        await createMemberChangeRequest({
-          action: "update",
-          targetMemberId: member.id,
-          payload: {
-            member: nextPayload,
-            note: "Member update proposal",
-          },
-          createdByUserId: currentUser.id,
-          createdByMemberId: currentUser.memberId,
+        await updateMember(member.id, {
+          ...(hasUnrestrictedChanges ? unrestrictedPatch : {}),
+          ...(hasRestrictedChanges ? restrictedPatch : {}),
         });
-        Alert.alert("အောင်မြင်ပါသည်", "Member update request ကို approver ထံပို့ပြီးပါပြီ။");
+        Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
+      } else {
+        if (hasUnrestrictedChanges && !canEditGeneralOwnInfo) {
+          Alert.alert("ခွင့်မပြုပါ", "မိမိနှင့်မသက်ဆိုင်သည့် ကိုယ်ရေးအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+          setSaving(false);
+          return;
+        }
+
+        if (hasRestrictedChanges && (!canProposeRestricted || !currentUser?.id)) {
+          Alert.alert(
+            "ခွင့်မပြုပါ",
+            "MemberID / Position / Status / Status Date ပြောင်းလိုပါက ကော်မတီဝင်ဖြစ်ရပြီး proposal တင်ရန်လိုပါသည်။ အတည်ပြုခြင်းကို ဥက္ကဋ္ဌ/ဒုဥက္ကဋ္ဌသာ လုပ်နိုင်ပါသည်။"
+          );
+          setSaving(false);
+          return;
+        }
+
+        if (hasUnrestrictedChanges) {
+          await updateMember(member.id, unrestrictedPatch);
+        }
+
+        if (hasRestrictedChanges) {
+          if (!currentUser?.id) {
+            Alert.alert("ခွင့်မပြုပါ", "အသုံးပြုသူအချက်အလက် မပြည့်စုံသဖြင့် proposal မပို့နိုင်ပါ။");
+            setSaving(false);
+            return;
+          }
+          await createMemberChangeRequest({
+            action: "update",
+            targetMemberId: member.id,
+            payload: {
+              member: restrictedPatch as any,
+              note: "Restricted member fields update proposal",
+            },
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+          });
+        }
+
+        if (hasRestrictedChanges && hasUnrestrictedChanges) {
+          Alert.alert("အောင်မြင်ပါသည်", "ကိုယ်ပိုင်အချက်အလက်များကို သိမ်းပြီး Restricted fields proposal ကိုလည်း Approver ထံပို့ပြီးပါပြီ။");
+        } else if (hasRestrictedChanges) {
+          Alert.alert("အောင်မြင်ပါသည်", "Restricted fields proposal ကို approver ထံပို့ပြီးပါပြီ။");
+        } else {
+          Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
+        }
       }
+
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditing(false);
-      // ID ပြောင်းသွားရင် Route ပါ ပြောင်းပေးရမယ် (သို့) Back ပြန်
       if (editMemberId.trim() !== member.id) {
         router.replace({ pathname: "/member-detail", params: { id: editMemberId.trim() } } as any);
       }
-    } catch (err) {
-      Alert.alert("Error", "Could not update member");
+    } catch (error) {
+      Alert.alert("Error", `Could not update member (${String((error as any)?.message || "")})`);
     } finally {
       setSaving(false);
     }
@@ -257,14 +582,16 @@ export default function MemberDetailScreen() {
   // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
   const statusLabel = MEMBER_STATUS_LABELS[member.status as MemberStatus] || member.status;
 
-  const canEditAll = can("members.edit");
   const canDeleteAll = can("members.delete");
-  const canEditOwn = can("members.edit_self") && currentUser?.memberId === member.id;
   const canProposeChanges = can("members.propose_changes");
-  const canManage = canEditAll || canEditOwn || canProposeChanges;
+  const canManage = canEditGeneralFields || canEditRestrictedFields;
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
   const canViewFinanceSelf = can("finance.view_self") && currentUser?.memberId === member.id;
   const canViewFinanceSection = canViewFinanceDetail || canViewFinanceSelf;
+  const resolvedGender: "male" | "female" | "other" =
+    (member as any).gender === "male" || (member as any).gender === "female" || (member as any).gender === "other"
+      ? ((member as any).gender as "male" | "female" | "other")
+      : inferGenderFromName(member.name || "");
 
   return (
     <KeyboardAvoidingView 
@@ -314,14 +641,44 @@ export default function MemberDetailScreen() {
 
         {editing ? (
           <View style={styles.editForm}>
+            <Text style={styles.editLabel}>Profile ပုံ</Text>
+            <View style={styles.profileEditRow}>
+              <Pressable onPress={canEditGeneralFields ? pickProfileImage : undefined} style={[styles.profileEditBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]}>
+                {editProfileImage ? (
+                  <Image source={{ uri: editProfileImage }} style={styles.profileEditPreview} resizeMode="cover" />
+                ) : (
+                  <Ionicons name="camera-outline" size={22} color={Colors.light.textSecondary} />
+                )}
+              </Pressable>
+              <Pressable style={[styles.profileTextBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]} onPress={canEditGeneralFields ? pickProfileImage : undefined}>
+                <Text style={styles.profileTextBtnLabel}>ပုံရွေးချယ်မည်</Text>
+              </Pressable>
+              {!!editProfileImage && (
+                <Pressable style={[styles.profileRemoveBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]} onPress={canEditGeneralFields ? () => setEditProfileImage(undefined) : undefined}>
+                  <Text style={styles.profileRemoveBtnText}>ဖယ်ရှား</Text>
+                </Pressable>
+              )}
+            </View>
+
             <Text style={styles.editLabel}>Member ID</Text>
-            <TextInput style={styles.editInput} value={editMemberId} onChangeText={setEditMemberId} />
+            <TextInput
+              style={[styles.editInput, !canEditRestrictedFields && styles.inputReadOnly]}
+              value={editMemberId}
+              onChangeText={setEditMemberId}
+              editable={canEditRestrictedFields}
+            />
 
             <Text style={styles.editLabel}>Full Name</Text>
-            <TextInput style={styles.editInput} value={editName} onChangeText={setEditName} />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editName} onChangeText={setEditName} editable={canEditGeneralFields} />
+
+            <Text style={styles.editLabel}>Gender</Text>
+            <TextInput style={styles.editInput} value={MEMBER_GENDER_LABELS[resolvedGender]} editable={false} />
 
             <Text style={styles.editLabel}>Position</Text>
-            <Pressable style={styles.dropdown} onPress={() => setShowPositionPicker(true)}>
+            <Pressable
+              style={[styles.dropdown, !canEditRestrictedFields && styles.inputReadOnly]}
+              onPress={() => canEditRestrictedFields && setShowPositionPicker(true)}
+            >
               <Text style={styles.dropdownText}>{ORG_POSITION_LABELS[editOrgPosition]}</Text>
               <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
             </Pressable>
@@ -329,17 +686,19 @@ export default function MemberDetailScreen() {
             <Text style={styles.editLabel}>Date of Birth</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
-                style={[styles.editInput, { flex: 1 }]}
+                style={[styles.editInput, { flex: 1 }, !canEditGeneralFields && styles.inputReadOnly]}
                 value={editDob}
                 onChangeText={setEditDob}
                 placeholder="DD/MM/YYYY"
+                editable={canEditGeneralFields}
               />
               {Platform.OS === 'web' ? (
-                <View style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }]}>
+                <View style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}>
                   <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
                   {React.createElement('input', {
                     type: 'date',
                     style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' },
+                    disabled: !canEditGeneralFields,
                     onChange: (e: any) => {
                       if (e.target.value) {
                         const [y, m, d] = e.target.value.split('-');
@@ -349,7 +708,7 @@ export default function MemberDetailScreen() {
                   })}
                 </View>
               ) : (
-                <Pressable onPress={() => setShowDobPicker(true)} style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }]}>
+                <Pressable onPress={() => canEditGeneralFields && setShowDobPicker(true)} style={[styles.editInput, { width: 50, justifyContent: 'center', alignItems: 'center', padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}>
                   <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
                 </Pressable>
               )}
@@ -364,21 +723,28 @@ export default function MemberDetailScreen() {
             )}
 
             <Text style={styles.editLabel}>Email Address</Text>
-            <TextInput style={styles.editInput} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Phone Number</Text>
-            <TextInput style={styles.editInput} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" editable={canEditGeneralFields} />
+
+            <Text style={styles.editLabel}>Occupation</Text>
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editOccupation} onChangeText={setEditOccupation} editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Address</Text>
-            <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} multiline />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editAddress} onChangeText={setEditAddress} multiline editable={canEditGeneralFields} />
 
             <Text style={styles.editLabel}>Status</Text>
             <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>
               {MEMBER_STATUS_VALUES.map(s => (
                 <Pressable 
                   key={s} 
-                  style={[styles.statusChip, editStatus === s && styles.statusChipActive]}
-                  onPress={() => setEditStatus(s)}
+                  style={[
+                    styles.statusChip,
+                    editStatus === s && styles.statusChipActive,
+                    !canEditRestrictedFields && styles.inputReadOnly,
+                  ]}
+                  onPress={() => canEditRestrictedFields && setEditStatus(s)}
                 >
                   <Text style={[styles.statusChipText, editStatus === s && styles.statusChipTextActive]}>{MEMBER_STATUS_LABELS[s]}</Text>
                 </Pressable>
@@ -386,15 +752,150 @@ export default function MemberDetailScreen() {
             </View>
 
             <Text style={styles.editLabel}>Status Date</Text>
-            <TextInput 
-              style={styles.editInput} 
-              value={editStatusDate} 
-              onChangeText={setEditStatusDate} 
-              placeholder="YYYY-MM-DD" 
-            />
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TextInput
+                style={[styles.editInput, { flex: 1 }, !canEditRestrictedFields && styles.inputReadOnly]}
+                value={editStatusDate}
+                onChangeText={setEditStatusDate}
+                placeholder="DD/MM/YYYY"
+                editable={canEditRestrictedFields}
+              />
+              {Platform.OS === "web" ? (
+                <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0, position: "relative" }]}>
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                  {React.createElement("input", {
+                    type: "date",
+                    style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
+                    disabled: !canEditRestrictedFields,
+                    onChange: (e: any) => {
+                      if (e.target.value) {
+                        const [y, m, d] = e.target.value.split("-");
+                        setEditStatusDate(`${d}/${m}/${y}`);
+                      }
+                    },
+                  })}
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => canEditRestrictedFields && setShowStatusDatePicker(true)}
+                  style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }, !canEditRestrictedFields && styles.inputReadOnly]}
+                >
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                </Pressable>
+              )}
+            </View>
+            {showStatusDatePicker && Platform.OS !== "web" && (
+              <DateTimePicker value={getParsedDate(editStatusDate)} mode="date" display="default" onChange={handleStatusDateChange} />
+            )}
 
             <Text style={styles.editLabel}>Status Note</Text>
-            <TextInput style={styles.editInput} value={editStatusNote} onChangeText={setEditStatusNote} multiline />
+            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editStatusNote} onChangeText={setEditStatusNote} multiline editable={canEditGeneralFields} />
+
+            <View style={styles.familySectionHeader}>
+              <Text style={styles.editLabel}>မိသားစုဝင်များ</Text>
+              <Pressable style={[styles.addFamilyBtn, !canEditGeneralFields && styles.inputReadOnly]} onPress={canEditGeneralFields ? addFamilyMember : undefined}>
+                <Ionicons name="add" size={16} color="#fff" />
+                <Text style={styles.addFamilyBtnText}>ထည့်မည်</Text>
+              </Pressable>
+            </View>
+            {editFamilyMembers.length === 0 ? (
+              <Text style={styles.emptyText}>မိသားစုဝင်အချက်အလက် မထည့်ရသေးပါ။</Text>
+            ) : (
+              editFamilyMembers.map((row, index) => (
+                <View key={row._localId} style={styles.familyCard}>
+                  <View style={styles.familyCardHeader}>
+                    <Text style={styles.familyCardTitle}>မိသားစုဝင် #{index + 1}</Text>
+                    <Pressable onPress={canEditGeneralFields ? () => removeFamilyMember(row._localId) : undefined}>
+                      <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                    </Pressable>
+                  </View>
+
+                  <Text style={styles.familyInputLabel}>အမည်</Text>
+                  <TextInput
+                    style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+                    value={row.name}
+                    onChangeText={(value) => updateFamilyMember(row._localId, "name", value)}
+                    placeholder="အမည်"
+                    editable={canEditGeneralFields}
+                  />
+                  <Text style={styles.familyInputLabel}>ကျား / မ / အခြား</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {MEMBER_GENDER_VALUES.map((g) => (
+                      <Pressable
+                        key={`${row._localId}-${g}`}
+                        style={[styles.statusChip, row.gender === g && styles.statusChipActive, !canEditGeneralFields && styles.inputReadOnly]}
+                        onPress={() => canEditGeneralFields && updateFamilyMember(row._localId, "gender", g)}
+                      >
+                        <Text style={[styles.statusChipText, row.gender === g && styles.statusChipTextActive]}>
+                          {MEMBER_GENDER_LABELS[g]}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Text style={styles.familyInputLabel}>တော်စပ်ပုံ</Text>
+                  <Pressable
+                    style={[styles.dropdown, !canEditGeneralFields && styles.inputReadOnly]}
+                    onPress={() => openFamilyRelationPicker(row._localId)}
+                  >
+                    <Text style={[styles.dropdownText, !row.relation && styles.emptyText]}>
+                      {row.relation || "တော်စပ်ပုံရွေးချယ်ရန်"}
+                    </Text>
+                    <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
+                  </Pressable>
+
+                  <Text style={styles.familyInputLabel}>မွေးသက္ကရာဇ်</Text>
+                  <View style={{ flexDirection: "row", gap: 10 }}>
+                    <TextInput
+                      style={[styles.editInput, { flex: 1 }, !canEditGeneralFields && styles.inputReadOnly]}
+                      value={row.dob || ""}
+                      onChangeText={(value) => updateFamilyMember(row._localId, "dob", value)}
+                      placeholder="DD/MM/YYYY"
+                      editable={canEditGeneralFields}
+                    />
+                    {Platform.OS === "web" ? (
+                      <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0, position: "relative" }, !canEditGeneralFields && styles.inputReadOnly]}>
+                        <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                        {React.createElement("input", {
+                          type: "date",
+                          style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
+                          disabled: !canEditGeneralFields,
+                          onChange: (e: any) => {
+                            if (e.target.value) {
+                              const [y, m, d] = e.target.value.split("-");
+                              updateFamilyMember(row._localId, "dob", `${d}/${m}/${y}`);
+                            }
+                          },
+                        })}
+                      </View>
+                    ) : (
+                      <Pressable
+                        onPress={() => canEditGeneralFields && setFamilyDobPickerRowId(row._localId)}
+                        style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}
+                      >
+                        <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                      </Pressable>
+                    )}
+                  </View>
+
+                  <Text style={styles.familyInputLabel}>နိုင်ငံသားစီစစ်ရေးကဒ်အမှတ်</Text>
+                  <TextInput
+                    style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+                    value={row.nrc || ""}
+                    onChangeText={(value) => updateFamilyMember(row._localId, "nrc", value)}
+                    placeholder="နိုင်ငံသားစီစစ်ရေးကဒ်အမှတ်"
+                    editable={canEditGeneralFields}
+                  />
+                  <Text style={styles.familyInputLabel}>အလုပ်အကိုင်</Text>
+                  <TextInput
+                    style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+                    value={row.occupation || ""}
+                    onChangeText={(value) => updateFamilyMember(row._localId, "occupation", value)}
+                    placeholder="အလုပ်အကိုင်"
+                    editable={canEditGeneralFields}
+                  />
+                </View>
+              ))
+            )}
 
             {(canDeleteAll || canProposeChanges) && (
               <Pressable style={styles.deleteBtn} onPress={handleDelete}>
@@ -411,12 +912,14 @@ export default function MemberDetailScreen() {
                 label="အခြေအနေ" 
                 value={statusLabel} 
               />
+              <InfoRow icon="male-female-outline" label="ကျား / မ / အခြား" value={MEMBER_GENDER_LABELS[resolvedGender]} />
               <InfoRow icon="ribbon-outline" label="ရာထူး" value={ORG_POSITION_LABELS[(member.orgPosition || "member") as OrgPosition]} />
               <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
               {member.status !== 'active' && <InfoRow icon="calendar-outline" label="ရက်စွဲ" value={member.statusDate || member.resignDate} />}
               {member.status !== 'active' && member.statusNote && <InfoRow icon="document-text-outline" label="မှတ်ချက်" value={member.statusNote} />}
               <InfoRow icon="mail-outline" label="Email" value={member.email} />
               <InfoRow icon="call-outline" label="Phone" value={member.phone} />
+              <InfoRow icon="briefcase-outline" label="Occupation" value={(member as any).occupation} />
               <InfoRow icon="location-outline" label="Address" value={member.address} />
             </View>
 
@@ -479,9 +982,84 @@ export default function MemberDetailScreen() {
             ) : (
               <Text style={styles.emptyText}>Not assigned to any groups</Text>
             )}
+
+            <Text style={styles.sectionTitle}>မိသားစုဝင်များ</Text>
+            {Array.isArray((member as any).familyMembers) && (member as any).familyMembers.length > 0 ? (
+              ((member as any).familyMembers as MemberFamilyMember[]).map((row, idx) => (
+                <View key={`${member.id}-family-${idx}`} style={styles.groupChip}>
+                  <View style={styles.infoContent}>
+                    <Text style={styles.groupChipText}>
+                      {row.name} {row.relation ? `(${row.relation})` : ""}
+                    </Text>
+                    <Text style={styles.emptyText}>
+                      {row.gender ? MEMBER_GENDER_LABELS[row.gender] : "-"} • DOB: {row.dob || "-"} • NRC: {row.nrc || "-"}
+                    </Text>
+                    <Text style={styles.emptyText}>Occupation: {row.occupation || "-"}</Text>
+                  </View>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.emptyText}>မိသားစုဝင်အချက်အလက် မရှိသေးပါ။</Text>
+            )}
           </View>
         )}
       </ScrollView>
+
+      {familyDobPickerRowId && Platform.OS !== "web" && (
+        Platform.OS === "ios" ? (
+          <View style={styles.datePickerContainer}>
+            <DateTimePicker
+              value={getParsedDate(editFamilyMembers.find((x) => x._localId === familyDobPickerRowId)?.dob || "")}
+              mode="date"
+              display="spinner"
+              onChange={handleFamilyDobChange}
+              style={{ alignSelf: "center" }}
+            />
+            <Pressable onPress={() => setFamilyDobPickerRowId(null)} style={styles.iosDateCloseBtn}>
+              <Text style={styles.iosDateCloseText}>Done</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <DateTimePicker
+            value={getParsedDate(editFamilyMembers.find((x) => x._localId === familyDobPickerRowId)?.dob || "")}
+            mode="date"
+            display="default"
+            onChange={handleFamilyDobChange}
+          />
+        )
+      )}
+
+      <Modal
+        visible={showFamilyRelationPicker}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowFamilyRelationPicker(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowFamilyRelationPicker(false)}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>တော်စပ်ပုံရွေးချယ်ရန်</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {relationOptions.map((item) => (
+                <Pressable key={item} style={styles.modalOption} onPress={() => applyFamilyRelation(item)}>
+                  <Text style={styles.modalOptionText}>{item}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Text style={styles.editLabel}>တော်စပ်ပုံအသစ်ထည့်ရန်</Text>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+              <TextInput
+                style={[styles.editInput, { flex: 1 }]}
+                value={newCustomRelation}
+                onChangeText={setNewCustomRelation}
+                placeholder="တော်စပ်ပုံအသစ်ထည့်ရန်"
+              />
+              <Pressable style={[styles.addFamilyBtn, { alignSelf: "stretch", justifyContent: "center" }]} onPress={() => void saveCustomRelation()}>
+                <Text style={styles.addFamilyBtnText}>ထည့်မည်</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={showPositionPicker}
@@ -535,8 +1113,69 @@ const styles = StyleSheet.create({
   editForm: { gap: 4 },
   editLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 12 },
   editInput: { backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
+  inputReadOnly: { opacity: 0.65 },
+  familyInputLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 2, marginBottom: -2 },
   dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.light.border },
   dropdownText: { fontSize: 16, color: Colors.light.text },
+  profileEditRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
+  profileEditBtn: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    backgroundColor: Colors.light.surface,
+  },
+  profileEditPreview: { width: "100%", height: "100%" },
+  profileTextBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: Colors.light.surface,
+  },
+  profileTextBtnLabel: { color: Colors.light.tint, fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  profileRemoveBtn: {
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "#FEF2F2",
+  },
+  profileRemoveBtnText: { color: "#DC2626", fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  familySectionHeader: {
+    marginTop: 16,
+    marginBottom: 4,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  addFamilyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: Colors.light.tint,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  addFamilyBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  familyCard: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    gap: 8,
+  },
+  familyCardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  familyCardTitle: { color: Colors.light.text, fontSize: 13, fontFamily: "Inter_600SemiBold" },
   deleteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, marginTop: 20 },
   deleteBtnText: { color: "#EF4444", fontWeight: "600" },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
@@ -550,6 +1189,9 @@ const styles = StyleSheet.create({
   txnDate: { fontSize: 11, color: Colors.light.textSecondary },
   txnAmount: { fontSize: 14, fontWeight: "700" },
   emptyState: { padding: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.light.surface, borderRadius: 12, marginBottom: 20 },
+  datePickerContainer: { backgroundColor: Colors.light.surface, marginHorizontal: 20, marginBottom: 8, borderRadius: 12, padding: 10, borderWidth: 1, borderColor: Colors.light.border },
+  iosDateCloseBtn: { alignItems: "center", padding: 10, backgroundColor: Colors.light.tint + "15", borderRadius: 8, marginTop: 8 },
+  iosDateCloseText: { color: Colors.light.tint, fontWeight: "600" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },

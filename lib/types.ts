@@ -3,6 +3,8 @@
 export interface Member {
   id: string;
   name: string;
+  gender?: MemberGender;
+  occupation?: string;
   dob?: string;
   nrc?: string;
   phone: string;
@@ -23,6 +25,25 @@ export interface Member {
   statusDate?: string;
   statusNote?: string;
   profileImage?: string;
+  familyMembers?: MemberFamilyMember[];
+}
+
+export type MemberGender = "male" | "female" | "other";
+export const MEMBER_GENDER_VALUES: MemberGender[] = ["male", "female", "other"];
+export const MEMBER_GENDER_LABELS: Record<MemberGender, string> = {
+  male: "ကျား",
+  female: "မ",
+  other: "အခြား",
+};
+
+export interface MemberFamilyMember {
+  id?: string;
+  name: string;
+  gender?: MemberGender;
+  relation?: string;
+  dob?: string;
+  nrc?: string;
+  occupation?: string;
 }
 
 export interface OrgEvent {
@@ -36,6 +57,36 @@ export interface OrgEvent {
   createdAt: string;
   createdByUserId?: string;
   createdByMemberId?: string;
+}
+
+export type ChatThreadType = "direct" | "group";
+
+export interface ChatThread {
+  id: string;
+  type: ChatThreadType;
+  name?: string;
+  participantUserIds: string[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt?: string;
+  lastMessageText?: string;
+  lastReadAtBy?: Record<string, string>;
+}
+
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  senderUserId: string;
+  senderMemberId?: string;
+  senderDisplayName?: string;
+  text?: string;
+  image?: string;
+  createdAt: string;
+  replyToMessageId?: string;
+  replyToUserId?: string;
+  replyToDisplayName?: string;
+  mentionUserIds?: string[];
 }
 
 export interface Group {
@@ -61,6 +112,23 @@ export interface AccountSettings {
   openingBalanceCash: number;
   openingBalanceBank: number;
   asOfDate: string;
+  syncServerUrl?: string;
+  syncEnabled?: boolean;
+  cloudSyncEnabled?: boolean;
+  cloudSyncProvider?: "google_drive_apps_script";
+  cloudSyncEndpoint?: string;
+  cloudSyncApiKey?: string;
+  cloudSyncGoogleAccountEmail?: string;
+  cloudSyncFolderName?: string;
+  receivingBankName?: string;
+  receivingBankAccountNumber?: string;
+  receivingBankAccountName?: string;
+  receivingKbzPayPhone?: string;
+  receivingKbzPayAccountName?: string;
+  receivingWavePayPhone?: string;
+  receivingWavePayAccountName?: string;
+  receivingAyaPayPhone?: string;
+  receivingAyaPayAccountName?: string;
 }
 
 export type TransactionType = "income" | "expense";
@@ -192,6 +260,147 @@ export interface MemberChangeRequest {
   reviewedAt?: string;
   reviewNote?: string;
 }
+
+export type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";
+export type ExpenseClaimStatus = "pending_approval" | "approved" | "rejected" | "disbursed";
+export type DisbursementMethod = "cash" | "bank";
+export type MobileWalletProvider = "kbz_pay" | "wave_pay" | "aya_pay";
+export type MemberPaymentRequestStatus = "pending_treasurer_review" | "approved" | "rejected";
+
+export type MemberPaymentRequestKind =
+  | "member_fees"
+  | "donations"
+  | "loan_repayment"
+  | "interest_income";
+
+export const MEMBER_PAYMENT_REQUEST_KIND_LABELS: Record<MemberPaymentRequestKind, string> = {
+  member_fees: "လစဉ်ကြေးပေးသွင်းရန်",
+  donations: "လှူဒါန်းရန်",
+  loan_repayment: "ချေးငွေဆပ်ရန်",
+  interest_income: "အတိုးဆပ်ရန်",
+};
+
+export const MOBILE_WALLET_PROVIDER_LABELS: Record<MobileWalletProvider, string> = {
+  kbz_pay: "KBZ Pay",
+  wave_pay: "Wave Pay",
+  aya_pay: "AYA Pay",
+};
+
+export interface MemberPaymentRequest {
+  id: string;
+  requestNumber: string;
+  kind: MemberPaymentRequestKind;
+  category: string;
+  categoryLabel: string;
+  amount: number;
+  forMemberId?: string;
+  forMemberName?: string;
+  payerMemberId?: string;
+  payerName: string;
+  walletProvider: MobileWalletProvider;
+  walletAccountName?: string;
+  walletAccountNumber?: string;
+  walletReference?: string;
+  proofImage?: string;
+  note?: string;
+  status: MemberPaymentRequestStatus;
+  requestedDate: string;
+  requestedTime?: string;
+  feePeriodStart?: string;
+  feePeriodEnd?: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedByUserId?: string;
+  reviewNote?: string;
+  reviewedAt?: string;
+  linkedTransactionId?: string;
+  acceptedDate?: string;
+  acceptedTime?: string;
+  notifiedRoles?: OrgPosition[];
+}
+
+export interface ExpenseClaim {
+  id: string;
+  claimNumber: string;
+  claimDate: string;
+  claimTime?: string;
+  expenseCategory: string;
+  expenseCategoryLabel: string;
+  claimantType: ClaimantType;
+  claimantMemberId?: string;
+  relatedMemberId?: string;
+  relatedMemberName?: string;
+  claimantName: string;
+  claimantAddress?: string;
+  familyMemberName?: string;
+  familyRelation?: string;
+  relationDescription?: string;
+  nrc?: string;
+  phone?: string;
+  reason: string;
+  linkedEventId?: string;
+  linkedEventTitle?: string;
+  requestedAmount: number;
+  approvedAmount?: number;
+  status: ExpenseClaimStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  approverUserId?: string;
+  approvalNote?: string;
+  approvedAt?: string;
+  disburserUserId?: string;
+  disbursementMethod?: DisbursementMethod;
+  disbursementDate?: string;
+  disbursementTime?: string;
+  voucherNumber?: string;
+  disbursementNote?: string;
+  disbursedAt?: string;
+  linkedTransactionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StandardAmountRule {
+  key: string;
+  label: string;
+  amount: number;
+  enabled: boolean;
+  updatedAt: string;
+  updatedByUserId?: string;
+}
+
+export type StandardAmountRequestStatus = "pending_approval" | "approved" | "rejected";
+
+export interface StandardAmountChangeRequest {
+  id: string;
+  ruleKey: string;
+  ruleLabel: string;
+  previousAmount: number;
+  requestedAmount: number;
+  reason: string;
+  status: StandardAmountRequestStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  approverUserId?: string;
+  approvalNote?: string;
+  approvedAt?: string;
+}
+
+export const DEFAULT_STANDARD_AMOUNT_RULES: StandardAmountRule[] = [
+  { key: "health_support", label: "ကျန်းမာရေးထောက်ပံ့ငွေ", amount: 50000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "education_support", label: "ပညာရေးထောက်ပံ့ငွေ", amount: 50000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "funeral_support_self", label: "နာရေးကူညီငွေ (ကိုယ်တိုင်)", amount: 200000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "funeral_support_family", label: "နာရေးကူညီငွေ (မိသားစုဝင်)", amount: 100000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "funeral_support_association_member", label: "နာရေးကူညီငွေ (ဆင်သေရွာအသင်းဝင်)", amount: 50000, enabled: true, updatedAt: new Date().toISOString() },
+  { key: "loan_disbursement", label: "ချေးငွေထုတ်ပေးငွေ", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "bank_charges", label: "ဘဏ်စရိတ်ပေးငွေ", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "general_expenses", label: "အထွေထွေအသုံးစရိတ်", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "other_expenses", label: "အခြားအသုံးစရိတ်", amount: 0, enabled: false, updatedAt: new Date().toISOString() },
+  { key: "monthly_fee_rate", label: "လစဉ်ကြေးနှုန်းထား", amount: 2500, enabled: true, updatedAt: new Date().toISOString() },
+];
 
 export const ORG_POSITION_LABELS: Record<OrgPosition, string> = {
   patron: "နာယက",

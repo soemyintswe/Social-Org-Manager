@@ -4,6 +4,7 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useRef,
 } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -16,8 +17,22 @@ import type {
   AccountSettings,
   UserAccount,
   MemberChangeRequest,
+  ExpenseClaim,
+  MemberPaymentRequest,
+  MemberPaymentRequestKind,
+  MobileWalletProvider,
+  StandardAmountRule,
+  StandardAmountChangeRequest,
+  DisbursementMethod,
+  ChatThread,
+  ChatMessage,
 } from "./types";
 import * as store from "./storage";
+import {
+  DEFAULT_CLOUD_SYNC_ENDPOINT,
+  DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+  DEFAULT_LAN_SYNC_URL,
+} from "./sync-defaults";
 
 interface DataContextValue {
   members: Member[];
@@ -28,9 +43,15 @@ interface DataContextValue {
   loans: Loan[];
   users: UserAccount[];
   memberChangeRequests: MemberChangeRequest[];
+  expenseClaims: ExpenseClaim[];
+  memberPaymentRequests: MemberPaymentRequest[];
+  standardAmountRules: StandardAmountRule[];
+  standardAmountChangeRequests: StandardAmountChangeRequest[];
+  chatThreads: ChatThread[];
+  chatMessages: ChatMessage[];
   accountSettings: AccountSettings;
   loading: boolean;
-  refreshData: () => Promise<void>;
+  refreshData: (options?: { skipPull?: boolean }) => Promise<void>;
   addMember: (m: Omit<Member, "id">) => Promise<Member>;
   updateMember: (id: string, u: Partial<Member>) => Promise<void>;
   deleteMember: (id: string) => Promise<void>;
@@ -63,6 +84,75 @@ interface DataContextValue {
   rejectMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
   withdrawMemberChangeRequest: (requestId: string, requesterUserId: string, note?: string) => Promise<void>;
   assignMemberChangeRequest: (requestId: string, assignedReviewerUserId: string | undefined, assignerUserId: string) => Promise<void>;
+  createExpenseClaim: (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => Promise<ExpenseClaim>;
+  approveExpenseClaim: (input: { claimId: string; approverUserId: string; approvedAmount: number; approvalNote?: string }) => Promise<void>;
+  rejectExpenseClaim: (input: { claimId: string; approverUserId: string; approvalNote: string }) => Promise<void>;
+  disburseExpenseClaim: (input: {
+    claimId: string;
+    disburserUserId: string;
+    method: DisbursementMethod;
+    disbursementDate: string;
+    disbursementTime?: string;
+    voucherNumber?: string;
+    note?: string;
+  }) => Promise<void>;
+  createMemberPaymentRequest: (input: {
+    kind: MemberPaymentRequestKind;
+    amount: number;
+    forMemberId?: string;
+    forMemberName?: string;
+    payerMemberId?: string;
+    payerName: string;
+    walletProvider: MobileWalletProvider;
+    walletAccountName?: string;
+    walletAccountNumber?: string;
+    walletReference?: string;
+    proofImage?: string;
+    note?: string;
+    requestedDate?: string;
+    requestedTime?: string;
+    feePeriodStart?: string;
+    feePeriodEnd?: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => Promise<MemberPaymentRequest>;
+  approveMemberPaymentRequest: (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote?: string;
+    acceptedDate?: string;
+    acceptedTime?: string;
+  }) => Promise<void>;
+  rejectMemberPaymentRequest: (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote: string;
+  }) => Promise<void>;
+  createStandardAmountChangeRequest: (input: {
+    ruleKey: string;
+    ruleLabel: string;
+    requestedAmount: number;
+    reason: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => Promise<StandardAmountChangeRequest>;
+  approveStandardAmountChangeRequest: (requestId: string, approverUserId: string, approvalNote?: string) => Promise<void>;
+  rejectStandardAmountChangeRequest: (requestId: string, approverUserId: string, approvalNote?: string) => Promise<void>;
+  createDirectChatThread: (input: { userAId: string; userBId: string; createdByUserId: string }) => Promise<ChatThread>;
+  createGroupChatThread: (input: { name: string; participantUserIds: string[]; createdByUserId: string }) => Promise<ChatThread>;
+  sendChatMessage: (input: {
+    threadId: string;
+    senderUserId: string;
+    senderMemberId?: string;
+    senderDisplayName?: string;
+    text?: string;
+    image?: string;
+    replyToMessageId?: string;
+    replyToUserId?: string;
+    replyToDisplayName?: string;
+    mentionUserIds?: string[];
+  }) => Promise<ChatMessage>;
+  markChatThreadRead: (threadId: string, userId: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -83,19 +173,69 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [memberChangeRequests, setMemberChangeRequests] = useState<MemberChangeRequest[]>([]);
+  const [expenseClaims, setExpenseClaims] = useState<ExpenseClaim[]>([]);
+  const [memberPaymentRequests, setMemberPaymentRequests] = useState<MemberPaymentRequest[]>([]);
+  const [standardAmountRules, setStandardAmountRules] = useState<StandardAmountRule[]>([]);
+  const [standardAmountChangeRequests, setStandardAmountChangeRequests] = useState<StandardAmountChangeRequest[]>([]);
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
     orgName: "My Organization",
     currency: "MMK",
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     asOfDate: new Date().toISOString(),
+    syncServerUrl: DEFAULT_LAN_SYNC_URL,
+    syncEnabled: false,
+    cloudSyncEnabled: true,
+    cloudSyncProvider: "google_drive_apps_script",
+    cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,
+    cloudSyncApiKey: "",
+    cloudSyncGoogleAccountEmail: "",
+    cloudSyncFolderName: DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+    receivingBankName: "",
+    receivingBankAccountNumber: "",
+    receivingBankAccountName: "",
+    receivingKbzPayPhone: "",
+    receivingKbzPayAccountName: "",
+    receivingWavePayPhone: "",
+    receivingWavePayAccountName: "",
+    receivingAyaPayPhone: "",
+    receivingAyaPayAccountName: "",
   });
   const [loading, setLoading] = useState(true);
+  const bootstrappedRef = useRef(false);
+  const lastLocalMutationAtRef = useRef(0);
+  const LOCAL_PULL_GUARD_MS = 12000;
+  const AUTO_PUSH_DEBOUNCE_MS = 350;
+  const AUTO_PULL_INTERVAL_MS = 3000;
 
-  const refreshData = useCallback(async () => {
+  const pushAllSyncTargets = useCallback(async () => {
+    await Promise.allSettled([
+      store.pushLanSnapshotFromLocal(),
+      store.pushCloudSnapshotFromLocal(),
+    ]);
+  }, []);
+
+  const pullAllSyncTargets = useCallback(async (): Promise<boolean> => {
+    const [lanChanged, cloudChanged] = await Promise.allSettled([
+      store.pullLanSnapshotToLocal(),
+      store.pullCloudSnapshotToLocal(),
+    ]);
+    const changedFromLan = lanChanged.status === "fulfilled" && lanChanged.value === true;
+    const changedFromCloud = cloudChanged.status === "fulfilled" && cloudChanged.value === true;
+    return changedFromLan || changedFromCloud;
+  }, []);
+
+  const refreshData = useCallback(async (options?: { skipPull?: boolean }) => {
     try {
+      if (!options?.skipPull) {
+        await pullAllSyncTargets();
+      } else {
+        lastLocalMutationAtRef.current = Date.now();
+      }
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, cth, ctm, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -104,6 +244,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getLoans(),
         store.getUsers(),
         store.getMemberChangeRequests(),
+        store.getExpenseClaims(),
+        store.getMemberPaymentRequests(),
+        store.getStandardAmountRules(),
+        store.getStandardAmountChangeRequests(),
+        store.getChatThreads(),
+        store.getChatMessages(),
         store.getAccountSettings(),
       ]);
       setMembers(m);
@@ -114,112 +260,168 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setLoans(l);
       setUsers(u);
       setMemberChangeRequests(r);
+      setExpenseClaims(ec);
+      setMemberPaymentRequests(mpr);
+      setStandardAmountRules(sar);
+      setStandardAmountChangeRequests(sacr);
+      setChatThreads(cth);
+      setChatMessages(ctm);
       if (s) setAccountSettings(s);
     } catch (error) {
       console.error("Refresh Error:", error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pullAllSyncTargets]);
 
   useEffect(() => {
     refreshData();
   }, [refreshData]);
 
+  useEffect(() => {
+    if (loading) return;
+    if (!bootstrappedRef.current) {
+      bootstrappedRef.current = true;
+      return;
+    }
+    const timer = setTimeout(() => {
+      void pushAllSyncTargets();
+    }, AUTO_PUSH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [
+    loading,
+    members,
+    events,
+    groups,
+    attendance,
+    transactions,
+    loans,
+    users,
+    memberChangeRequests,
+    expenseClaims,
+    memberPaymentRequests,
+    standardAmountRules,
+    standardAmountChangeRequests,
+    chatThreads,
+    chatMessages,
+    accountSettings,
+    pushAllSyncTargets,
+  ]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void (async () => {
+        const elapsed = Date.now() - lastLocalMutationAtRef.current;
+        if (elapsed < LOCAL_PULL_GUARD_MS) return;
+        const changed = await pullAllSyncTargets();
+        if (changed) {
+          await refreshData({ skipPull: true });
+        }
+      })();
+    }, AUTO_PULL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [pullAllSyncTargets, refreshData]);
+
   // --- Actions ---
   const addMember = async (m: Omit<Member, "id">) => {
     const newMember = await store.addMember(m);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newMember;
   };
 
   const updateMember = async (id: string, u: Partial<Member>) => {
     await store.updateMember(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const deleteMember = async (id: string) => {
     await store.deleteMember(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addEvent = async (e: Omit<OrgEvent, "id">) => {
+    lastLocalMutationAtRef.current = Date.now();
     const newEvent = await store.addEvent(e);
-    await refreshData();
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
     return newEvent;
   };
 
   const editEvent = async (id: string, u: Partial<OrgEvent>) => {
+    lastLocalMutationAtRef.current = Date.now();
     await store.updateEvent(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
   };
 
   const removeEvent = async (id: string) => {
+    lastLocalMutationAtRef.current = Date.now();
     await store.deleteEvent(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
   };
 
   const addGroup = async (g: Omit<Group, "id">) => {
     const newGroup = await store.addGroup(g);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newGroup;
   };
 
   const editGroup = async (id: string, u: Partial<Group>) => {
     await store.updateGroup(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeGroup = async (id: string) => {
     await store.deleteGroup(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addTransaction = async (t: Omit<Transaction, "id">) => {
     const newTxn = await store.addTransaction(t);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newTxn;
   };
 
   const updateTransaction = async (id: string, u: Partial<Transaction>) => {
     await store.updateTransaction(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeTransaction = async (id: string) => {
     await store.deleteTransaction(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const addLoan = async (l: Omit<Loan, "id">) => {
     const newLoan = await store.addLoan(l);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return newLoan;
   };
 
   const editLoan = async (id: string, u: Partial<Loan>) => {
     await store.updateLoan(id, u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeLoan = async (id: string) => {
     await store.deleteLoan(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const upsertUserAccount = async (u: UserAccount) => {
     await store.upsertUserAccount(u);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const removeUserAccount = async (id: string) => {
     await store.deleteUserAccount(id);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const updateAccountSettings = async (s: AccountSettings) => {
     await store.saveAccountSettings(s);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const createMemberChangeRequest = async (input: {
@@ -233,23 +435,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createdByMemberId?: string;
   }) => {
     const request = await store.createMemberChangeRequest(input);
-    await refreshData();
+    await refreshData({ skipPull: true });
     return request;
   };
 
   const approveMemberChangeRequest = async (requestId: string, reviewerUserId: string, reviewNote?: string) => {
     await store.approveMemberChangeRequest(requestId, reviewerUserId, reviewNote);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const rejectMemberChangeRequest = async (requestId: string, reviewerUserId: string, reviewNote?: string) => {
     await store.rejectMemberChangeRequest(requestId, reviewerUserId, reviewNote);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const withdrawMemberChangeRequest = async (requestId: string, requesterUserId: string, note?: string) => {
     await store.withdrawMemberChangeRequest(requestId, requesterUserId, note);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const assignMemberChangeRequest = async (
@@ -258,8 +460,157 @@ export function DataProvider({ children }: { children: ReactNode }) {
     assignerUserId: string
   ) => {
     await store.assignMemberChangeRequest(requestId, assignedReviewerUserId, assignerUserId);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
+
+  const createExpenseClaim = async (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => {
+    const claim = await store.createExpenseClaim(input);
+    await refreshData({ skipPull: true });
+    return claim;
+  };
+
+  const approveExpenseClaim = async (input: {
+    claimId: string;
+    approverUserId: string;
+    approvedAmount: number;
+    approvalNote?: string;
+  }) => {
+    await store.approveExpenseClaim(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const rejectExpenseClaim = async (input: {
+    claimId: string;
+    approverUserId: string;
+    approvalNote: string;
+  }) => {
+    await store.rejectExpenseClaim(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const disburseExpenseClaim = async (input: {
+    claimId: string;
+    disburserUserId: string;
+    method: DisbursementMethod;
+    disbursementDate: string;
+    disbursementTime?: string;
+    voucherNumber?: string;
+    note?: string;
+  }) => {
+    await store.disburseExpenseClaim(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const createMemberPaymentRequest = async (input: {
+    kind: MemberPaymentRequestKind;
+    amount: number;
+    forMemberId?: string;
+    forMemberName?: string;
+    payerMemberId?: string;
+    payerName: string;
+    walletProvider: MobileWalletProvider;
+    walletAccountName?: string;
+    walletAccountNumber?: string;
+    walletReference?: string;
+    proofImage?: string;
+    note?: string;
+    requestedDate?: string;
+    requestedTime?: string;
+    feePeriodStart?: string;
+    feePeriodEnd?: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => {
+    const req = await store.createMemberPaymentRequest(input);
+    await refreshData({ skipPull: true });
+    return req;
+  };
+
+  const approveMemberPaymentRequest = async (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote?: string;
+    acceptedDate?: string;
+    acceptedTime?: string;
+  }) => {
+    await store.approveMemberPaymentRequest(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const rejectMemberPaymentRequest = async (input: {
+    requestId: string;
+    reviewerUserId: string;
+    reviewNote: string;
+  }) => {
+    await store.rejectMemberPaymentRequest(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const createStandardAmountChangeRequest = async (input: {
+    ruleKey: string;
+    ruleLabel: string;
+    requestedAmount: number;
+    reason: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+  }) => {
+    const req = await store.createStandardAmountChangeRequest(input);
+    await refreshData({ skipPull: true });
+    return req;
+  };
+
+  const approveStandardAmountChangeRequest = async (requestId: string, approverUserId: string, approvalNote?: string) => {
+    await store.approveStandardAmountChangeRequest(requestId, approverUserId, approvalNote);
+    await refreshData({ skipPull: true });
+  };
+
+  const rejectStandardAmountChangeRequest = async (requestId: string, approverUserId: string, approvalNote?: string) => {
+    await store.rejectStandardAmountChangeRequest(requestId, approverUserId, approvalNote);
+    await refreshData({ skipPull: true });
+  };
+
+  const createDirectChatThread = async (input: { userAId: string; userBId: string; createdByUserId: string }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const thread = await store.createDirectChatThread(input);
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
+    return thread;
+  };
+
+  const createGroupChatThread = async (input: { name: string; participantUserIds: string[]; createdByUserId: string }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const thread = await store.createGroupChatThread(input);
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
+    return thread;
+  };
+
+  const sendChatMessage = async (input: {
+    threadId: string;
+    senderUserId: string;
+    senderMemberId?: string;
+    senderDisplayName?: string;
+    text?: string;
+    image?: string;
+    replyToMessageId?: string;
+    replyToUserId?: string;
+    replyToDisplayName?: string;
+    mentionUserIds?: string[];
+  }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const message = await store.sendChatMessage(input);
+    await refreshData({ skipPull: true });
+    // Chat UX: push immediately so other devices can see the message with low delay.
+    await pushAllSyncTargets();
+    return message;
+  };
+
+  const markChatThreadRead = useCallback(async (threadId: string, userId: string) => {
+    lastLocalMutationAtRef.current = Date.now();
+    await store.markChatThreadRead(threadId, userId);
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
+  }, [pushAllSyncTargets, refreshData]);
 
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
@@ -294,11 +645,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const markAttendance = async (eventId: string, memberId: string, status: "present" | "absent") => {
     await store.saveAttendance(eventId, memberId, status);
-    await refreshData();
+    await refreshData({ skipPull: true });
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -308,6 +659,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     updateAccountSettings,
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
+    createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
+    createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
+    createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
+    createDirectChatThread, createGroupChatThread, sendChatMessage, markChatThreadRead,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,
@@ -321,3 +676,4 @@ export function useData() {
   if (!ctx) throw new Error("useData must be used within DataProvider");
   return ctx;
 }
+

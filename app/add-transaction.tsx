@@ -85,7 +85,7 @@ const TRANSFER_CATEGORIES = [
 export default function AddTransactionScreen() {
   const insets = useSafeAreaInsets();
   const { editId } = useLocalSearchParams<{ editId: string }>();
-  const { members = [], transactions = [], addTransaction, updateTransaction } = useData() as any;
+  const { members = [], transactions = [], standardAmountRules = [], addTransaction, updateTransaction } = useData() as any;
   const { can } = useAuth();
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canEditFinance = can("finance.edit") || can("finance.manage");
@@ -114,6 +114,12 @@ export default function AddTransactionScreen() {
   const [showFeeStartPicker, setShowFeeStartPicker] = useState(false);
   const [showFeeEndPicker, setShowFeeEndPicker] = useState(false);
   const [feeWarning, setFeeWarning] = useState("");
+
+  const monthlyFeeRate = useMemo(() => {
+    const rule = (standardAmountRules || []).find((r: any) => String(r?.key || "") === "monthly_fee_rate");
+    const value = Number(rule?.amount ?? 2500);
+    return Number.isFinite(value) && value > 0 ? value : 2500;
+  }, [standardAmountRules]);
 
   useEffect(() => {
     if (editId && transactions.length > 0) {
@@ -151,6 +157,19 @@ export default function AddTransactionScreen() {
       setFeeWarning("");
     }
   }, [selectedMemberId, category, type, feeStartDate, feeEndDate, transactions]);
+
+  useEffect(() => {
+    if (!(type === "income" && category === "member_fees")) return;
+    const start = new Date(feeStartDate);
+    const end = new Date(feeEndDate);
+    if (end < start) {
+      setFeeWarning("သတိပေးချက်: နောက်ဆုံးရက်စွဲသည် စတင်ရက်စွဲထက် နောက်ကျရပါမည်");
+      return;
+    }
+    const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+    const total = Math.max(1, months) * monthlyFeeRate;
+    setAmount(String(total));
+  }, [type, category, feeStartDate, feeEndDate, monthlyFeeRate]);
 
   useEffect(() => {
     let prefix = type === "income" ? "I-" : "O-";

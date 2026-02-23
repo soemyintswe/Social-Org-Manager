@@ -1,16 +1,19 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AppState, type AppStateStatus } from "react-native";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
-import { normalizeMemberStatus, normalizeOrgPosition, type Member, type UserAccount } from "./types";
+import { MEMBER_STATUS_LABELS, normalizeMemberStatus, normalizeOrgPosition, type Member, type UserAccount } from "./types";
 import { buildMemberUsername, changeUserPassword, resetUserPasswordByIdentifier, verifyPassword } from "./storage";
 
 const AUTH_SESSION_KEY = "@orghub_auth_session";
-const RESTORE_SESSION_ON_LAUNCH = false;
+const AUTH_BACKGROUND_MARK_KEY = "@orghub_auth_background_marked";
+const RESTORE_SESSION_ON_LAUNCH = true;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 3 * 60 * 60 * 1000;
+const AUTO_LOGOUT_MS = 5 * 60 * 1000; // 5 minutes inactivity
 
 type PersistedSession = {
   userId: string;
@@ -24,9 +27,18 @@ type LoginGuardState = {
 
 type LoginResult = {
   ok: boolean;
-  reason: "success" | "locked" | "invalid_username" | "invalid_password";
+  reason: "success" | "locked" | "invalid_username" | "invalid_password" | "inactive_member";
   remainingMs?: number;
   failedAttempts?: number;
+  memberName?: string;
+  memberStatusLabel?: string;
+};
+
+type UsernameCheckResult = {
+  exists: boolean;
+  canLogin: boolean;
+  memberName?: string;
+  memberStatusLabel?: string;
 };
 
 interface AuthContextValue {
@@ -39,6 +51,7 @@ interface AuthContextValue {
   signIn: (userId: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   checkUsername: (username: string) => Promise<boolean>;
+  checkUsernameStatus: (username: string) => Promise<UsernameCheckResult>;
   attemptLogin: (username: string, password: string) => Promise<LoginResult>;
   getLoginLockInfo: () => Promise<{ locked: boolean; remainingMs: number; failedAttempts: number }>;
   login: (username: string, password: string) => Promise<boolean>;
@@ -47,6 +60,7 @@ interface AuthContextValue {
   resetPassword: (identifier: string) => Promise<boolean>;
   can: (permission: AccessPermission, options?: AccessOptions) => boolean;
   canAccessMemberRecord: (targetMemberId: string) => boolean;
+  recordActivity: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -85,12 +99,55 @@ function normalizePhoneForLookup(rawValue: string): string {
   return normalizeText(rawValue).replace(/[^\d]/g, "");
 }
 
-function resolveUserByIdentifier(users: UserAccount[], members: Member[], identifier: string): UserAccount | undefined {
+const NAME_PREFIXES = [
+  "ဆရာတော်",
+  "ဦးဇင်း",
+  "ကိုရင်",
+  "ဦး",
+  "ဒေါ်",
+  "ကို",
+  "မောင်",
+  "မိ",
+  "မ",
+  "သီလရှင်",
+  "ဆရာလေး",
+  "u ",
+  "daw ",
+  "ko ",
+  "mg ",
+  "ma ",
+];
+
+function normalizeNameForLookup(rawValue: string): string {
+  let value = normalizeIdentifier(rawValue).replace(/\s+/g, " ").trim();
+  if (!value) return "";
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of NAME_PREFIXES) {
+      if (value.startsWith(prefix)) {
+        value = value.slice(prefix.length).trim();
+        changed = true;
+      }
+    }
+  }
+  return value.replace(/\s+/g, "");
+}
+
+function resolveUserByIdentifier(
+  users: UserAccount[],
+  members: Member[],
+  identifier: string,
+  options?: { includeInactive?: boolean }
+): UserAccount | undefined {
+  const includeInactive = options?.includeInactive === true;
   const needle = normalizeIdentifier(identifier);
   if (!needle) return undefined;
+  const needleName = normalizeNameForLookup(identifier);
 
   return users.find((user) => {
-    if (!user.isActive) return false;
+    if (!includeInactive && !user.isActive) return false;
 
     if (user.systemRole === "admin") {
       return needle === "admin";
@@ -106,6 +163,8 @@ function resolveUserByIdentifier(users: UserAccount[], members: Member[], identi
     const memberIdCandidate = normalizeIdentifier(member.id);
     const emailCandidate = normalizeIdentifier(member.email || "");
     const aliasCandidate = normalizeIdentifier(buildMemberUsername(member.id));
+    const memberNameCandidate = normalizeNameForLookup(member.name || "");
+    const userDisplayNameCandidate = normalizeNameForLookup(user.displayName || "");
     const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
     const phoneCandidates = [primaryPhone, secondaryPhone]
       .filter(Boolean)
@@ -116,9 +175,36 @@ function resolveUserByIdentifier(users: UserAccount[], members: Member[], identi
       needle === memberIdCandidate ||
       (emailCandidate && needle === emailCandidate) ||
       (aliasCandidate && needle === aliasCandidate) ||
+      (!!needleName && (
+        needleName === memberNameCandidate ||
+        needleName === userDisplayNameCandidate ||
+        needleName === normalizeNameForLookup(memberIdCandidate)
+      )) ||
       (!!needlePhone && phoneCandidates.includes(needlePhone))
     );
   });
+}
+
+function evaluateUserLoginState(
+  user: UserAccount | undefined,
+  member: Member | undefined,
+  rawIdentifier?: string
+): UsernameCheckResult {
+  if (!user) return { exists: false, canLogin: false };
+  if (user.systemRole === "admin") {
+    return { exists: true, canLogin: Boolean(user.isActive), memberName: "Admin" };
+  }
+
+  const normalizedStatus = normalizeMemberStatus(member?.status || user.orgPosition || "suspended");
+  const statusLabel = MEMBER_STATUS_LABELS[normalizedStatus];
+  const memberName = String(member?.name || user.displayName || rawIdentifier || "ဤအသင်းဝင်").trim();
+  const canLogin = Boolean(user.isActive) && normalizedStatus === "active";
+  return {
+    exists: true,
+    canLogin,
+    memberName,
+    memberStatusLabel: statusLabel,
+  };
 }
 
 function parsePersistedSession(raw: string | null): PersistedSession | null {
@@ -141,12 +227,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { users, members, loading: dataLoading } = useData();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(true);
+  const [lastActivityAt, setLastActivityAt] = useState<number>(Date.now());
 
   useEffect(() => {
     let active = true;
     (async () => {
       if (!RESTORE_SESSION_ON_LAUNCH) {
         await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+        if (!active) return;
+        setSessionUserId(null);
+        setRestoring(false);
+        return;
+      }
+      const backgroundMarked = await AsyncStorage.getItem(AUTH_BACKGROUND_MARK_KEY);
+      if (backgroundMarked === "1") {
+        await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+        await AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
         if (!active) return;
         setSessionUserId(null);
         setRestoring(false);
@@ -165,16 +261,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearSession = useCallback(async () => {
     setSessionUserId(null);
-    await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+    await AsyncStorage.multiRemove([AUTH_SESSION_KEY, AUTH_BACKGROUND_MARK_KEY]);
   }, []);
 
   useEffect(() => {
-    if (restoring || !sessionUserId) return;
+    if (restoring || dataLoading || !sessionUserId) return;
     const user = users.find((item) => item.id === sessionUserId);
     if (!user || !user.isActive) {
       void clearSession();
     }
-  }, [restoring, sessionUserId, users, clearSession]);
+  }, [restoring, dataLoading, sessionUserId, users, clearSession]);
 
   const currentUser = useMemo(() => {
     if (!sessionUserId) return undefined;
@@ -229,6 +325,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       await AsyncStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
       await clearLoginGuardState();
+      setLastActivityAt(Date.now());
       return true;
     },
     [users]
@@ -238,10 +335,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await clearSession();
   }, [clearSession]);
 
-  const checkUsername = useCallback(async (username: string) => {
-    const user = resolveUserByIdentifier(users, members, username);
-    return Boolean(user);
+  const recordActivity = useCallback(() => {
+    setLastActivityAt(Date.now());
+  }, []);
+
+  const checkUsernameStatus = useCallback(async (username: string): Promise<UsernameCheckResult> => {
+    const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    const member = user?.memberId ? members.find((item) => item.id === user.memberId) : undefined;
+    return evaluateUserLoginState(user, member, username);
   }, [users, members]);
+
+  const checkUsername = useCallback(async (username: string) => {
+    const info = await checkUsernameStatus(username);
+    return info.canLogin;
+  }, [checkUsernameStatus]);
 
   const getLoginLockInfo = useCallback(async () => {
     const state = await readLoginGuardState();
@@ -267,8 +374,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    const user = resolveUserByIdentifier(users, members, username);
-    if (!user) {
+    const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    const member = user?.memberId ? members.find((item) => item.id === user.memberId) : undefined;
+    const loginState = evaluateUserLoginState(user, member, username);
+    if (!loginState.exists) {
       const nextFailed = guard.failedAttempts + 1;
       if (nextFailed >= MAX_FAILED_ATTEMPTS) {
         await writeLoginGuardState({
@@ -287,6 +396,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ok: false,
         reason: "invalid_username",
         failedAttempts: nextFailed,
+      };
+    }
+
+    if (!loginState.canLogin) {
+      return {
+        ok: false,
+        reason: "inactive_member",
+        memberName: loginState.memberName,
+        memberStatusLabel: loginState.memberStatusLabel,
+      };
+    }
+    if (!user) {
+      return {
+        ok: false,
+        reason: "invalid_username",
       };
     }
 
@@ -364,6 +488,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [profile]
   );
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const timer = setInterval(() => {
+      const idleMs = Date.now() - lastActivityAt;
+      if (idleMs >= AUTO_LOGOUT_MS) {
+        void signOut();
+      }
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [currentUser, lastActivityAt, signOut]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active") {
+        void AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
+        setLastActivityAt(Date.now());
+        return;
+      }
+      if (state === "background" || state === "inactive") {
+        void AsyncStorage.setItem(AUTH_BACKGROUND_MARK_KEY, "1");
+      }
+    });
+    return () => sub.remove();
+  }, [currentUser]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       loading: dataLoading || restoring,
@@ -375,6 +525,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signIn,
       signOut,
       checkUsername,
+      checkUsernameStatus,
       attemptLogin,
       getLoginLockInfo,
       login,
@@ -383,8 +534,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       resetPassword,
       can,
       canAccessMemberRecord,
+      recordActivity,
     }),
-    [dataLoading, restoring, currentUser, currentMember, profile, availableUsers, signIn, signOut, checkUsername, attemptLogin, getLoginLockInfo, login, verifyCurrentPassword, changePassword, resetPassword, can, canAccessMemberRecord]
+    [dataLoading, restoring, currentUser, currentMember, profile, availableUsers, signIn, signOut, checkUsername, checkUsernameStatus, attemptLogin, getLoginLockInfo, login, verifyCurrentPassword, changePassword, resetPassword, can, canAccessMemberRecord, recordActivity]
   );
 
   return React.createElement(AuthContext.Provider, { value }, children);

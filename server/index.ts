@@ -4,8 +4,24 @@ import { registerRoutes } from "./routes";
 import * as fs from "fs";
 import * as path from "path";
 
+// Temporary code to capture DATABASE_URL
+if (process.env.DATABASE_URL) {
+  fs.writeFileSync('temp_db_url.txt', process.env.DATABASE_URL);
+}
+// End of temporary code
+
 const app = express();
 const log = console.log;
+
+function getBaseDir(): string {
+  const envBase = String(process.env.ORGHUB_BASE_DIR || "").trim();
+  if (envBase) return path.resolve(envBase);
+  return process.cwd();
+}
+
+function resolveFromBase(...parts: string[]): string {
+  return path.resolve(getBaseDir(), ...parts);
+}
 
 declare module "http" {
   interface IncomingMessage {
@@ -33,8 +49,12 @@ function setupCors(app: express.Application) {
     const isLocalhost =
       origin?.startsWith("http://localhost:") ||
       origin?.startsWith("http://127.0.0.1:");
+    const isLanOrigin =
+      origin?.startsWith("http://192.168.") ||
+      origin?.startsWith("http://10.") ||
+      origin?.startsWith("http://172.");
 
-    if (origin && (origins.has(origin) || isLocalhost)) {
+    if (origin && (origins.has(origin) || isLocalhost || isLanOrigin)) {
       res.header("Access-Control-Allow-Origin", origin);
       res.header(
         "Access-Control-Allow-Methods",
@@ -55,13 +75,14 @@ function setupCors(app: express.Application) {
 function setupBodyParsing(app: express.Application) {
   app.use(
     express.json({
+      limit: "20mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     }),
   );
 
-  app.use(express.urlencoded({ extended: false }));
+  app.use(express.urlencoded({ extended: false, limit: "20mb" }));
 }
 
 function setupRequestLogging(app: express.Application) {
@@ -99,7 +120,7 @@ function setupRequestLogging(app: express.Application) {
 
 function getAppName(): string {
   try {
-    const appJsonPath = path.resolve(process.cwd(), "app.json");
+    const appJsonPath = resolveFromBase("app.json");
     const appJsonContent = fs.readFileSync(appJsonPath, "utf-8");
     const appJson = JSON.parse(appJsonContent);
     return appJson.expo?.name || "App Landing Page";
@@ -109,12 +130,7 @@ function getAppName(): string {
 }
 
 function serveExpoManifest(platform: string, res: Response) {
-  const manifestPath = path.resolve(
-    process.cwd(),
-    "static-build",
-    platform,
-    "manifest.json",
-  );
+  const manifestPath = resolveFromBase("static-build", platform, "manifest.json");
 
   if (!fs.existsSync(manifestPath)) {
     return res
@@ -161,13 +177,13 @@ function serveLandingPage({
 }
 
 function configureExpoAndLanding(app: express.Application) {
-  const templatePath = path.resolve(
-    process.cwd(),
-    "server",
-    "templates",
-    "landing-page.html",
-  );
-  const landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
+  const templatePath = resolveFromBase("server", "templates", "landing-page.html");
+  let landingPageTemplate = "";
+  if (fs.existsSync(templatePath)) {
+    landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
+  } else {
+    landingPageTemplate = "<html><body><h3>OrgHub</h3><p>Landing page template not found.</p></body></html>";
+  }
   const appName = getAppName();
 
   log("Serving static Expo files with dynamic manifest routing");
@@ -198,8 +214,20 @@ function configureExpoAndLanding(app: express.Application) {
     next();
   });
 
-  app.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
-  app.use(express.static(path.resolve(process.cwd(), "static-build")));
+  app.use("/assets", express.static(resolveFromBase("assets")));
+  app.use(express.static(resolveFromBase("static-build")));
+
+  const webBuildDir = resolveFromBase("web-build");
+  const hasWebBuild =
+    fs.existsSync(webBuildDir) &&
+    fs.existsSync(path.join(webBuildDir, "index.html"));
+  if (hasWebBuild) {
+    app.use("/web", express.static(webBuildDir));
+    app.get(/^\/web(\/.*)?$/, (_req, res) => {
+      return res.sendFile(path.join(webBuildDir, "index.html"));
+    });
+    log("Web build route enabled at /web");
+  }
 
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
@@ -237,14 +265,14 @@ function setupErrorHandler(app: express.Application) {
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    },
-  );
+  const listenOptions: any = {
+    port,
+    host: "0.0.0.0",
+  };
+  if (process.platform !== "win32") {
+    listenOptions.reusePort = true;
+  }
+  server.listen(listenOptions, () => {
+    log(`express server serving on port ${port}`);
+  });
 })();

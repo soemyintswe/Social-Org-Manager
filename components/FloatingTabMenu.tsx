@@ -29,10 +29,16 @@ export default function FloatingTabMenu() {
         enabled: can("members.approve_changes") || can("members.propose_changes"),
       },
       {
-        name: "လှုပ်ရှားမှုများ",
+        name: "သတင်းပို့ရန်",
         icon: "calendar-outline",
         route: "/events",
         enabled: can("events.view_public"),
+      },
+      {
+        name: "Messages",
+        icon: "chatbubbles-outline",
+        route: "/messages",
+        enabled: true,
       },
       {
         name: "ချေးငွေများ",
@@ -47,16 +53,28 @@ export default function FloatingTabMenu() {
         enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
       },
       {
+        name: "ငွေပေးသွင်းတောင်းခံမှု",
+        icon: "phone-portrait-outline",
+        route: "/member-payment-requests",
+        enabled: true,
+      },
+      {
+        name: "ငွေတောင်းခံလွှာ",
+        icon: "document-text-outline",
+        route: "/expense-claims",
+        enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
+      },
+      {
         name: "အစီရင်ခံစာ",
         icon: "bar-chart-outline",
         route: "/reports",
         enabled: can("reports.view_all") || can("reports.view_summary"),
       },
       {
-        name: "စနစ်ပိုင်းဆိုင်ရာ",
+        name: "System Information",
         icon: "settings-outline",
-        route: "/data-management",
-        enabled: can("system.manage"),
+        route: "/system",
+        enabled: true,
       },
     {
         name: "ချိန်ညှိရန်",

@@ -17,12 +17,27 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { normalizeOrgPosition } from "@/lib/types";
+import {
+  checkCloudSyncHealth,
+  pullCloudSnapshotToLocalDetailed,
+  checkLanSyncHealth,
+  pullLanSnapshotToLocalDetailed,
+  pushCloudSnapshotFromLocalDetailed,
+  pushLanSnapshotFromLocalDetailed,
+} from "@/lib/storage";
+import {
+  DEFAULT_CLOUD_SYNC_ENDPOINT,
+  DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+  DEFAULT_LAN_SYNC_URL,
+} from "@/lib/sync-defaults";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
-  const { accountSettings, updateAccountSettings } = useData();
+  const { accountSettings, updateAccountSettings, refreshData } = useData();
   const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
+  const canEditReceivingAccounts = normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
   
   const [saving, setSaving] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -37,17 +52,125 @@ export default function AccountSettingsScreen() {
   const [resetIdentifier, setResetIdentifier] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
+  const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(accountSettings.cloudSyncEnabled === true);
+  const [cloudSyncEndpoint, setCloudSyncEndpoint] = useState(accountSettings.cloudSyncEndpoint || DEFAULT_CLOUD_SYNC_ENDPOINT);
+  const [cloudSyncApiKey, setCloudSyncApiKey] = useState(accountSettings.cloudSyncApiKey || "");
+  const [cloudSyncGoogleAccountEmail, setCloudSyncGoogleAccountEmail] = useState(accountSettings.cloudSyncGoogleAccountEmail || "");
+  const [cloudSyncFolderName, setCloudSyncFolderName] = useState(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
+  const [receivingBankName, setReceivingBankName] = useState(accountSettings.receivingBankName || "");
+  const [receivingBankAccountNumber, setReceivingBankAccountNumber] = useState(accountSettings.receivingBankAccountNumber || "");
+  const [receivingBankAccountName, setReceivingBankAccountName] = useState(accountSettings.receivingBankAccountName || "");
+  const [receivingKbzPayPhone, setReceivingKbzPayPhone] = useState(accountSettings.receivingKbzPayPhone || "");
+  const [receivingKbzPayAccountName, setReceivingKbzPayAccountName] = useState(accountSettings.receivingKbzPayAccountName || "");
+  const [receivingWavePayPhone, setReceivingWavePayPhone] = useState(accountSettings.receivingWavePayPhone || "");
+  const [receivingWavePayAccountName, setReceivingWavePayAccountName] = useState(accountSettings.receivingWavePayAccountName || "");
+  const [receivingAyaPayPhone, setReceivingAyaPayPhone] = useState(accountSettings.receivingAyaPayPhone || "");
+  const [receivingAyaPayAccountName, setReceivingAyaPayAccountName] = useState(accountSettings.receivingAyaPayAccountName || "");
+  const [syncing, setSyncing] = useState(false);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  const normalizeUrl = (raw: string): string => {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return "";
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    return withProtocol.replace(/\/+$/, "");
+  };
+
+  const hasLanSyncConfigured = syncEnabled && !!normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+  const hasCloudSyncConfigured = cloudSyncEnabled && !!cloudSyncEndpoint.trim();
+  const storageModeLabel = hasLanSyncConfigured && hasCloudSyncConfigured
+    ? "Online + Offline (LAN + Cloud Sync)"
+    : hasLanSyncConfigured
+    ? "Online + Offline (LAN Sync)"
+    : hasCloudSyncConfigured
+    ? "Online + Offline (Cloud Sync)"
+    : "Offline (Local)";
+
+  React.useEffect(() => {
+    setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
+    setSyncEnabled(accountSettings.syncEnabled !== false);
+    setCloudSyncEnabled(accountSettings.cloudSyncEnabled === true);
+    setCloudSyncEndpoint(accountSettings.cloudSyncEndpoint || DEFAULT_CLOUD_SYNC_ENDPOINT);
+    setCloudSyncApiKey(accountSettings.cloudSyncApiKey || "");
+    setCloudSyncGoogleAccountEmail(accountSettings.cloudSyncGoogleAccountEmail || "");
+    setCloudSyncFolderName(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
+    setReceivingBankName(accountSettings.receivingBankName || "");
+    setReceivingBankAccountNumber(accountSettings.receivingBankAccountNumber || "");
+    setReceivingBankAccountName(accountSettings.receivingBankAccountName || "");
+    setReceivingKbzPayPhone(accountSettings.receivingKbzPayPhone || "");
+    setReceivingKbzPayAccountName(accountSettings.receivingKbzPayAccountName || "");
+    setReceivingWavePayPhone(accountSettings.receivingWavePayPhone || "");
+    setReceivingWavePayAccountName(accountSettings.receivingWavePayAccountName || "");
+    setReceivingAyaPayPhone(accountSettings.receivingAyaPayPhone || "");
+    setReceivingAyaPayAccountName(accountSettings.receivingAyaPayAccountName || "");
+  }, [
+    accountSettings.syncServerUrl,
+    accountSettings.syncEnabled,
+    accountSettings.cloudSyncEnabled,
+    accountSettings.cloudSyncEndpoint,
+    accountSettings.cloudSyncApiKey,
+    accountSettings.cloudSyncGoogleAccountEmail,
+    accountSettings.cloudSyncFolderName,
+    accountSettings.receivingBankName,
+    accountSettings.receivingBankAccountNumber,
+    accountSettings.receivingBankAccountName,
+    accountSettings.receivingKbzPayPhone,
+    accountSettings.receivingKbzPayAccountName,
+    accountSettings.receivingWavePayPhone,
+    accountSettings.receivingWavePayAccountName,
+    accountSettings.receivingAyaPayPhone,
+    accountSettings.receivingAyaPayAccountName,
+  ]);
+
+  const getReceivingValuesForSave = () => {
+    if (canEditReceivingAccounts) {
+      return {
+        receivingBankName: receivingBankName.trim(),
+        receivingBankAccountNumber: receivingBankAccountNumber.trim(),
+        receivingBankAccountName: receivingBankAccountName.trim(),
+        receivingKbzPayPhone: receivingKbzPayPhone.trim(),
+        receivingKbzPayAccountName: receivingKbzPayAccountName.trim(),
+        receivingWavePayPhone: receivingWavePayPhone.trim(),
+        receivingWavePayAccountName: receivingWavePayAccountName.trim(),
+        receivingAyaPayPhone: receivingAyaPayPhone.trim(),
+        receivingAyaPayAccountName: receivingAyaPayAccountName.trim(),
+      };
+    }
+    return {
+      receivingBankName: accountSettings.receivingBankName || "",
+      receivingBankAccountNumber: accountSettings.receivingBankAccountNumber || "",
+      receivingBankAccountName: accountSettings.receivingBankAccountName || "",
+      receivingKbzPayPhone: accountSettings.receivingKbzPayPhone || "",
+      receivingKbzPayAccountName: accountSettings.receivingKbzPayAccountName || "",
+      receivingWavePayPhone: accountSettings.receivingWavePayPhone || "",
+      receivingWavePayAccountName: accountSettings.receivingWavePayAccountName || "",
+      receivingAyaPayPhone: accountSettings.receivingAyaPayPhone || "",
+      receivingAyaPayAccountName: accountSettings.receivingAyaPayAccountName || "",
+    };
+  };
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+      const receiving = getReceivingValuesForSave();
       await updateAccountSettings({
         ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
         openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",
+        syncServerUrl: normalizedUrl,
+        syncEnabled,
+        cloudSyncEnabled,
+        cloudSyncProvider: "google_drive_apps_script",
+        cloudSyncEndpoint: cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
+        cloudSyncApiKey: cloudSyncApiKey.trim(),
+        cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
+        cloudSyncFolderName: cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+        ...receiving,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
@@ -151,6 +274,94 @@ export default function AccountSettingsScreen() {
     }
   };
 
+  const handleSyncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+      const receiving = getReceivingValuesForSave();
+      await updateAccountSettings({
+        ...accountSettings,
+        openingBalanceCash: accountSettings.openingBalanceCash,
+        openingBalanceBank: accountSettings.openingBalanceBank,
+        currency: accountSettings.currency || "MMK",
+        syncServerUrl: normalizedUrl,
+        syncEnabled,
+        cloudSyncEnabled,
+        cloudSyncProvider: "google_drive_apps_script",
+        cloudSyncEndpoint: cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
+        cloudSyncApiKey: cloudSyncApiKey.trim(),
+        cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
+        cloudSyncFolderName: cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+        ...receiving,
+      });
+      if (syncEnabled && normalizedUrl) {
+        const health = await checkLanSyncHealth();
+        if (!health.ok) {
+          Alert.alert(
+            "Sync Error",
+            `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${normalizedUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}\n\nComputer server run နေ/မနေ၊ Phone/Computer Wi-Fi တူ/မတူ၊ firewall ကို စစ်ပါ။`
+          );
+        }        
+      }
+
+      let cloudHealthLine = "Cloud: Disabled";
+      if (cloudSyncEnabled && cloudSyncEndpoint.trim()) {
+        const cloudHealth = await checkCloudSyncHealth();
+        cloudHealthLine = cloudHealth.ok
+          ? "Cloud Health: OK"
+          : `Cloud Health: Fail (${cloudHealth.reason || "unknown"}${cloudHealth.status ? `/${cloudHealth.status}` : ""})`;
+      }
+
+      const normalizedCloudEndpoint = cloudSyncEndpoint.trim();
+      const pullLan = syncEnabled && normalizedUrl
+        ? await pullLanSnapshotToLocalDetailed()
+        : ({ ok: false, reason: "disabled_or_empty_url" } as const);
+      const pullCloud = cloudSyncEnabled && normalizedCloudEndpoint
+        ? await pullCloudSnapshotToLocalDetailed()
+        : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
+
+      const pushLan = syncEnabled && normalizedUrl
+        ? await pushLanSnapshotFromLocalDetailed()
+        : ({ ok: false, reason: "disabled_or_empty_url" } as const);
+      const pushCloud = cloudSyncEnabled && normalizedCloudEndpoint
+        ? await pushCloudSnapshotFromLocalDetailed()
+        : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
+
+      const asSyncLine = (
+        prefix: string,
+        result: { ok: boolean; changed?: boolean; reason?: string; status?: number },
+        action: "pull" | "push"
+      ): string => {
+        if (String(result.reason || "").includes("disabled_or_empty")) {
+          return `${prefix}: Skip (disabled)`;
+        }
+        if (action === "pull") {
+          return result.ok
+            ? `${prefix}: ${result.changed ? "OK" : `Skip (${result.reason || "no_change"})`}`
+            : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
+        }
+        return result.ok
+          ? `${prefix}: OK`
+          : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
+      };
+
+      const lanPullLine = asSyncLine("LAN Pull", pullLan, "pull");
+      const lanPushLine = asSyncLine("LAN Push", pushLan, "push");
+      const cloudPullLine = asSyncLine("Cloud Pull", pullCloud, "pull");
+      const cloudPushLine = asSyncLine("Cloud Push", pushCloud, "push");
+      const authHintNeeded = [pullCloud.reason, pushCloud.reason].some((r) => String(r || "").includes("unauthorized"));
+      const authHint = authHintNeeded
+        ? "\nHint: Cloud API Key ကို Google Apps Script ထဲက API_KEY နဲ့ တိတိကျကျတူအောင် ပြန်စစ်ပါ။ API_KEY မသုံးရင် နှစ်ဖက်လုံးအလွတ်ထားပါ။"
+        : "";
+
+      await refreshData({ skipPull: true });
+      Alert.alert("Sync", `${lanPullLine}\n${lanPushLine}\n${cloudPullLine}\n${cloudPushLine}\n${cloudHealthLine}${authHint}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -177,15 +388,116 @@ export default function AccountSettingsScreen() {
       >
         <View style={styles.storageCard}>
           <View style={styles.storageIcon}>
-            <Ionicons name="cloud-offline" size={24} color="#F59E0B" />
+            <Ionicons
+              name={hasLanSyncConfigured || hasCloudSyncConfigured ? "cloud-done" : "cloud-offline"}
+              size={24}
+              color={hasLanSyncConfigured || hasCloudSyncConfigured ? "#16A34A" : "#F59E0B"}
+            />
           </View>
           <View style={styles.storageTextContainer}>
-            <Text style={styles.storageTitle}>Storage: Offline (Local)</Text>
+            <Text style={styles.storageTitle}>Storage: {storageModeLabel}</Text>
             <Text style={styles.storageDesc}>
-              အချက်အလက်များကို ဤစက်ထဲတွင်သာ သိမ်းဆည်းထားပါသည်။ အခြားစက်နှင့် ချိတ်ဆက်အသုံးပြုလိုပါက Backup/Restore ပြုလုပ်ရန် လိုအပ်ပါသည်။
+              LAN Sync သို့မဟုတ် Google Drive Cloud Sync ကို Enable လုပ်ပါက အချက်အလက်များ မျှဝေညှိနှိုင်းနိုင်ပါမည်။
             </Text>
           </View>
         </View>
+        <Text style={styles.label}>LAN Sync Server URL</Text>
+        <TextInput
+          style={styles.input}
+          value={syncServerUrl}
+          onChangeText={setSyncServerUrl}
+          placeholder="ဥပမာ - http://192.168.1.100:5000"
+          autoCapitalize="none"
+        />
+        <View style={styles.syncRow}>
+          <Pressable style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive]} onPress={() => setSyncEnabled((v) => !v)}>
+            <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
+            <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
+              {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
+            <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.securityCard}>
+          <Text style={styles.sectionTitle}>Google Drive Cloud Sync (MVP)</Text>
+          <Text style={styles.sectionDesc}>
+            Computer မဖွင့်ဘဲ ဖုန်းများအချင်းချင်း Sync လုပ်ရန် Google Apps Script Web App URL ကိုထည့်ပါ။
+          </Text>
+          <Text style={styles.label}>Cloud Script URL</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncEndpoint}
+            onChangeText={setCloudSyncEndpoint}
+            placeholder="https://script.google.com/macros/s/.../exec"
+            autoCapitalize="none"
+          />
+          <Text style={styles.label}>Cloud API Key (Optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncApiKey}
+            onChangeText={setCloudSyncApiKey}
+            placeholder="Shared key between phones"
+            autoCapitalize="none"
+          />
+          <Text style={styles.label}>Google Drive Account (Optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncGoogleAccountEmail}
+            onChangeText={setCloudSyncGoogleAccountEmail}
+            placeholder="name@gmail.com"
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+          <Text style={styles.label}>Cloud Folder Name</Text>
+          <TextInput
+            style={styles.input}
+            value={cloudSyncFolderName}
+            onChangeText={setCloudSyncFolderName}
+            placeholder="OrgHub Sync"
+          />
+          <View style={styles.syncRow}>
+            <Pressable style={[styles.syncToggleBtn, cloudSyncEnabled && styles.syncToggleBtnActive]} onPress={() => setCloudSyncEnabled((v) => !v)}>
+              <Ionicons name={cloudSyncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={cloudSyncEnabled ? "#fff" : Colors.light.text} />
+              <Text style={[styles.syncToggleText, cloudSyncEnabled && styles.syncToggleTextActive]}>
+                {cloudSyncEnabled ? "Cloud Sync Enabled" : "Cloud Sync Disabled"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {canEditReceivingAccounts && (
+          <View style={styles.securityCard}>
+            <Text style={styles.sectionTitle}>Payment Receiving Accounts</Text>
+            <Text style={styles.sectionDesc}>
+              ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank နှင့် Mobile Wallet အကောင့်များကို သတ်မှတ်ပါ။
+            </Text>
+
+            <Text style={styles.label}>Bank Name</Text>
+            <TextInput style={styles.input} value={receivingBankName} onChangeText={setReceivingBankName} placeholder="ဥပမာ - KBZ Bank" />
+            <Text style={styles.label}>Bank Account Number</Text>
+            <TextInput style={styles.input} value={receivingBankAccountNumber} onChangeText={setReceivingBankAccountNumber} placeholder="Account Number" />
+            <Text style={styles.label}>Bank Account Name</Text>
+            <TextInput style={styles.input} value={receivingBankAccountName} onChangeText={setReceivingBankAccountName} placeholder="Account Name" />
+
+            <Text style={styles.label}>KBZ Pay Phone</Text>
+            <TextInput style={styles.input} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+            <Text style={styles.label}>KBZ Pay Account Name</Text>
+            <TextInput style={styles.input} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" />
+
+            <Text style={styles.label}>Wave Pay Phone</Text>
+            <TextInput style={styles.input} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+            <Text style={styles.label}>Wave Pay Account Name</Text>
+            <TextInput style={styles.input} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" />
+
+            <Text style={styles.label}>AYA Pay Phone</Text>
+            <TextInput style={styles.input} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+            <Text style={styles.label}>AYA Pay Account Name</Text>
+            <TextInput style={styles.input} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" />
+          </View>
+        )}
 
         {canManageSystem && (
           <Pressable
@@ -194,6 +506,17 @@ export default function AccountSettingsScreen() {
           >
             <Ionicons name="server-outline" size={20} color={Colors.light.text} />
             <Text style={styles.dataManagementText}>System & Data Management (Backup/Restore)</Text>
+            <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+          </Pressable>
+        )}
+
+        {canManageSystem && (
+          <Pressable
+            style={styles.dataManagementBtn}
+            onPress={() => router.push("/phone-transfer")}
+          >
+            <Ionicons name="phone-portrait-outline" size={20} color={Colors.light.text} />
+            <Text style={styles.dataManagementText}>Phone-to-Phone Transfer (Nearby/QR)</Text>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
           </Pressable>
         )}
@@ -535,5 +858,46 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     color: "#9A3412",
     lineHeight: 18,
+  },
+  syncRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    gap: 10,
+  },
+  syncToggleBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    paddingVertical: 11,
+  },
+  syncToggleBtnActive: {
+    backgroundColor: "#16A34A",
+    borderColor: "#16A34A",
+  },
+  syncToggleText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  syncToggleTextActive: {
+    color: "#fff",
+  },
+  syncNowBtn: {
+    borderRadius: 10,
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  syncNowText: {
+    color: "#fff",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
   },
 });

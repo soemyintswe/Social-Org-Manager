@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -25,6 +25,7 @@ import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
 
 type EventType = "activity" | "news" | "announcement";
 
@@ -81,19 +82,29 @@ interface OrgEventNotice {
   funeralMemorialMapUrl?: string;
   funeralMemorialDate?: string;
   funeralMemorialTime?: string;
+  readBy?: Record<string, { userId: string; memberId?: string; displayName?: string; readAt: string }>;
+  reactions?: Record<string, "like" | "love" | "sad">;
+  comments?: Array<{
+    id: string;
+    userId: string;
+    memberId?: string;
+    displayName?: string;
+    message: string;
+    createdAt: string;
+  }>;
 }
 
 const CUSTOM_TOPIC_KEY = "@org_notice_custom_topics";
-const CUSTOM_RELATION_KEY = "@org_notice_custom_relations";
 const CUSTOM_CONDITION_KEY = "@org_notice_custom_conditions";
 const PRESET_TOPICS = [
   "အလှူပွဲတက်ရောက်ရန်ဖိတ်ကြားခြင်း",
   "မင်္ဂလာပွဲတက်ရောက်ရန်ဖိတ်ကြားခြင်း",
   "ကျန်းမာရေးအခြေအနေအကြောင်းကြားခြင်း",
   "နာရေး အကြောင်းကြားခြင်း",
+  "ပညာရေးဆိုင်ရာသတင်းပေးပို့ခြင်း",
   "အခြားကိစ္စ",
 ] as const;
-const PRESET_RELATIONS = ["ကိုယ်တိုင်", "ဖခင်", "မိခင်", "သား", "သမီး", "အတူနေမိသားစုဝင်"] as const;
+const PRESET_RELATIONS = DEFAULT_RELATION_OPTIONS_WITH_SELF;
 const PRESET_HEALTH_CONDITIONS = ["အသဲအသန်", "ခွဲစိတ်ကုသ", "ထိခိုက်ဒဏ်ရာရ", "ဖျားနာ"] as const;
 
 function formatYmd(date: Date): string {
@@ -162,7 +173,27 @@ function getTopicColor(topic?: string): string {
   return "#0EA5A4";
 }
 
+function countReactions(reactions?: Record<string, "like" | "love" | "sad">): { like: number; love: number; sad: number } {
+  const result = { like: 0, love: 0, sad: 0 };
+  if (!reactions) return result;
+  Object.values(reactions).forEach((r) => {
+    if (r === "like") result.like += 1;
+    if (r === "love") result.love += 1;
+    if (r === "sad") result.sad += 1;
+  });
+  return result;
+}
+
+function mapClaimCategoryToTopic(categoryId?: string): string {
+  const id = String(categoryId || "");
+  if (id === "health_support") return "ကျန်းမာရေးအခြေအနေအကြောင်းကြားခြင်း";
+  if (id === "funeral_support") return "နာရေး အကြောင်းကြားခြင်း";
+  if (id === "education_support") return "ပညာရေးဆိုင်ရာသတင်းပေးပို့ခြင်း";
+  return "";
+}
+
 export default function EventsScreen() {
+  const params = useLocalSearchParams<{ source?: string; claimCategory?: string }>();
   const insets = useSafeAreaInsets();
   const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
   const { can, currentUser } = useAuth();
@@ -176,6 +207,7 @@ export default function EventsScreen() {
   const canCreateEvent = canCreateAllEvent || canCreateOwnEvent;
 
   const [modalVisible, setModalVisible] = useState(false);
+  const [claimPrefillApplied, setClaimPrefillApplied] = useState(false);
   const [topicPickerVisible, setTopicPickerVisible] = useState(false);
   const [relationPickerVisible, setRelationPickerVisible] = useState(false);
   const [conditionPickerVisible, setConditionPickerVisible] = useState(false);
@@ -245,7 +277,7 @@ export default function EventsScreen() {
   const [senderMemberIdInput, setSenderMemberIdInput] = useState(currentUser?.memberId || "");
 
   const allTopics = useMemo(() => [...PRESET_TOPICS, ...customTopics], [customTopics]);
-  const allRelations = useMemo(() => [...PRESET_RELATIONS, ...customRelations], [customRelations]);
+  const allRelations = useMemo(() => mergeRelationOptions(customRelations, true), [customRelations]);
   const allHealthConditions = useMemo(() => [...PRESET_HEALTH_CONDITIONS, ...customConditions], [customConditions]);
   const senderMembers = useMemo(
     () => [...(members || [])].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
@@ -261,6 +293,21 @@ export default function EventsScreen() {
   );
   const isHealthNotice = topic.includes("ကျန်းမာရေး");
   const isFuneralNotice = topic.includes("နာရေး");
+  const launchedFromClaim = String(params?.source || "") === "expense_claim";
+  const claimPrefillTopic = mapClaimCategoryToTopic(String(params?.claimCategory || ""));
+
+  useEffect(() => {
+    if (!launchedFromClaim || claimPrefillApplied) return;
+    if (!canCreateEvent) {
+      Alert.alert("ခွင့်မပြုပါ", "သတင်းအသစ်တင်ခွင့် မရှိပါ။");
+      setClaimPrefillApplied(true);
+      return;
+    }
+    resetForm();
+    if (claimPrefillTopic) setTopic(claimPrefillTopic);
+    setModalVisible(true);
+    setClaimPrefillApplied(true);
+  }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic]);
 
   useEffect(() => {
     let mounted = true;
@@ -315,7 +362,7 @@ export default function EventsScreen() {
     (async () => {
       try {
         const [rawRelations, rawConditions] = await Promise.all([
-          AsyncStorage.getItem(CUSTOM_RELATION_KEY),
+          AsyncStorage.getItem(CUSTOM_RELATION_STORAGE_KEY),
           AsyncStorage.getItem(CUSTOM_CONDITION_KEY),
         ]);
         if (!mounted) return;
@@ -445,7 +492,7 @@ export default function EventsScreen() {
     }
     const next = [...customRelations, value];
     setCustomRelations(next);
-    await AsyncStorage.setItem(CUSTOM_RELATION_KEY, JSON.stringify(next));
+    await AsyncStorage.setItem(CUSTOM_RELATION_STORAGE_KEY, JSON.stringify(next));
     if (isFuneralNotice) {
       applyFuneralRelation(value);
     } else {
@@ -731,6 +778,20 @@ export default function EventsScreen() {
       senderTime: formatHm(now),
       createdByUserId: currentUser?.id,
       createdByMemberId: currentUser?.memberId,
+      readBy: editingId
+        ? undefined
+        : (currentUser?.id
+            ? {
+                [currentUser.id]: {
+                  userId: currentUser.id,
+                  memberId: currentUser.memberId,
+                  displayName: currentUser.displayName,
+                  readAt: now.toISOString(),
+                },
+              }
+            : {}),
+      reactions: editingId ? undefined : {},
+      comments: editingId ? undefined : [],
     };
 
     if (editingId) {
@@ -743,7 +804,13 @@ export default function EventsScreen() {
         Alert.alert("ခွင့်မပြုပါ", "ပြင်ဆင်ခွင့် မရှိပါ။");
         return;
       }
-      await editEvent(editingId, { ...existing, ...payload });
+      await editEvent(editingId, {
+        ...existing,
+        ...payload,
+        readBy: existing.readBy || {},
+        reactions: existing.reactions || {},
+        comments: existing.comments || [],
+      });
     } else {
       if (!canCreateEvent) {
         Alert.alert("ခွင့်မပြုပါ", "သတင်းအသစ်တင်ခွင့် မရှိပါ။");
@@ -754,6 +821,9 @@ export default function EventsScreen() {
 
     setModalVisible(false);
     resetForm();
+    if (launchedFromClaim && !editingId) {
+      router.replace("/expense-claims" as any);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -809,6 +879,9 @@ export default function EventsScreen() {
         renderItem={({ item }: { item: OrgEventNotice }) => {
           const topicColor = getTopicColor(item.topic || item.title);
           const primaryImage = item.images?.[0] || item.image;
+          const reactionCounts = countReactions(item.reactions);
+          const readCount = Object.keys(item.readBy || {}).length;
+          const commentCount = (item.comments || []).length;
           return (
             <Pressable style={styles.card} onPress={() => router.push({ pathname: "/event-detail", params: { id: item.id } } as any)}>
               {primaryImage ? <Image source={{ uri: primaryImage }} style={styles.cardImage} resizeMode="cover" /> : null}
@@ -827,6 +900,9 @@ export default function EventsScreen() {
                 <Text style={styles.desc} numberOfLines={3}>{item.detail || item.description}</Text>
                 <Text style={styles.metaLine}>
                   ပေးပို့သူ: {item.senderName || "-"} ({item.senderMemberId || "-"})
+                </Text>
+                <Text style={styles.metaLine}>
+                  ဖတ်ရှု့ပြီး: {readCount} | 💬 {commentCount} | 👍 {reactionCounts.like} ❤️ {reactionCounts.love} 😢 {reactionCounts.sad}
                 </Text>
               </View>
               <View style={styles.actionRow}>
