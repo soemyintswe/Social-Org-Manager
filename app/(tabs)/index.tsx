@@ -161,10 +161,18 @@ export default function DashboardScreen() {
           : `Cloud Health: Fail (${health.reason || "unknown"}${health.status ? `/${health.status}` : ""})`;
       }
 
-      const pullLan = await pullLanSnapshotToLocalDetailed();
-      const pushLan = await pushLanSnapshotFromLocalDetailed();
-      const pullCloud = await pullCloudSnapshotToLocalDetailed();
-      const pushCloud = await pushCloudSnapshotFromLocalDetailed();
+      const pullLan = lanEnabled && syncServerUrl
+        ? await pullLanSnapshotToLocalDetailed()
+        : ({ ok: false, reason: "disabled_or_empty_url" } as const);
+      const pushLan = lanEnabled && syncServerUrl
+        ? await pushLanSnapshotFromLocalDetailed()
+        : ({ ok: false, reason: "disabled_or_empty_url" } as const);
+      const pullCloud = cloudEnabled && cloudEndpoint
+        ? await pullCloudSnapshotToLocalDetailed()
+        : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
+      const pushCloud = cloudEnabled && cloudEndpoint
+        ? await pushCloudSnapshotFromLocalDetailed()
+        : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
       const asSyncLine = (
         prefix: string,

@@ -1681,6 +1681,99 @@ export type CloudSyncResult = {
   endpoint?: string;
 };
 
+type CloudSnapshotPayload = {
+  updatedAt?: string;
+  source?: string;
+  data?: Record<string, string>;
+};
+
+function safeParseJsonObject(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return null;
+}
+
+function normalizeCloudSnapshotData(input: unknown): Record<string, string> | null {
+  const parsed = safeParseJsonObject(input);
+  if (!parsed) return null;
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string") {
+      normalized[key] = value;
+    } else if (value !== undefined) {
+      normalized[key] = JSON.stringify(value);
+    }
+  }
+  return normalized;
+}
+
+function looksLikeExportDataMap(candidate: Record<string, unknown>): boolean {
+  const keys = Object.keys(candidate);
+  if (keys.length === 0) return false;
+  if (!keys.some((k) => k.startsWith("@"))) return false;
+  const meta = new Set([
+    "ok",
+    "reason",
+    "action",
+    "service",
+    "hint",
+    "status",
+    "message",
+    "error",
+    "updatedAt",
+    "source",
+    "snapshot",
+    "result",
+    "payload",
+    "data",
+  ]);
+  return keys.every((k) => !meta.has(k));
+}
+
+function extractCloudSnapshot(payload: unknown): CloudSnapshotPayload | null {
+  const root = safeParseJsonObject(payload);
+  if (!root) return null;
+
+  const candidateContainers: Record<string, unknown>[] = [
+    root,
+    safeParseJsonObject(root.snapshot),
+    safeParseJsonObject(root.result),
+    safeParseJsonObject(root.payload),
+    safeParseJsonObject(root.data),
+    safeParseJsonObject((safeParseJsonObject(root.result) || {}).snapshot),
+    safeParseJsonObject((safeParseJsonObject(root.payload) || {}).snapshot),
+  ].filter(Boolean) as Record<string, unknown>[];
+
+  for (const candidate of candidateContainers) {
+    const nestedSnapshot = safeParseJsonObject(candidate.snapshot);
+    const snapshotLike = nestedSnapshot || candidate;
+    const snapshotData = snapshotLike.data;
+    const data =
+      snapshotData !== undefined
+        ? normalizeCloudSnapshotData(snapshotData)
+        : looksLikeExportDataMap(snapshotLike)
+          ? normalizeCloudSnapshotData(snapshotLike)
+          : null;
+    if (!data) continue;
+
+    return {
+      updatedAt: String(snapshotLike.updatedAt || candidate.updatedAt || root.updatedAt || ""),
+      source: String(snapshotLike.source || candidate.source || root.source || "cloud"),
+      data,
+    };
+  }
+
+  return null;
+}
+
 export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
   try {
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
@@ -1850,18 +1943,26 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
 
     const payload = (await res.json()) as {
       ok?: boolean;
-      snapshot?: { updatedAt?: string; data?: Record<string, string> };
+      snapshot?: unknown;
       updatedAt?: string;
-      data?: Record<string, string>;
+      data?: unknown;
       reason?: string;
     };
 
-    const snapshot = payload?.snapshot || ({ updatedAt: payload?.updatedAt, data: payload?.data } as any);
-    if (!snapshot || !snapshot.data || typeof snapshot.data !== "object") {
-      if (payload?.ok === false && payload?.reason === "snapshot_not_found") {
+    if (payload?.ok === false && payload?.reason === "snapshot_not_found") {
+      return { ok: true, changed: false, reason: "cloud_snapshot_not_found", endpoint };
+    }
+
+    const snapshot = extractCloudSnapshot(payload);
+    if (!snapshot || !snapshot.data) {
+      const message =
+        payload && typeof payload === "object"
+          ? `cloud_invalid_snapshot_payload:${Object.keys(payload as Record<string, unknown>).join(",")}`
+          : "cloud_invalid_snapshot_payload";
+      if (payload?.reason === "snapshot_not_found") {
         return { ok: true, changed: false, reason: "cloud_snapshot_not_found", endpoint };
       }
-      return { ok: false, reason: "cloud_invalid_snapshot_payload", endpoint };
+      return { ok: false, reason: message, endpoint };
     }
 
     const incomingUpdatedAt = String(snapshot.updatedAt || "");

@@ -310,11 +310,20 @@ export default function AccountSettingsScreen() {
           : `Cloud Health: Fail (${cloudHealth.reason || "unknown"}${cloudHealth.status ? `/${cloudHealth.status}` : ""})`;
       }
 
-      const pullLan = await pullLanSnapshotToLocalDetailed();
-      const pullCloud = await pullCloudSnapshotToLocalDetailed();
+      const normalizedCloudEndpoint = cloudSyncEndpoint.trim();
+      const pullLan = syncEnabled && normalizedUrl
+        ? await pullLanSnapshotToLocalDetailed()
+        : ({ ok: false, reason: "disabled_or_empty_url" } as const);
+      const pullCloud = cloudSyncEnabled && normalizedCloudEndpoint
+        ? await pullCloudSnapshotToLocalDetailed()
+        : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
-      const pushLan = await pushLanSnapshotFromLocalDetailed();
-      const pushCloud = await pushCloudSnapshotFromLocalDetailed();
+      const pushLan = syncEnabled && normalizedUrl
+        ? await pushLanSnapshotFromLocalDetailed()
+        : ({ ok: false, reason: "disabled_or_empty_url" } as const);
+      const pushCloud = cloudSyncEnabled && normalizedCloudEndpoint
+        ? await pushCloudSnapshotFromLocalDetailed()
+        : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
       const asSyncLine = (
         prefix: string,
