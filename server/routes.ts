@@ -80,12 +80,50 @@ function writeSnapshot(snapshot: SyncSnapshot): void {
   fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), "utf-8");
 }
 
+function isIpv4Literal(host: string): boolean {
+  const match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) return false;
+  return match
+    .slice(1)
+    .map((part) => Number(part))
+    .every((part) => Number.isFinite(part) && part >= 0 && part <= 255);
+}
+
+function isClearlyLocalHost(host: string): boolean {
+  const value = host.toLowerCase();
+  return (
+    value === "localhost" ||
+    value.endsWith(".localhost") ||
+    value.endsWith(".local") ||
+    value.endsWith(".localdomain") ||
+    value.endsWith(".internal") ||
+    value === "127.0.0.1" ||
+    value.startsWith("127.")
+  );
+}
+
+function isSafeCloudHost(host: string): boolean {
+  const value = host.trim().toLowerCase();
+  if (!value) return false;
+  // Block raw IP literals and obvious local-network aliases.
+  if (isIpv4Literal(value)) return false;
+  if (value === "::1") return false;
+  if (isClearlyLocalHost(value)) return false;
+  if (value.startsWith("[") || value.endsWith("]")) return false;
+  // Basic hostname shape guard (letters/digits/hyphen/dot).
+  if (!/^[a-z0-9.-]+$/.test(value)) return false;
+  if (value.startsWith(".") || value.endsWith(".")) return false;
+  if (value.includes("..")) return false;
+  return true;
+}
+
 function getAllowedCloudProxyHosts(): Set<string> {
   const defaults = ["script.google.com", "script.googleusercontent.com"];
   const extra = String(process.env.ORGHUB_CLOUD_PROXY_ALLOWED_HOSTS || "")
     .split(",")
     .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((host) => isSafeCloudHost(host));
   return new Set([...defaults, ...extra]);
 }
 
@@ -95,7 +133,10 @@ function normalizeCloudProxyEndpoint(raw: string): string | null {
     if (parsed.protocol !== "https:") return null;
     if (parsed.username || parsed.password) return null;
     if (parsed.search || parsed.hash) return null;
+    // Disallow explicit ports to avoid targeting unexpected internal services.
+    if (parsed.port) return null;
     const host = parsed.hostname.toLowerCase();
+    if (!isSafeCloudHost(host)) return null;
     if (!getAllowedCloudProxyHosts().has(host)) return null;
     if (host === "script.google.com") {
       const pathOk = /^\/macros\/s\/[A-Za-z0-9_-]+\/exec\/?$/.test(parsed.pathname);
