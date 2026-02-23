@@ -81,23 +81,16 @@ function writeSnapshot(snapshot: SyncSnapshot): void {
 }
 
 function normalizeCloudProxyEndpoint(raw: string): string | null {
-  try {
-    const parsed = new URL(String(raw || "").trim());
-    if (parsed.protocol !== "https:") return null;
-    if (parsed.username || parsed.password) return null;
-    if (parsed.search || parsed.hash) return null;
-    if (parsed.port) return null;
-    // Strictly allow only Google Apps Script deployment endpoints.
-    const isAppsScriptHost = parsed.hostname.toLowerCase() === "script.google.com";
-    if (!isAppsScriptHost) return null;
-    const match = parsed.pathname.match(/^\/macros\/s\/([A-Za-z0-9_-]+)\/exec\/?$/);
-    if (!match) return null;
-    const deploymentId = match[1];
-    // Rebuild endpoint from validated parts so fetch target host/path are server-controlled.
-    return new URL(`/macros/s/${deploymentId}/exec`, "https://script.google.com").toString();
-  } catch {
-    return null;
-  }
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  // Only accept exact Google Apps Script deployment URL format.
+  const match = value.match(
+    /^https:\/\/script\.google\.com\/macros\/s\/([A-Za-z0-9_-]+)\/exec\/?$/i,
+  );
+  if (!match) return null;
+  const deploymentId = match[1];
+  // Build upstream URL from trusted constant host + validated deployment id.
+  return `https://script.google.com/macros/s/${deploymentId}/exec`;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
