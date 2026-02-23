@@ -1687,6 +1687,13 @@ type CloudSnapshotPayload = {
   data?: Record<string, string>;
 };
 
+type CloudApiPayload = {
+  ok?: boolean;
+  reason?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
 function safeParseJsonObject(raw: unknown): Record<string, unknown> | null {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     return raw as Record<string, unknown>;
@@ -1774,6 +1781,14 @@ function extractCloudSnapshot(payload: unknown): CloudSnapshotPayload | null {
   return null;
 }
 
+async function readCloudApiPayload(res: Response): Promise<CloudApiPayload | null> {
+  try {
+    return (await res.json()) as CloudApiPayload;
+  } catch {
+    return null;
+  }
+}
+
 export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
   try {
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
@@ -1786,6 +1801,11 @@ export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
       folderName,
     }, 15000);
     if (!res.ok) return { ok: false, reason: "cloud_health_http_error", status: res.status, endpoint };
+    const payload = await readCloudApiPayload(res);
+    if (payload?.ok === false) {
+      const reason = String(payload.reason || "unknown");
+      return { ok: false, reason: `cloud_health_${reason}`, status: res.status, endpoint };
+    }
     return { ok: true, status: res.status, endpoint };
   } catch (e: any) {
     return { ok: false, reason: String(e?.message || "cloud_health_failed") };
@@ -1889,6 +1909,15 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
     };
     const res = await postCloudSyncRequest(endpoint, payload as unknown as Record<string, unknown>, 30000);
     if (!res.ok) return { ok: false, reason: "cloud_push_http_error", status: res.status, endpoint };
+    const responsePayload = await readCloudApiPayload(res);
+    if (responsePayload?.ok === false) {
+      return {
+        ok: false,
+        reason: `cloud_push_${String(responsePayload.reason || "unknown")}`,
+        status: res.status,
+        endpoint,
+      };
+    }
     return { ok: true, changed: true, reason: "cloud_pushed", status: res.status, endpoint };
   } catch (e: any) {
     return { ok: false, reason: String(e?.message || "cloud_push_failed") };

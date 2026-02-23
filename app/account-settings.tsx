@@ -347,9 +347,13 @@ export default function AccountSettingsScreen() {
       const lanPushLine = asSyncLine("LAN Push", pushLan, "push");
       const cloudPullLine = asSyncLine("Cloud Pull", pullCloud, "pull");
       const cloudPushLine = asSyncLine("Cloud Push", pushCloud, "push");
+      const authHintNeeded = [pullCloud.reason, pushCloud.reason].some((r) => String(r || "").includes("unauthorized"));
+      const authHint = authHintNeeded
+        ? "\nHint: Cloud API Key ကို Google Apps Script ထဲက API_KEY နဲ့ တိတိကျကျတူအောင် ပြန်စစ်ပါ။ API_KEY မသုံးရင် နှစ်ဖက်လုံးအလွတ်ထားပါ။"
+        : "";
 
       await refreshData({ skipPull: true });
-      Alert.alert("Sync", `${lanPullLine}\n${lanPushLine}\n${cloudPullLine}\n${cloudPushLine}\n${cloudHealthLine}`);
+      Alert.alert("Sync", `${lanPullLine}\n${lanPushLine}\n${cloudPullLine}\n${cloudPushLine}\n${cloudHealthLine}${authHint}`);
     } finally {
       setSyncing(false);
     }

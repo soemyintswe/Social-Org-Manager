@@ -193,9 +193,13 @@ export default function DashboardScreen() {
       };
 
       await refreshData({ skipPull: true });
+      const authHintNeeded = [pullCloud.reason, pushCloud.reason].some((r) => String(r || "").includes("unauthorized"));
+      const authHint = authHintNeeded
+        ? "\nHint: Cloud API Key ကို Google Apps Script API_KEY နဲ့တူအောင် ပြန်စစ်ပါ။ API_KEY မသုံးလျှင် နှစ်ဖက်လုံး အလွတ်ထားပါ။"
+        : "";
       Alert.alert(
         "Sync",
-        `${asSyncLine("LAN Pull", pullLan, "pull")}\n${asSyncLine("LAN Push", pushLan, "push")}\n${asSyncLine("Cloud Pull", pullCloud, "pull")}\n${asSyncLine("Cloud Push", pushCloud, "push")}\n${lanHealthLine}\n${cloudHealthLine}`
+        `${asSyncLine("LAN Pull", pullLan, "pull")}\n${asSyncLine("LAN Push", pushLan, "push")}\n${asSyncLine("Cloud Pull", pullCloud, "pull")}\n${asSyncLine("Cloud Push", pushCloud, "push")}\n${lanHealthLine}\n${cloudHealthLine}${authHint}`
       );
     } finally {
       setSyncingNow(false);

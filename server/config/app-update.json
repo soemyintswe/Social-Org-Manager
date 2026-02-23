@@ -1,8 +1,8 @@
 {
-    "latestVersion":  "1.1.28",
+    "latestVersion":  "1.1.29",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/v1.1.28/releases/release-lan-sync-v1.1.28-202602230931.apk",
-    "notes":  "Version 1.1.28: fixed auto-update GitHub LFS download issue, improved Cloud Pull compatibility, and improved sync behavior when LAN is disabled.",
+    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/v1.1.29/releases/release-lan-sync-v1.1.29-202602231038.apk",
+    "notes":  "Version 1.1.29: fixed cloud unauthorized false-positive on health/push, added sync hint for API key mismatch, and improved cloud sync diagnostics.",
     "force":  false,
-    "publishedAt":  "2026-02-23T03:06:20Z"
+    "publishedAt":  "2026-02-23T04:08:34Z"
 }
