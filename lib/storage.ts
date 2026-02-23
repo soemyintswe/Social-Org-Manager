@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as Crypto from "expo-crypto";
 import {
   Member,
   MemberFamilyMember,
@@ -98,12 +99,58 @@ const DEFAULT_CLOUD_SYNC_ENDPOINT = String((process.env as any).EXPO_PUBLIC_CLOU
 
 const AVATAR_COLORS = ["#0D9488", "#F43F5E", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#6366F1"];
 
+let entropyCounter = 0;
+function getSecureRandomBytes(byteLength: number): Uint8Array {
+  const safeLength = Math.max(1, Math.floor(byteLength));
+  const output = new Uint8Array(safeLength);
+  const webCrypto = (globalThis as any)?.crypto;
+  if (webCrypto?.getRandomValues) {
+    webCrypto.getRandomValues(output);
+    return output;
+  }
+
+  // Fallback for older runtimes: derive bytes from UUID/time without Math.random().
+  let fallbackSeed = "";
+  try {
+    fallbackSeed = String(Crypto.randomUUID() || "").replace(/-/g, "");
+  } catch {
+    fallbackSeed = "";
+  }
+  if (!fallbackSeed) {
+    entropyCounter = (entropyCounter + 1) % 2147483647;
+    fallbackSeed = `${Date.now().toString(16)}${entropyCounter.toString(16)}`;
+  }
+  for (let i = 0; i < output.length; i += 1) {
+    const code = fallbackSeed.charCodeAt(i % fallbackSeed.length) || (i * 31);
+    output[i] = code & 0xff;
+  }
+  return output;
+}
+
+function randomToken(size = 10): string {
+  const bytes = getSecureRandomBytes(Math.ceil(size / 2));
+  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return hex.slice(0, Math.max(1, size));
+}
+
+function secureRandomInt(maxExclusive: number): number {
+  const max = Math.floor(maxExclusive);
+  if (!Number.isFinite(max) || max <= 1) return 0;
+  const bytes = getSecureRandomBytes(4);
+  const value =
+    ((bytes[0] << 24) >>> 0) +
+    ((bytes[1] << 16) >>> 0) +
+    ((bytes[2] << 8) >>> 0) +
+    (bytes[3] >>> 0);
+  return value % max;
+}
+
 function generateId(): string {
-  return Date.now().toString() + Math.random().toString(36).substring(2, 11);
+  return `${Date.now().toString()}${randomToken(10)}`;
 }
 
 export function randomColor(): string {
-  return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+  return AVATAR_COLORS[secureRandomInt(AVATAR_COLORS.length)];
 }
 
 function normalizeFamilyMembers(input: unknown): MemberFamilyMember[] | undefined {
@@ -686,7 +733,7 @@ export async function addMember(member: any): Promise<Member> {
   const newMember = {
     ...normalized,
     id: normalized.id || generateId(),
-    avatarColor: normalized.avatarColor || AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
+    avatarColor: normalized.avatarColor || randomColor(),
     createdAt: new Date().toISOString()
   };
 
@@ -1629,7 +1676,7 @@ async function compressImageDataUrl(value: string): Promise<string> {
 
   const isPng = /png/i.test(parsed.mime);
   const srcExt = isPng ? "png" : "jpg";
-  const tempUri = `${baseDir}sync_img_${Date.now()}_${Math.random().toString(36).slice(2)}.${srcExt}`;
+  const tempUri = `${baseDir}sync_img_${Date.now()}_${randomToken(12)}.${srcExt}`;
 
   try {
     await FileSystem.writeAsStringAsync(tempUri, parsed.base64, {

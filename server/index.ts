@@ -1,14 +1,9 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
+import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import * as fs from "fs";
 import * as path from "path";
-
-// Temporary code to capture DATABASE_URL
-if (process.env.DATABASE_URL) {
-  fs.writeFileSync('temp_db_url.txt', process.env.DATABASE_URL);
-}
-// End of temporary code
 
 const app = express();
 const log = console.log;
@@ -30,42 +25,67 @@ declare module "http" {
 }
 
 function setupCors(app: express.Application) {
+  const allowedExactOrigins = new Set<string>();
+
+  const pushAllowedOrigin = (raw: string) => {
+    const value = String(raw || "").trim();
+    if (!value) return;
+    const normalized = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        allowedExactOrigins.add(parsed.origin);
+      }
+    } catch {
+      // ignore malformed origins from env
+    }
+  };
+
+  pushAllowedOrigin(String(process.env.REPLIT_DEV_DOMAIN || ""));
+  String(process.env.REPLIT_DOMAINS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .forEach(pushAllowedOrigin);
+
+  const isAllowedLocalOrigin = (origin: string): boolean => {
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      return false;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") return true;
+    const match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!match) return false;
+    const octets = match.slice(1).map((part) => Number(part));
+    if (octets.some((part) => !Number.isFinite(part) || part < 0 || part > 255)) return false;
+    const [a, b] = octets;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  };
+
   app.use((req, res, next) => {
-    const origins = new Set<string>();
+    const origin = String(req.header("origin") || "").trim();
+    const allowed =
+      !!origin && (allowedExactOrigins.has(origin) || isAllowedLocalOrigin(origin));
 
-    if (process.env.REPLIT_DEV_DOMAIN) {
-      origins.add(`https://${process.env.REPLIT_DEV_DOMAIN}`);
-    }
-
-    if (process.env.REPLIT_DOMAINS) {
-      process.env.REPLIT_DOMAINS.split(",").forEach((d) => {
-        origins.add(`https://${d.trim()}`);
-      });
-    }
-
-    const origin = req.header("origin");
-
-    // Allow localhost origins for Expo web development (any port)
-    const isLocalhost =
-      origin?.startsWith("http://localhost:") ||
-      origin?.startsWith("http://127.0.0.1:");
-    const isLanOrigin =
-      origin?.startsWith("http://192.168.") ||
-      origin?.startsWith("http://10.") ||
-      origin?.startsWith("http://172.");
-
-    if (origin && (origins.has(origin) || isLocalhost || isLanOrigin)) {
+    if (allowed) {
+      res.header("Vary", "Origin");
       res.header("Access-Control-Allow-Origin", origin);
       res.header(
         "Access-Control-Allow-Methods",
         "GET, POST, PUT, DELETE, OPTIONS",
       );
-      res.header("Access-Control-Allow-Headers", "Content-Type");
-      res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
     if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
+      return res.sendStatus(allowed ? 204 : 403);
     }
 
     next();
@@ -116,6 +136,25 @@ function setupRequestLogging(app: express.Application) {
 
     next();
   });
+}
+
+function setupRateLimiting(app: express.Application) {
+  const globalLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.ORGHUB_RATE_LIMIT_MAX || 240),
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use(globalLimiter);
+
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.ORGHUB_API_RATE_LIMIT_MAX || 120),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { ok: false, reason: "rate_limited" },
+  });
+  app.use("/api", apiLimiter);
 }
 
 function getAppName(): string {
@@ -222,6 +261,14 @@ function configureExpoAndLanding(app: express.Application) {
     fs.existsSync(webBuildDir) &&
     fs.existsSync(path.join(webBuildDir, "index.html"));
   if (hasWebBuild) {
+    const webExpoAssetsDir = path.join(webBuildDir, "_expo");
+    if (fs.existsSync(webExpoAssetsDir)) {
+      app.use("/_expo", express.static(webExpoAssetsDir));
+    }
+    const webFavicon = path.join(webBuildDir, "favicon.ico");
+    if (fs.existsSync(webFavicon)) {
+      app.get("/favicon.ico", (_req, res) => res.sendFile(webFavicon));
+    }
     app.use("/web", express.static(webBuildDir));
     app.get(/^\/web(\/.*)?$/, (_req, res) => {
       return res.sendFile(path.join(webBuildDir, "index.html"));
@@ -255,6 +302,7 @@ function setupErrorHandler(app: express.Application) {
 
 (async () => {
   setupCors(app);
+  setupRateLimiting(app);
   setupBodyParsing(app);
   setupRequestLogging(app);
 
