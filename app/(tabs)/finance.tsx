@@ -311,7 +311,7 @@ export default function FinanceScreen() {
 
   const scopeLabel = useMemo(() => {
     if (effectiveScope === "all") return "အားလုံး";
-    if (effectiveScope === "self") return "ကိုယ်ပိုင်";
+    if (effectiveScope === "self") return "ကိုယ်တိုင်";
     const selectedName = members.find((member: any) => member.id === scopedMemberId)?.name || "";
     if (scopedMemberId === "__none__") return "ရွေးချယ်ထားသူ";
     return selectedName ? `${selectedName} (${scopedMemberId})` : scopedMemberId;
@@ -425,10 +425,7 @@ export default function FinanceScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { flexDirection: 'column', alignItems: 'stretch', gap: 5 }]}>
-        <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", marginHorizontal: 50 }}>
-          <Pressable onPress={() => router.replace("/")} style={{ padding: 4, position: "absolute", left: 0, zIndex: 10 }}>
-            <Ionicons name="home" size={24} color={Colors.light.text} />
-          </Pressable>
+        <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center" }}>
           <View style={styles.headerButtons}>
             {canManageFinance && (
               <Pressable

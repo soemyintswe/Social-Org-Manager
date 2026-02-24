@@ -21,7 +21,6 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AccessDenied from "@/components/AccessDenied";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
@@ -858,12 +857,9 @@ export default function EventsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-        <Pressable onPress={() => router.replace("/")} style={{ marginRight: 5, padding: 4 }}>
-          <Ionicons name="home" size={22} color={Colors.light.text} />
-        </Pressable>
         <Text style={styles.headerTitle}>အသင်းသို့သတင်းပို့</Text>
         {canCreateEvent ? (
-          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.headerActionBtn, { marginRight: 40 }]}>
+          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={styles.headerActionBtn}>
             <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
             <Text style={styles.headerActionText}>အသစ်</Text>
           </Pressable>
@@ -1707,8 +1703,6 @@ export default function EventsScreen() {
           </View>
         </View>
       </Modal>
-
-      <FloatingTabMenu />
     </View>
   );
 }
@@ -1819,3 +1813,4 @@ const styles = StyleSheet.create({
   typeText: { color: Colors.light.textSecondary, fontSize: 13, fontFamily: "Inter_500Medium" },
   typeTextActive: { color: Colors.light.tint, fontFamily: "Inter_700Bold" },
 });
+

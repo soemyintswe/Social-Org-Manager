@@ -14,7 +14,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -115,7 +114,7 @@ export default function ReportsScreen() {
 
   const scopeLabel = useMemo(() => {
     if (effectiveScope === "all") return "အားလုံး";
-    if (effectiveScope === "self") return "ကိုယ်ပိုင်";
+    if (effectiveScope === "self") return "ကိုယ်တိုင်";
     if (scopedMemberId === "__none__") return "ရွေးချယ်ထားသူ";
     const selectedName = members.find((member: any) => member.id === scopedMemberId)?.name || "";
     return selectedName ? `${selectedName} (${scopedMemberId})` : scopedMemberId;
@@ -458,12 +457,7 @@ export default function ReportsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-          <Pressable onPress={() => router.replace("/")} style={{ padding: 4, position: "absolute", left: 0, zIndex: 10 }}>
-            <Ionicons name="home" size={24} color={Colors.light.text} />
-          </Pressable>
-
-
-        <Text style={[styles.title, { marginLeft: 70 }]}>အစီရင်ခံစာ - {scopeLabel}</Text>
+        <Text style={styles.title}>အစီရင်ခံစာ - {scopeLabel}</Text>
         <View style={styles.headerActions}>
           <Pressable style={styles.headerIconBtn} onPress={generatePdf}>
             <Ionicons name="print-outline" size={22} color={Colors.light.text} />
@@ -951,7 +945,7 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
   title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
-  headerActions: { flexDirection: "row", alignItems: "center", marginRight: 108 },
+  headerActions: { flexDirection: "row", alignItems: "center" },
   headerIconBtn: { padding: 8 },
   filterSection: { paddingHorizontal: 20, marginBottom: 15, gap: 10 },
   scopeCard: {

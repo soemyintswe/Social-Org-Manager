@@ -28,7 +28,6 @@ import {
   type Member,
   type MemberStatus,
 } from "@/lib/types";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import AccessDenied from "@/components/AccessDenied";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { formatPhoneForDisplay, parseGregorianDate } from "@/lib/member-utils";
@@ -331,9 +330,6 @@ export default function MembersScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
         <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-          <Pressable onPress={() => router.replace("/")} style={{ marginRight: 10 }}>
-            <Ionicons name="home" size={24} color={Colors.light.text} />
-          </Pressable>
           <Text style={[styles.headerTitle, { textAlign: "left", flex: 0, marginRight: 10 }]}>
             အသင်းဝင်များ ({sortedMembers.length}{sortedMembers.length !== sourceMembers.length ? ` / ${sourceMembers.length}` : ""})
           </Text>
@@ -695,8 +691,6 @@ export default function MembersScreen() {
           </View>
         </View>
       </Modal>
-
-      <FloatingTabMenu />
     </View>
   );
 }
@@ -795,3 +789,4 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: Colors.light.tint, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 },
   saveText: { color: "white", fontWeight: "bold" },
 });
+

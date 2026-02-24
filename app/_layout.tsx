@@ -17,8 +17,11 @@ import {
   Text,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import FloatingTabMenu from "@/components/FloatingTabMenu";
 import { queryClient } from "@/lib/query-client";
 import { DataProvider } from "@/lib/DataContext";
 import { AuthProvider, useAuth } from "@/lib/AuthContext";
@@ -88,9 +91,16 @@ function isLikelyGitLfsPointer(content: string): boolean {
 }
 
 function RootLayoutNav() {
-  const { isAuthenticated, loading, recordActivity } = useAuth();
+  const { isAuthenticated, loading, recordActivity, currentUser, currentMember } = useAuth();
+  const insets = useSafeAreaInsets();
   const segments = useSegments();
   const router = useRouter();
+  const inLogin = (segments[0] as string) === "sign-in";
+  const topIdentityName = String(currentMember?.name || currentUser?.displayName || "").trim();
+  const topIdentityMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
+  const topIdentityText = topIdentityName && topIdentityMemberId
+    ? `${topIdentityName} (${topIdentityMemberId})`
+    : (topIdentityName || topIdentityMemberId);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [updatingNow, setUpdatingNow] = useState(false);
@@ -101,7 +111,6 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (loading) return;
-    const inLogin = (segments[0] as string) === "sign-in";
     if (!isAuthenticated && !inLogin) {
       router.replace("/sign-in" as any);
       return;
@@ -109,7 +118,7 @@ function RootLayoutNav() {
     if (isAuthenticated && inLogin) {
       router.replace("/" as any);
     }
-  }, [isAuthenticated, loading, segments, router]);
+  }, [isAuthenticated, loading, inLogin, router]);
 
   useEffect(() => {
     if (loading || Platform.OS === "web") return;
@@ -325,34 +334,59 @@ function RootLayoutNav() {
 
   return (
     <>
-      <Stack screenOptions={{ headerBackTitle: "Back" }}>
-        <Stack.Screen name="sign-in" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="add-member" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="add-event" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="add-group" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="add-transaction" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="add-loan" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="account-settings" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="event-detail" options={{ headerShown: false }} />
-        <Stack.Screen name="member-detail" options={{ headerShown: false }} />
-        <Stack.Screen name="member-change-approvals" options={{ headerShown: false }} />
-        <Stack.Screen name="group-detail" options={{ headerShown: false }} />
-        <Stack.Screen name="loan-detail" options={{ headerShown: false }} />
-        <Stack.Screen name="qr-scanner" options={{ headerShown: false, presentation: "fullScreenModal" }} />
-        <Stack.Screen name="member-card" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="data-management" options={{ headerShown: false }} />
-        <Stack.Screen name="phone-transfer" options={{ headerShown: false, presentation: "modal" }} />
-        <Stack.Screen name="member-data-management" options={{ headerShown: false }} />
-        <Stack.Screen name="import-members" options={{ headerShown: false }} />
-        <Stack.Screen name="settings" options={{ headerShown: false }} />
-        <Stack.Screen name="member-payment-requests" options={{ headerShown: false }} />
-        <Stack.Screen name="members" options={{ headerShown: false }} />
-        <Stack.Screen name="events" options={{ headerShown: false }} />
-        <Stack.Screen name="messages" options={{ headerShown: false }} />
-        <Stack.Screen name="loans" options={{ headerShown: false }} />
-        <Stack.Screen name="expense-claims" options={{ headerShown: false }} />
-      </Stack>
+      <View style={styles.rootShell}>
+        {isAuthenticated && !inLogin ? (
+          <View style={[styles.topIdentityBar, { paddingTop: insets.top + 4 }]}>
+            <View style={styles.topIdentityRow}>
+              <Pressable
+                style={styles.topIdentityIconBtn}
+                onPress={() => router.replace("/" as any)}
+                accessibilityRole="button"
+                accessibilityLabel="Home"
+              >
+                <Ionicons name="home" size={19} color="#fff" />
+              </Pressable>
+
+              <Text style={styles.topIdentityText} numberOfLines={1}>
+                {topIdentityText || "အသုံးပြုသူ"}
+              </Text>
+
+              <FloatingTabMenu mode="topbar" containerStyle={styles.topIdentityMenuWrap} />
+            </View>
+          </View>
+        ) : null}
+
+        <View style={styles.stackHost}>
+          <Stack screenOptions={{ headerBackTitle: "Back" }}>
+            <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="add-member" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="add-event" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="add-group" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="add-transaction" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="add-loan" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="account-settings" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="event-detail" options={{ headerShown: false }} />
+            <Stack.Screen name="member-detail" options={{ headerShown: false }} />
+            <Stack.Screen name="member-change-approvals" options={{ headerShown: false }} />
+            <Stack.Screen name="group-detail" options={{ headerShown: false }} />
+            <Stack.Screen name="loan-detail" options={{ headerShown: false }} />
+            <Stack.Screen name="qr-scanner" options={{ headerShown: false, presentation: "fullScreenModal" }} />
+            <Stack.Screen name="member-card" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="data-management" options={{ headerShown: false }} />
+            <Stack.Screen name="phone-transfer" options={{ headerShown: false, presentation: "modal" }} />
+            <Stack.Screen name="member-data-management" options={{ headerShown: false }} />
+            <Stack.Screen name="import-members" options={{ headerShown: false }} />
+            <Stack.Screen name="settings" options={{ headerShown: false }} />
+            <Stack.Screen name="member-payment-requests" options={{ headerShown: false }} />
+            <Stack.Screen name="members" options={{ headerShown: false }} />
+            <Stack.Screen name="events" options={{ headerShown: false }} />
+            <Stack.Screen name="messages" options={{ headerShown: false }} />
+            <Stack.Screen name="loans" options={{ headerShown: false }} />
+            <Stack.Screen name="expense-claims" options={{ headerShown: false }} />
+          </Stack>
+        </View>
+      </View>
 
       <Modal
         transparent
@@ -443,6 +477,48 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
+  rootShell: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+  stackHost: {
+    flex: 1,
+  },
+  topIdentityBar: {
+    paddingHorizontal: 14,
+    paddingBottom: 8,
+    backgroundColor: "#ECFEFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#BAE6FD",
+  },
+  topIdentityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  topIdentityIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.light.tint,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  topIdentityMenuWrap: {
+    width: 36,
+  },
+  topIdentityText: {
+    fontSize: 13,
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
+    flex: 1,
+    textAlign: "center",
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",

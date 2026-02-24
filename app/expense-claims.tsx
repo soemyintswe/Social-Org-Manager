@@ -6,7 +6,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AccessDenied from "@/components/AccessDenied";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
@@ -674,14 +673,10 @@ export default function ExpenseClaimsScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}> 
       <View style={styles.header}>
         <View style={styles.topRow}>
-          <Pressable style={styles.homeBtn} onPress={() => router.replace("/" as any)}>
-            <Ionicons name="home-outline" size={20} color={Colors.light.text} />
-          </Pressable>
           <Pressable style={styles.createBtn} onPress={openClaimModal}>
             <Ionicons name="add-circle-outline" size={18} color="white" />
             <Text style={styles.createBtnText}>ငွေတောင်းခံရန်</Text>
           </Pressable>
-          <View style={styles.rightSpacer} />
         </View>
         <Text style={styles.headerTitle}>ငွေတောင်းခံလွှာများ</Text>
       </View>
@@ -896,8 +891,6 @@ export default function ExpenseClaimsScreen() {
       <Modal visible={showPicker} transparent animationType="fade" onRequestClose={() => setShowPicker(false)}>
         <View style={styles.modalWrap}><View style={styles.pickerBox}><Text style={styles.modalTitle}>{pickerTitle}</Text><ScrollView style={{ maxHeight: 340 }}>{pickerOptions.map((opt: { id: string; label: string }) => { const active = getCurrentPickerSelected() === opt.id; return (<Pressable key={opt.id} style={[styles.pickerRow, active && styles.pickerRowActive]} onPress={() => onSelectPickerOption(opt.id)}><Text style={[styles.pickerText, active && styles.pickerTextActive]}>{opt.label}</Text></Pressable>); })}</ScrollView><View style={styles.rowEnd}><Pressable onPress={() => setShowPicker(false)}><Text style={styles.cancel}>Close</Text></Pressable></View></View></View>
       </Modal>
-
-      <FloatingTabMenu />
     </View>
   );
 }
@@ -905,9 +898,7 @@ export default function ExpenseClaimsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   header: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: "white" },
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  homeBtn: { width: 38, height: 38, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.surface },
-  rightSpacer: { width: 38, height: 38 },
+  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
   createBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 38, borderRadius: 10, backgroundColor: Colors.light.tint },
   createBtnText: { color: "white", fontSize: 13, fontFamily: "Inter_700Bold" },
   headerTitle: { marginTop: 10, fontSize: 16, color: Colors.light.text, fontFamily: "Inter_700Bold" },
@@ -965,3 +956,4 @@ const styles = StyleSheet.create({
   pickerText: { color: Colors.light.text, fontSize: 13 },
   pickerTextActive: { color: Colors.light.tint, fontFamily: "Inter_700Bold" },
 });
+

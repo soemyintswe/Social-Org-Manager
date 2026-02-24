@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.31",
-  "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/v1.1.31/releases/release-lan-sync-v1.1.31-202602231233.apk",
-  "notes": "Version 1.1.31: added APK download progress bar with percent/MB, background-hide update flow, cloud-first default sync config, and dashboard pull-to-refresh.",
-  "force": false,
-  "publishedAt": "2026-02-23T05:03:00Z"
+    "latestVersion":  "1.1.32",
+    "minimumVersion":  "1.0.0",
+    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.32-202602241826.apk",
+    "notes":  "Version 1.1.32: removed duplicate page-level Home buttons and standardized global top identity bar navigation.",
+    "force":  false,
+    "publishedAt":  "2026-02-24T11:56:58Z"
 }

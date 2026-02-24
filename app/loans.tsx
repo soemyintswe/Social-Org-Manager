@@ -5,7 +5,6 @@ import {
   View,
   FlatList,
   Pressable,
-  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -14,7 +13,6 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 
 export default function LoansScreen() {
   const insets = useSafeAreaInsets();
@@ -63,14 +61,9 @@ export default function LoansScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-          <Pressable onPress={() => router.replace('/')} style={{ marginRight: 10, padding: 4 }}>
-            <Ionicons name="home" size={24} color={Colors.light.text} />
-          </Pressable>
-          <Text style={styles.headerTitle}>ချေးငွေစာရင်း</Text>
-        </View>
+        <Text style={styles.headerTitle}>ချေးငွေစာရင်း</Text>
         {canCreateFinance ? (
-          <Pressable onPress={() => router.push("/add-loan" as any)} style={[styles.headerActionBtn, { marginRight: 95 }]}>
+          <Pressable onPress={() => router.push("/add-loan" as any)} style={styles.headerActionBtn}>
             <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
             <Text style={styles.headerActionText}>အသစ်</Text>
           </Pressable>
@@ -136,7 +129,6 @@ export default function LoansScreen() {
           <Text style={styles.emptyText}>လက်ရှိ ချေးငွေရယူထားသူ မရှိပါ။</Text>
         }
       />
-      <FloatingTabMenu />
     </View>
   );
 }
@@ -205,3 +197,4 @@ const styles = StyleSheet.create({
   },
   emptyText: { textAlign: "center", color: Colors.light.textSecondary, marginTop: 20 },
 });
+

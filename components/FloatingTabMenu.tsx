@@ -1,17 +1,28 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, type StyleProp, type ViewStyle } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 
-export default function FloatingTabMenu() {
+type FloatingTabMenuProps = {
+  mode?: "floating" | "topbar";
+  containerStyle?: StyleProp<ViewStyle>;
+  menuTopOffset?: number;
+};
+
+export default function FloatingTabMenu({
+  mode = "floating",
+  containerStyle,
+  menuTopOffset,
+}: FloatingTabMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { can, signOut, isAuthenticated } = useAuth();
+  const isTopBar = mode === "topbar";
 
   const menuItems = useMemo(() => {
     return [
@@ -76,7 +87,7 @@ export default function FloatingTabMenu() {
         route: "/system",
         enabled: true,
       },
-    {
+      {
         name: "ချိန်ညှိရန်",
         icon: "options-outline",
         route: "/account-settings",
@@ -95,7 +106,59 @@ export default function FloatingTabMenu() {
     router.replace("/sign-in");
   };
 
- if (!isAuthenticated) return null;
+  if (!isAuthenticated) return null;
+
+  const menuContent = (
+    <View style={styles.menuContainer}>
+      {menuItems.map((item) => {
+        const isActive = pathname === item.route || (item.route !== "/" && pathname.startsWith(item.route));
+        return (
+          <Pressable
+            key={item.route}
+            style={[styles.menuItem, isActive && styles.menuItemActive]}
+            onPress={() => handleNavigate(item.route)}
+          >
+            <Ionicons name={item.icon as any} size={20} color={isActive ? Colors.light.tint : Colors.light.text} />
+            <Text style={[styles.menuText, isActive && styles.menuTextActive]}>{item.name}</Text>
+          </Pressable>
+        );
+      })}
+      <Pressable style={styles.signOutItem} onPress={() => void handleSignOut()}>
+        <Ionicons name="log-out-outline" size={20} color="#EF4444" />
+        <Text style={styles.signOutText}>Sign Out</Text>
+      </Pressable>
+    </View>
+  );
+
+  if (isTopBar) {
+    return (
+      <>
+        <View style={[styles.topBarButtonWrap, containerStyle]}>
+          <Pressable style={styles.topBarFab} onPress={() => setIsOpen(true)}>
+            <Ionicons name="menu" size={20} color="#fff" />
+          </Pressable>
+        </View>
+
+        <Modal transparent animationType="fade" visible={isOpen} onRequestClose={() => setIsOpen(false)}>
+          <View style={styles.modalRoot}>
+            <Pressable style={styles.modalOverlay} onPress={() => setIsOpen(false)} />
+            <View
+              pointerEvents="box-none"
+              style={[
+                styles.modalMenuAnchor,
+                {
+                  top: menuTopOffset ?? insets.top + 52,
+                  right: insets.right + 12,
+                },
+              ]}
+            >
+              {menuContent}
+            </View>
+          </View>
+        </Modal>
+      </>
+    );
+  }
 
   return (
     <>
@@ -103,7 +166,7 @@ export default function FloatingTabMenu() {
         <Pressable style={styles.overlay} onPress={() => setIsOpen(false)} />
       )}
       
-      <View style={[styles.container, { top: insets.top + 10, right: 20 }]}>
+      <View style={[styles.container, { top: insets.top + 10, right: 20 }, containerStyle]}>
         <Pressable
           style={[styles.fab, isOpen && styles.fabActive]}
           onPress={() => setIsOpen(!isOpen)}
@@ -112,40 +175,48 @@ export default function FloatingTabMenu() {
           <Text style={styles.fabText}>Menu</Text>
         </Pressable>
 
-        {isOpen && (
-          <View style={styles.menuContainer}>
-            {menuItems.map((item) => {
-              const isActive = pathname === item.route || (item.route !== '/' && pathname.startsWith(item.route));
-              return (
-                <Pressable
-                  key={item.route}
-                  style={[styles.menuItem, isActive && styles.menuItemActive]}
-                  onPress={() => handleNavigate(item.route)}
-                >
-                  <Ionicons name={item.icon as any} size={20} color={isActive ? Colors.light.tint : Colors.light.text} />
-                  <Text style={[styles.menuText, isActive && styles.menuTextActive]}>{item.name}</Text>
-                </Pressable>
-              );
-            })}
-            <Pressable style={styles.signOutItem} onPress={() => void handleSignOut()}>
-              <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-              <Text style={styles.signOutText}>Sign Out</Text>
-            </Pressable>
-          </View>
-        )}
-     </View>
+        {isOpen && menuContent}
+      </View>
     </>
   );
 }
 
 const styles = StyleSheet.create({
+  topBarButtonWrap: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
+  topBarFab: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.light.tint,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  modalRoot: {
+    flex: 1,
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.3)",
+  },
+  modalMenuAnchor: {
+    position: "absolute",
+    zIndex: 10000,
+  },
   container: {
-    position: 'absolute',
-    alignItems: 'flex-end',
+    position: "absolute",
+    alignItems: "flex-end",
     zIndex: 9999,
   },
   fab: {
-    flexDirection: 'row',
+    flexDirection: "row",
     height: 44,
     paddingHorizontal: 16,
     borderRadius: 22,
@@ -169,7 +240,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: "rgba(0,0,0,0.3)",
     zIndex: 9998,
   },
   menuContainer: {
@@ -192,7 +263,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   menuItemActive: {
-    backgroundColor: Colors.light.tint + '15',
+    backgroundColor: Colors.light.tint + "15",
   },
   menuText: {
     fontSize: 15,

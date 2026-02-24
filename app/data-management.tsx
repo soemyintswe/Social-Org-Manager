@@ -27,7 +27,6 @@ import Colors from "@/constants/colors";
 import { clearAllData, exportData, mergeData, restoreData } from "@/lib/storage";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import AccessDenied from "@/components/AccessDenied";
 
 export default function DataManagementScreen() {
@@ -363,11 +362,7 @@ export default function DataManagementScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.replace("/")} style={[styles.backBtn, { marginLeft: 130 }]}>
-          <Ionicons name="home" size={24} color={Colors.light.text} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { flex: 1, textAlign: 'center' }]}>System Settings</Text>
-        <View style={{ width: 24 }} />
+        <Text style={styles.headerTitle}>System Settings</Text>
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
@@ -471,7 +466,7 @@ export default function DataManagementScreen() {
             onPress={() => router.replace("/")}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="home" size={20} color="#fff" style={{ marginRight: 8 }} />
+              <Ionicons name="arrow-back-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
               <Text style={styles.btnText}>Dashboard သို့ပြန်သွားရန်</Text>
             </View>
           </Pressable>
@@ -492,17 +487,14 @@ export default function DataManagementScreen() {
           </View>
         </View>
       </Modal>
-
-      <FloatingTabMenu />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: Colors.light.surface },
+  header: { flexDirection: "row", justifyContent: "center", alignItems: "center", paddingHorizontal: 20, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: Colors.light.surface },
   headerTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  backBtn: { padding: 4 },
   content: { padding: 20, flexGrow: 1 },
   instruction: { fontSize: 14, color: Colors.light.text, marginBottom: 12, fontFamily: "Inter_400Regular" },
   input: { flex: 1, minHeight: 250, backgroundColor: Colors.light.surface, borderRadius: 12, padding: 16, fontSize: 12, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border, marginBottom: 20 },
@@ -570,3 +562,4 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 });
+

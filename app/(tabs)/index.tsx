@@ -112,12 +112,22 @@ export default function DashboardScreen() {
   const { members, events, transactions, loans, memberChangeRequests, chatThreads, chatMessages, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
+  const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
+  const userIdentityLabel = useMemo(() => {
+    if (userDisplayName && userMemberId) return `${userDisplayName} (${userMemberId})`;
+    if (userDisplayName) return userDisplayName;
+    if (userMemberId) return `(${userMemberId})`;
+    return "";
+  }, [userDisplayName, userMemberId]);
   const canCreateMember = can("members.create") || can("members.manage");
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canApproveMemberChanges = can("members.approve_changes");
   const canProposeMemberChanges = can("members.propose_changes");
   const canViewOrgFinanceSummary =
     currentUser?.systemRole === "admin" ||
+    can("finance.view_summary") ||
+    can("finance.view_detail") ||
+    can("finance.view_all") ||
     isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
   const hasPersonalFinanceProfile = Boolean(currentUser?.memberId);
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
@@ -237,9 +247,18 @@ export default function DashboardScreen() {
     return m ? (m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim()) : "";
   };
 
-  const recentTxns: Transaction[] = [...(transactions || [])]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 5);
+  const recentTxns: Transaction[] = useMemo(() => {
+    const source: Transaction[] = canViewOrgFinanceSummary
+      ? [...(transactions || [])]
+      : [...(transactions || [])].filter((txn: any) => {
+          const myMemberId = String(currentUser?.memberId || "").trim();
+          if (!myMemberId) return false;
+          return String(txn?.memberId || "").trim() === myMemberId;
+        });
+    return source
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 5);
+  }, [transactions, canViewOrgFinanceSummary, currentUser?.memberId]);
   const recentEvents: OrgEvent[] = [...(events || [])]
     .sort((a, b) => getEventTime(b) - getEventTime(a))
     .slice(0, 5);
@@ -329,6 +348,7 @@ export default function DashboardScreen() {
   }, [transactions, accountSettings]);
 
   const eventCount = Array.isArray(events) ? events.length : 0;
+  const formatSignedDifference = (value: number) => `${value >= 0 ? "+" : "-"} ${formatCurrency(Math.abs(value))}`;
   const personalFinanceStats = useMemo(() => {
     const myMemberId = String(currentUser?.memberId || "");
     if (!myMemberId) return { income: 0, expense: 0, net: 0 };
@@ -729,10 +749,10 @@ export default function DashboardScreen() {
       }
     >
       <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>မင်္ဂလာပါ{userDisplayName ? `၊ ${userDisplayName}` : ""}</Text>
-          <Text style={styles.orgName}>OrgHub Dashboard</Text>
-        </View>
+        <Text style={styles.orgName}>OrgHub Dashboard</Text>
+        <Text style={styles.headerIdentity} numberOfLines={1}>
+          {userIdentityLabel || "အသုံးပြုသူ"}
+        </Text>
       </View>
 
       <View style={styles.statsGrid}>
@@ -752,6 +772,7 @@ export default function DashboardScreen() {
           color="#8B5CF6" 
           onPress={() => router.push("/members" as any)} 
         />
+        <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
         {canViewOrgFinanceSummary && (
           <StatCard
             icon="wallet"
@@ -772,14 +793,14 @@ export default function DashboardScreen() {
         {(!canViewOrgFinanceSummary || hasPersonalFinanceProfile) && (
           <StatCard
             icon="wallet"
-            label="ကိုယ်ပိုင်ငွေစာရင်း"
+            label="ကိုယ်တိုင်ငွေစာရင်း"
             value={
               <View>
                 <View style={{ marginBottom: 4 }}>
                   <Text style={styles.subBalanceText}>အသင်းသို့ပေးသွင်းငွေများ: {formatCurrency(personalFinanceStats.income)}</Text>
                   <Text style={styles.subBalanceText}>အသင်းမှထုတ်ယူငွေ: {formatCurrency(personalFinanceStats.expense)}</Text>
                 </View>
-                <Text style={styles.statValue}>စုစုပေါင်းကွာဟချက်: {formatCurrency(personalFinanceStats.net)}</Text>
+                <Text style={styles.statValue}>ခြားနားချက်: {formatSignedDifference(personalFinanceStats.net)}</Text>
               </View>
             }
             color="#10B981"
@@ -798,13 +819,12 @@ export default function DashboardScreen() {
         {(!canViewOrgFinanceSummary || hasPersonalFinanceProfile) && (
           <StatCard
             icon="cash"
-            label="ချေးငွေလက်ကျန် (ကိုယ်ပိုင်)"
+            label="ချေးငွေလက်ကျန် (ကိုယ်တိုင်)"
             value={formatCurrency(personalLoanOutstanding)}
             color="#F59E0B"
             onPress={() => router.push("/loans" as any)}
           />
         )}
-        <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
       </View>
 
       <View style={styles.noticeRow}>
@@ -954,8 +974,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 20 },
-  greeting: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   orgName: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  headerIdentity: { flex: 1, marginLeft: 12, fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, textAlign: "right" },
   profileBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "white", justifyContent: "center", alignItems: "center", elevation: 2 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 15, gap: 10, marginBottom: 25 },
   noticeRow: { flexDirection: "row", paddingHorizontal: 20, gap: 10, marginBottom: 18 },
