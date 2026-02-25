@@ -5,6 +5,7 @@ import {
   View,
   FlatList,
   Pressable,
+  ScrollView,
   Platform,
   Alert,
   ActivityIndicator,
@@ -21,9 +22,12 @@ import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
 import { Transaction, Loan, CATEGORY_LABELS, type MemberPaymentRequestKind } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "@/lib/loan-metrics";
 
 type Tab = "transactions" | "transfers" | "loans";
 type FinanceViewScope = "all" | "self" | "member";
+
+const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} KS`;
 
 function BalanceCard({ label, amount, icon, color }: {
   label: string;
@@ -33,13 +37,24 @@ function BalanceCard({ label, amount, icon, color }: {
 }) {
   return (
     <View style={[styles.balanceCard, { borderLeftColor: color }]}>
-      <View style={[styles.balanceIcon, { backgroundColor: color + "15" }]}>
-        <Ionicons name={icon} size={18} color={color} />
+      <View style={styles.balanceLeftGroup}>
+        <View style={[styles.balanceIcon, { backgroundColor: color + "15" }]}>
+          <Ionicons name={icon} size={16} color={color} />
+        </View>
+        <Text style={styles.balanceLabel} numberOfLines={1}>{label}</Text>
       </View>
-      <Text style={styles.balanceLabel}>{label}</Text>
-      <Text style={[styles.balanceAmount, { color }]}>
+      <Text style={[styles.balanceAmount, { color }]} numberOfLines={1}>
         {amount < 0 ? "-" : ""}{Math.abs(amount).toLocaleString()} <Text style={styles.currencyText}>KS</Text>
       </Text>
+    </View>
+  );
+}
+
+function MiniMetricCard({ title, value, color }: { title: string; value: number; color: string }) {
+  return (
+    <View style={[styles.miniMetricCard, { borderLeftColor: color }]}>
+      <Text style={styles.miniMetricTitle}>{title}</Text>
+      <Text style={[styles.miniMetricValue, { color }]}>{formatKs(value)}</Text>
     </View>
   );
 }
@@ -125,12 +140,14 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
   );
 }
 
-function LoanRow({ loan, memberName, outstanding }: {
+function LoanRow({ loan, memberName, outstanding, metrics }: {
   loan: Loan;
   memberName?: string;
   outstanding: number;
+  metrics: LoanComputedMetrics;
 }) {
   const isPaid = loan.status === "paid";
+  const principalAmount = getLoanPrincipal(loan as any);
 
   const dateStr = useMemo(() => {
     const d = loan.issueDate as any;
@@ -145,8 +162,7 @@ function LoanRow({ loan, memberName, outstanding }: {
   return (
     <Pressable
       style={styles.loanRow}
-      // Route path error အတွက် cast လုပ်ပေးထားပါသည်
-      onPress={() => router.push({ pathname: "/loan-details", params: { id: loan.id } } as any)}
+      onPress={() => router.push({ pathname: "/loan-detail", params: { id: loan.id } } as any)}
     >
       <View style={[styles.loanIcon, { backgroundColor: (isPaid ? Colors.light.success : "#F59E0B") + "15" }]}>
         <Ionicons
@@ -158,16 +174,17 @@ function LoanRow({ loan, memberName, outstanding }: {
       <View style={styles.loanInfo}>
         <Text style={styles.loanName}>{memberName || "အမည်မသိ"}</Text>
         <Text style={styles.loanDesc}>
-          အတိုး {loan.interestRate}% • {loan.principal.toLocaleString()} KS
+          အတိုး {metrics.appliedRate}% • အရင်း {formatKs(principalAmount)}
         </Text>
-        <Text style={styles.loanDate}>
-          {dateStr}
-        </Text>
+        <Text style={styles.loanDate}>{dateStr}</Text>
+        <View style={styles.loanInlineStats}>
+          <Text style={styles.loanInlineStat}>ပြန်ဆပ်ပြီး: {formatKs(metrics.principalRepaid)}</Text>
+          <Text style={styles.loanInlineStat}>အတိုးကျသင့်: {formatKs(metrics.interestPayable)}</Text>
+          <Text style={styles.loanInlineStat}>အတိုးကျန်: {formatKs(metrics.interestOutstanding)}</Text>
+        </View>
       </View>
       <View style={styles.loanRight}>
-        <Text style={styles.loanOutstanding}>
-          {outstanding.toLocaleString()} KS
-        </Text>
+        <Text style={styles.loanOutstanding}>{formatKs(outstanding)}</Text>
         <View style={[styles.loanStatusBadge, isPaid ? styles.loanPaid : styles.loanActive]}>
           <Text style={[styles.loanStatusText, { color: isPaid ? Colors.light.success : "#3B82F6" }]}>
             {isPaid ? "ဆပ်ပြီး" : "ကျန်ရှိ"}
@@ -194,7 +211,7 @@ export default function FinanceScreen() {
   const { can, currentUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
-  const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1)); // Jan 1st of current year
+  const [startDate, setStartDate] = useState(new Date(2018, 0, 1));
   const [endDate, setEndDate] = useState(new Date());
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
@@ -406,6 +423,33 @@ export default function FinanceScreen() {
     return { income, expense, net: income - expense };
   }, [visibleTxns]);
 
+  const loanMetricRows = useMemo(() => {
+    return (visibleLoans || []).map((loan: any) => {
+      const metrics = computeLoanMetrics(loan, balanceSourceTransactions as any);
+      return { loan, metrics };
+    });
+  }, [visibleLoans, balanceSourceTransactions]);
+
+  const loanPrincipalSummary = useMemo(() => {
+    const disbursed = visibleTxns
+      .filter((t: any) => String(t?.category || "") === "loan_disbursement")
+      .reduce((sum: number, t: any) => sum + Number(t?.amount || 0), 0);
+    const repaid = visibleTxns
+      .filter((t: any) => String(t?.category || "") === "loan_repayment")
+      .reduce((sum: number, t: any) => sum + Number(t?.amount || 0), 0);
+    const outstanding = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.principalOutstanding || 0), 0);
+    return { disbursed, repaid, outstanding };
+  }, [visibleTxns, loanMetricRows]);
+
+  const loanInterestSummary = useMemo(() => {
+    const base = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.baseInterest || 0), 0);
+    const relief = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestRelief || 0), 0);
+    const payable = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPayable || 0), 0);
+    const paid = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPaid || 0), 0);
+    const outstanding = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestOutstanding || 0), 0);
+    return { base, relief, payable, paid, outstanding };
+  }, [loanMetricRows]);
+
   const isAllScope = effectiveScope === "all";
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -464,26 +508,28 @@ export default function FinanceScreen() {
 
       {canViewFinanceDetail && (
         <View style={styles.scopeCard}>
-          <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
-          <View style={styles.scopeRow}>
-            <Pressable
-              style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]}
-              onPress={() => setViewScope("all")}
-            >
-              <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]}
-              onPress={() => setViewScope("self")}
-            >
-              <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]}
-              onPress={() => setViewScope("member")}
-            >
-              <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြား</Text>
-            </Pressable>
+          <View style={styles.scopeTopRow}>
+            <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
+            <View style={styles.scopeRow}>
+              <Pressable
+                style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]}
+                onPress={() => setViewScope("all")}
+              >
+                <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]}
+                onPress={() => setViewScope("self")}
+              >
+                <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]}
+                onPress={() => setViewScope("member")}
+              >
+                <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြားသူ</Text>
+              </Pressable>
+            </View>
           </View>
 
           {viewScope === "member" && (
@@ -584,7 +630,7 @@ export default function FinanceScreen() {
           </>
         ) : (
           <>
-            <BalanceCard label="အသင်းသို့ပေးသွင်းငွေများ" amount={scopedFinanceStats.income} icon="arrow-down" color="#10B981" />
+            <BalanceCard label="အသင်းသို့ပေးသွင်းငွေ" amount={scopedFinanceStats.income} icon="arrow-down" color="#10B981" />
             <BalanceCard label="အသင်းမှထုတ်ယူငွေ" amount={scopedFinanceStats.expense} icon="arrow-up" color="#F43F5E" />
             <BalanceCard label="စုစုပေါင်းကွာဟချက်" amount={scopedFinanceStats.net} icon="wallet" color="#8B5CF6" />
           </>
@@ -671,6 +717,38 @@ export default function FinanceScreen() {
         }
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
+        ListHeaderComponent={
+          activeTab === "loans" ? (
+            <View style={styles.loanSummaryWrap}>
+              <Text style={styles.loanSummaryTitle}>ချေးငွေအရင်း စာရင်းချုပ်</Text>
+              <View style={styles.loanPrimaryRow}>
+                <View style={styles.loanPrimaryBox}>
+                  <Text style={styles.loanPrimaryLabel}>ထုတ်ချေးငွေ</Text>
+                  <Text style={[styles.loanPrimaryValue, { color: "#F59E0B" }]}>{formatKs(loanPrincipalSummary.disbursed)}</Text>
+                </View>
+                <View style={styles.loanPrimaryBox}>
+                  <Text style={styles.loanPrimaryLabel}>ပြန်ဆပ်ငွေ</Text>
+                  <Text style={[styles.loanPrimaryValue, { color: "#10B981" }]}>{formatKs(loanPrincipalSummary.repaid)}</Text>
+                </View>
+                <View style={styles.loanPrimaryBox}>
+                  <Text style={styles.loanPrimaryLabel}>ပြန်ဆပ်ရန်ကျန်ငွေ</Text>
+                  <Text style={[styles.loanPrimaryValue, { color: "#EF4444" }]}>{formatKs(loanPrincipalSummary.outstanding)}</Text>
+                </View>
+              </View>
+
+              <Text style={styles.loanSummaryTitle}>အတိုးကျသင့်ငွေ စာရင်းချုပ်</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.loanInterestRow}>
+                <MiniMetricCard title="မူလအတိုးကျသင့်ငွေ" value={loanInterestSummary.base} color="#8B5CF6" />
+                <MiniMetricCard title="အတိုးဖြေလျှော့ငွေ" value={loanInterestSummary.relief} color="#0EA5E9" />
+                <MiniMetricCard title="အတိုးဆပ်ရန်ကျသင့်ငွေ" value={loanInterestSummary.payable} color="#0369A1" />
+                <MiniMetricCard title="အတိုးဆပ်ပြီးငွေ" value={loanInterestSummary.paid} color="#16A34A" />
+                <MiniMetricCard title="အတိုးဆပ်ရန်ကျန်ငွေ" value={loanInterestSummary.outstanding} color="#DC2626" />
+              </ScrollView>
+
+              <Text style={styles.loanSummaryTitle}>ချေးငွေအသေးစိတ်စာရင်း</Text>
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => {
           if (activeTab === "transactions" || activeTab === "transfers") {
             const txn = item as Transaction;
@@ -690,11 +768,13 @@ export default function FinanceScreen() {
           } else {
             const loan = item as Loan;
             const member = members.find((m: any) => m.id === loan.memberId);
+            const metrics = computeLoanMetrics(loan as any, balanceSourceTransactions as any);
             return (
               <LoanRow
                 loan={loan}
                 memberName={member?.name}
                 outstanding={getLoanOutstanding(loan.id)}
+                metrics={metrics}
               />
             );
           }
@@ -834,16 +914,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  scopeTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   scopeLabel: {
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
     color: Colors.light.textSecondary,
-    marginBottom: 8,
   },
-  scopeRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  scopeRow: { flexDirection: "row", gap: 6 },
   scopeChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: Colors.light.border,
@@ -855,7 +935,7 @@ const styles = StyleSheet.create({
   },
   scopeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   scopeChipTextActive: { color: "white" },
-  memberPickerWrap: { gap: 8 },
+  memberPickerWrap: { gap: 8, marginTop: 8 },
   memberSearchInput: {
     backgroundColor: "#F8FAFC",
     borderRadius: 10,
@@ -896,26 +976,48 @@ const styles = StyleSheet.create({
   balanceCard: {
     flex: 1,
     minWidth: "45%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     backgroundColor: "white",
-    borderRadius: 16,
-    padding: 15,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
     borderLeftWidth: 4,
     ...Platform.select({
       ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 },
       android: { elevation: 2 },
     }),
   },
+  balanceLeftGroup: { flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0, marginRight: 8 },
   balanceIcon: {
-    width: 32,
-    height: 32,
+    width: 26,
+    height: 26,
     borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginRight: 6,
   },
-  balanceLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  balanceAmount: { fontSize: 16, fontFamily: "Inter_700Bold", marginTop: 4 },
-  currencyText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  balanceLabel: { fontSize: 11.5, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, flexShrink: 1 },
+  balanceAmount: { fontSize: 13.5, fontFamily: "Inter_700Bold" },
+  currencyText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  miniMetricCard: {
+    width: 220,
+    borderLeftWidth: 4,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  miniMetricTitle: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", flex: 1 },
+  miniMetricValue: { fontSize: 12.5, fontFamily: "Inter_700Bold" },
   quickActionsTitle: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
@@ -1015,12 +1117,57 @@ const styles = StyleSheet.create({
   loanName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   loanDesc: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 1 },
   loanDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  loanInlineStats: { marginTop: 4, gap: 2 },
+  loanInlineStat: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   loanRight: { alignItems: "flex-end", gap: 4 },
   loanOutstanding: { fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text },
   loanStatusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   loanStatusText: { fontSize: 10, fontFamily: "Inter_700Bold" },
   loanActive: { backgroundColor: "#3B82F6" + "15" },
   loanPaid: { backgroundColor: Colors.light.success + "15" },
+  loanSummaryWrap: {
+    marginBottom: 12,
+  },
+  loanSummaryTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  loanPrimaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 8,
+  },
+  loanPrimaryBox: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  loanPrimaryLabel: {
+    fontSize: 11,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    flex: 1,
+  },
+  loanPrimaryValue: {
+    fontSize: 12.5,
+    fontFamily: "Inter_700Bold",
+  },
+  loanInterestRow: {
+    paddingBottom: 4,
+    paddingRight: 10,
+  },
   emptyContainer: { alignItems: "center", marginTop: 50 },
   emptyText: { marginTop: 10, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   filterContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 20, marginBottom: 15 },

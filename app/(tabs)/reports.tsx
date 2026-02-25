@@ -150,8 +150,8 @@ export default function ReportsScreen() {
   const canViewAuditFlags = can("finance.audit_flag") || canViewAllFinanceRecords;
   const canChooseScope = canViewAllReports && canViewAllFinanceRecords;
   
-  // Default to Current Year Jan 1 to Today
-  const [pickerStartDate, setPickerStartDate] = useState(new Date(new Date().getFullYear(), 0, 1));
+  // Default to 2018-01-01 to Today
+  const [pickerStartDate, setPickerStartDate] = useState(new Date(2018, 0, 1));
   const [pickerEndDate, setPickerEndDate] = useState(new Date());
 
   const [startDate, setStartDate] = useState(pickerStartDate);
@@ -251,36 +251,16 @@ export default function ReportsScreen() {
   }, [reportTransactions]);
 
   const applyAllDateRange = useCallback(() => {
-    if (!reportTransactions?.length) {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), 0, 1);
-      start.setHours(12, 0, 0, 0);
-      now.setHours(12, 0, 0, 0);
-      setPickerStartDate(start);
-      setPickerEndDate(now);
-      setStartDate(start);
-      setEndDate(now);
-      setActiveFilterTag("all");
-      return;
-    }
-
-    let minDate = new Date(reportTransactions[0]?.date);
-    let maxDate = new Date(reportTransactions[0]?.date);
-    reportTransactions.forEach((t: any) => {
-      const d = new Date(t?.date);
-      if (Number.isNaN(d.getTime())) return;
-      if (d < minDate) minDate = d;
-      if (d > maxDate) maxDate = d;
-    });
-
-    minDate = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate(), 12, 0, 0, 0);
-    maxDate = new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate(), 12, 0, 0, 0);
-    setPickerStartDate(minDate);
-    setPickerEndDate(maxDate);
-    setStartDate(minDate);
-    setEndDate(maxDate);
+    const now = new Date();
+    const start = new Date(2018, 0, 1);
+    start.setHours(12, 0, 0, 0);
+    now.setHours(12, 0, 0, 0);
+    setPickerStartDate(start);
+    setPickerEndDate(now);
+    setStartDate(start);
+    setEndDate(now);
     setActiveFilterTag("all");
-  }, [reportTransactions]);
+  }, []);
 
   const applyYearDateRange = useCallback((year: number) => {
     const start = new Date(year, 0, 1);
@@ -1026,17 +1006,19 @@ export default function ReportsScreen() {
       </View>
       {canChooseScope && (
         <View style={styles.scopeCard}>
-          <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
-          <View style={styles.scopeRow}>
-            <Pressable style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]} onPress={() => setViewScope("all")}>
-              <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
-            </Pressable>
-            <Pressable style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]} onPress={() => setViewScope("self")}>
-              <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
-            </Pressable>
-            <Pressable style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]} onPress={() => setViewScope("member")}>
-              <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြားသူ</Text>
-            </Pressable>
+          <View style={styles.scopeTopRow}>
+            <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
+            <View style={styles.scopeRow}>
+              <Pressable style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]} onPress={() => setViewScope("all")}>
+                <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
+              </Pressable>
+              <Pressable style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]} onPress={() => setViewScope("self")}>
+                <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
+              </Pressable>
+              <Pressable style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]} onPress={() => setViewScope("member")}>
+                <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြားသူ</Text>
+              </Pressable>
+            </View>
           </View>
           {viewScope === "member" && (
             <View style={styles.memberPickerWrap}>
@@ -1723,16 +1705,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  scopeTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   scopeLabel: {
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
     color: Colors.light.textSecondary,
-    marginBottom: 8,
   },
-  scopeRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  scopeRow: { flexDirection: "row", gap: 6 },
   scopeChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: Colors.light.border,
@@ -1744,7 +1726,7 @@ const styles = StyleSheet.create({
   },
   scopeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   scopeChipTextActive: { color: "white" },
-  memberPickerWrap: { gap: 8 },
+  memberPickerWrap: { gap: 8, marginTop: 8 },
   memberSearchInput: {
     backgroundColor: "#F8FAFC",
     borderRadius: 10,
@@ -1801,17 +1783,22 @@ const styles = StyleSheet.create({
   statBox: {
     flex: 1,
     backgroundColor: "white",
-    padding: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 12,
     borderLeftWidth: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     elevation: 2,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
   },
-  statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  statValue: { fontSize: 15, fontFamily: "Inter_700Bold", marginTop: 4 },
+  statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, flex: 1 },
+  statValue: { fontSize: 14, fontFamily: "Inter_700Bold" },
   section: { backgroundColor: "white", marginHorizontal: 20, padding: 15, borderRadius: 16, marginBottom: 20 },
   sectionTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 15 },
   catRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
