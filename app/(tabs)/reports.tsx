@@ -31,8 +31,34 @@ const PERIOD_OPTIONS = [
   { label: "၁ နှစ်", months: 12 },
 ];
 
-type ReportTab = "income_expense" | "loans" | "funds" | "fees" | "audit_flags";
+type ReportTab = "income_expense" | "loans" | "funds" | "registers" | "cash_book" | "fees" | "audit_flags";
 type ReportViewScope = "all" | "self" | "member";
+type RegisterView = "received" | "expenditure" | "loan_out" | "loan_in";
+
+const CATEGORY_LABELS_MM: Record<string, string> = {
+  member_fees: "လစဉ်ကြေးရငွေ",
+  monthly_fee: "လစဉ်ကြေးရငွေ",
+  donations: "အလှူငွေရရှိ",
+  donation: "အလှူငွေ",
+  bank_interest: "ဘဏ်တိုးရငွေ",
+  other_income: "အခြားရငွေ",
+  loan_repayment: "ချေးငွေပြန်ဆပ်ရရှိငွေ",
+  interest_income: "အတိုးရငွေ",
+  health_support: "ကျန်းမာရေးထောက်ပံ့ငွေ",
+  education_support: "ပညာရေးထောက်ပံ့ငွေ",
+  funeral_support: "နာရေးကူညီငွေ",
+  loan_disbursement: "ချေးငွေထုတ်ပေးငွေ",
+  bank_charges: "ဘဏ်စရိတ်ပေးငွေ",
+  general_expenses: "အထွေထွေအသုံးစရိတ်",
+  other_expenses: "အခြားအသုံးစရိတ်",
+  bank_deposit: "ဘဏ်သို့ ငွေသွင်းခြင်း",
+  bank_withdraw: "ဘဏ်မှ ငွေထုတ်ခြင်း",
+  loan_issued: "ချေးငွေထုတ်ပေးခြင်း",
+  general_expense: "အထွေထွေအသုံးစရိတ်",
+  welfare_health: "ကျန်းမာရေးထောက်ပံ့မှု",
+  welfare_education: "ပညာရေးထောက်ပံ့မှု",
+  welfare_funeral: "နာရေးကူညီမှု",
+};
 
 function csvEscape(value: unknown): string {
   const text = String(value ?? "");
@@ -42,9 +68,81 @@ function csvEscape(value: unknown): string {
   return text;
 }
 
+function getCategoryLabel(category: unknown): string {
+  const key = String(category || "").trim();
+  if (!key) return "-";
+  return CATEGORY_LABELS_MM[key] || CATEGORY_LABELS[key as keyof typeof CATEGORY_LABELS] || key;
+}
+
+function getReadableNotes(notes: unknown): string {
+  const raw = String(notes || "").trim();
+  if (!raw) return "";
+  const parts = raw.split("|").map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return raw;
+
+  const out: string[] = [];
+  parts.forEach((part) => {
+    if (part.startsWith("beneficiary_scope=")) {
+      const value = part.slice("beneficiary_scope=".length).trim();
+      const label =
+        value === "self_member"
+          ? "ကိုယ်တိုင်"
+          : value === "family_member"
+          ? "မိသားစုဝင်"
+          : value === "external_or_group"
+          ? "ပြင်ပ/အဖွဲ့အစည်း"
+          : value;
+      out.push(`ထောက်ပံ့မှုအုပ်စု - ${label}`);
+      return;
+    }
+    if (part.startsWith("linked_member=")) {
+      out.push(`သက်ဆိုင်အသင်းဝင် - ${part.slice("linked_member=".length).trim()}`);
+      return;
+    }
+    if (part.startsWith("source_category=")) {
+      out.push(`မူလစာရင်းခေါင်းစဉ် - ${part.slice("source_category=".length).trim()}`);
+      return;
+    }
+    out.push(part);
+  });
+  return out.join(" | ");
+}
+
+function formatDateForRegister(dateValue: unknown): string {
+  const d = new Date(String(dateValue || ""));
+  if (Number.isNaN(d.getTime())) return "-";
+  return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+}
+
+function normalizeMemberText(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "")
+    .trim();
+}
+
+function transactionBelongsToMember(tx: any, memberId: string, memberName: string): boolean {
+  const directId = String(tx?.memberId || "").trim();
+  if (directId && directId === memberId) return true;
+
+  const notes = String(tx?.notes || "");
+  if (notes.includes(`(${memberId})`) || notes.includes(`linked_member=`) && notes.includes(memberId)) return true;
+
+  const nameNorm = normalizeMemberText(memberName);
+  if (nameNorm.length >= 2) {
+    const notesNorm = normalizeMemberText(notes);
+    if (notesNorm.includes(nameNorm)) return true;
+
+    const payerNorm = normalizeMemberText(tx?.payerPayee);
+    if (payerNorm && (payerNorm.includes(nameNorm) || nameNorm.includes(payerNorm))) return true;
+  }
+
+  return false;
+}
+
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
-  const { transactions, members, loading, accountSettings, loans, getLoanOutstanding } = useData() as any;
+  const { transactions, members, loading, accountSettings, loans, getLoanInterestDue } = useData() as any;
   const { can, currentUser, profile } = useAuth();
   const canViewAllReports = can("reports.view_all");
   const canViewReports = can("reports.view_summary") || canViewAllReports;
@@ -63,13 +161,16 @@ export default function ReportsScreen() {
   const [showEndPicker, setShowEndPicker] = useState(false);
   
   const [reportTab, setReportTab] = useState<ReportTab>("income_expense");
+  const [registerView, setRegisterView] = useState<RegisterView>("received");
   const [viewScope, setViewScope] = useState<ReportViewScope>("all");
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [auditSearch, setAuditSearch] = useState("");
   const [auditOnlyFlagged, setAuditOnlyFlagged] = useState(true);
+  const [activeFilterTag, setActiveFilterTag] = useState("year-current");
   const effectiveScope: ReportViewScope = canChooseScope ? viewScope : "self";
+  const showDetailRows = canViewAllReports || effectiveScope !== "all";
 
   const handlePeriodSelect = (months: number) => {
     const now = new Date();
@@ -91,6 +192,7 @@ export default function ReportsScreen() {
     setPickerEndDate(end);
     setStartDate(start);
     setEndDate(end);
+    setActiveFilterTag(`period-${months}`);
   };
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -127,13 +229,70 @@ export default function ReportsScreen() {
 
   const reportTransactions = useMemo(() => {
     if (scopedMemberId === null) return transactions;
-    return transactions.filter((t: any) => t.memberId === scopedMemberId);
-  }, [transactions, scopedMemberId]);
+    if (scopedMemberId === "__none__") return [];
+    const scopedMember = members.find((m: any) => String(m?.id || "") === scopedMemberId);
+    const scopedMemberName = String(scopedMember?.name || "");
+    return transactions.filter((t: any) => transactionBelongsToMember(t, scopedMemberId, scopedMemberName));
+  }, [transactions, members, scopedMemberId]);
 
   const reportLoans = useMemo(() => {
     if (scopedMemberId === null) return loans;
     return loans.filter((loan: any) => loan.memberId === scopedMemberId);
   }, [loans, scopedMemberId]);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    (reportTransactions || []).forEach((t: any) => {
+      const d = new Date(t?.date);
+      if (!Number.isNaN(d.getTime())) years.add(d.getFullYear());
+    });
+    years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [reportTransactions]);
+
+  const applyAllDateRange = useCallback(() => {
+    if (!reportTransactions?.length) {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), 0, 1);
+      start.setHours(12, 0, 0, 0);
+      now.setHours(12, 0, 0, 0);
+      setPickerStartDate(start);
+      setPickerEndDate(now);
+      setStartDate(start);
+      setEndDate(now);
+      setActiveFilterTag("all");
+      return;
+    }
+
+    let minDate = new Date(reportTransactions[0]?.date);
+    let maxDate = new Date(reportTransactions[0]?.date);
+    reportTransactions.forEach((t: any) => {
+      const d = new Date(t?.date);
+      if (Number.isNaN(d.getTime())) return;
+      if (d < minDate) minDate = d;
+      if (d > maxDate) maxDate = d;
+    });
+
+    minDate = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate(), 12, 0, 0, 0);
+    maxDate = new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate(), 12, 0, 0, 0);
+    setPickerStartDate(minDate);
+    setPickerEndDate(maxDate);
+    setStartDate(minDate);
+    setEndDate(maxDate);
+    setActiveFilterTag("all");
+  }, [reportTransactions]);
+
+  const applyYearDateRange = useCallback((year: number) => {
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31);
+    start.setHours(12, 0, 0, 0);
+    end.setHours(12, 0, 0, 0);
+    setPickerStartDate(start);
+    setPickerEndDate(end);
+    setStartDate(start);
+    setEndDate(end);
+    setActiveFilterTag(`year-${year}`);
+  }, []);
 
   const filteredTxns = useMemo(
     () => reportTransactions.filter((t: any) => {
@@ -166,10 +325,16 @@ export default function ReportsScreen() {
       .filter((t: any) => t.category === "interest_income" || t.category === "bank_interest")
       .reduce((sum: number, t: any) => sum + t.amount, 0);
     
-    const totalOutstanding = (reportLoans || []).reduce((acc: number, l: any) => acc + getLoanOutstanding(l.id), 0);
+    // Business rule: principal outstanding = total disbursed - total repaid (within selected filter scope)
+    const principalOutstanding = Math.max(0, Number(disbursed || 0) - Number(repaid || 0));
+
+    const interestOutstanding = (reportLoans || []).reduce((acc: number, l: any) => {
+      const amount = Number(getLoanInterestDue(l.id) || 0);
+      return acc + (Number.isFinite(amount) ? Math.max(0, amount) : 0);
+    }, 0);
     
-    return { disbursed, repaid, interest, totalOutstanding };
-  }, [filteredTxns, reportLoans, getLoanOutstanding]);
+    return { disbursed, repaid, interest, principalOutstanding, interestOutstanding };
+  }, [filteredTxns, reportLoans, getLoanInterestDue]);
 
   const getBalancesAt = useCallback((date: Date) => {
     let cash = accountSettings?.openingBalanceCash || 0;
@@ -201,6 +366,168 @@ export default function ReportsScreen() {
     return { opening, closing };
   }, [startDate, endDate, getBalancesAt]);
 
+  const cashBookRows = useMemo(() => {
+    const startBoundary = new Date(startDate);
+    startBoundary.setHours(0, 0, 0, 0);
+    const openingRefDate = new Date(startBoundary);
+    openingRefDate.setDate(openingRefDate.getDate() - 1);
+    const opening = getBalancesAt(openingRefDate);
+
+    const sorted = [...filteredTxns].sort((a: any, b: any) => {
+      const da = new Date(a?.date).getTime();
+      const db = new Date(b?.date).getTime();
+      if (da !== db) return da - db;
+      return String(a?.receiptNumber || a?.id || "").localeCompare(String(b?.receiptNumber || b?.id || ""));
+    });
+
+    const rows: Array<{
+      rowType: "opening" | "entry" | "daily_total";
+      id: string;
+      date: string;
+      receipt: string;
+      particulars: string;
+      cashIn: number;
+      cashOut: number;
+      bankIn: number;
+      bankOut: number;
+      cashBalance: number;
+      bankBalance: number;
+      totalBalance: number;
+    }> = [];
+
+    let runningCash = Number(opening.cash || 0);
+    let runningBank = Number(opening.bank || 0);
+    let currentDay = "";
+    let dayCashIn = 0;
+    let dayCashOut = 0;
+    let dayBankIn = 0;
+    let dayBankOut = 0;
+
+    const pushDailyTotal = (day: string) => {
+      if (!day) return;
+      rows.push({
+        rowType: "daily_total",
+        id: `day-total-${day}`,
+        date: day,
+        receipt: "",
+        particulars: "နေ့စဉ်စုစုပေါင်း",
+        cashIn: dayCashIn,
+        cashOut: dayCashOut,
+        bankIn: dayBankIn,
+        bankOut: dayBankOut,
+        cashBalance: runningCash,
+        bankBalance: runningBank,
+        totalBalance: runningCash + runningBank,
+      });
+      dayCashIn = 0;
+      dayCashOut = 0;
+      dayBankIn = 0;
+      dayBankOut = 0;
+    };
+
+    rows.push({
+      rowType: "opening",
+      id: "opening-balance",
+      date: startDate.toISOString().split("T")[0],
+      receipt: "",
+      particulars: "စာရင်းဖွင့်လက်ကျန်",
+      cashIn: 0,
+      cashOut: 0,
+      bankIn: 0,
+      bankOut: 0,
+      cashBalance: runningCash,
+      bankBalance: runningBank,
+      totalBalance: runningCash + runningBank,
+    });
+
+    sorted.forEach((t: any) => {
+      const dateText = String(t?.date || "");
+      if (currentDay && dateText !== currentDay) pushDailyTotal(currentDay);
+      currentDay = dateText;
+
+      const amount = Number(t?.amount || 0);
+      let cashIn = 0;
+      let cashOut = 0;
+      let bankIn = 0;
+      let bankOut = 0;
+
+      if (t?.type === "income") {
+        if (t?.paymentMethod === "bank") bankIn = amount;
+        else cashIn = amount;
+      } else if (t?.type === "expense") {
+        if (t?.paymentMethod === "bank") bankOut = amount;
+        else cashOut = amount;
+      } else if (t?.type === "transfer") {
+        if (t?.category === "bank_deposit") {
+          cashOut = amount;
+          bankIn = amount;
+        } else if (t?.category === "bank_withdraw") {
+          bankOut = amount;
+          cashIn = amount;
+        }
+      }
+
+      runningCash += cashIn - cashOut;
+      runningBank += bankIn - bankOut;
+      dayCashIn += cashIn;
+      dayCashOut += cashOut;
+      dayBankIn += bankIn;
+      dayBankOut += bankOut;
+
+      const categoryLabel = getCategoryLabel(t.category);
+      const payerPayee = String(t.payerPayee || t.memberId || "").trim();
+      const notes = getReadableNotes(t.notes);
+      const particulars = [
+        categoryLabel,
+        payerPayee ? `အမည် - ${payerPayee}` : "",
+        notes ? `မှတ်ချက် - ${notes}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | ");
+
+      rows.push({
+        rowType: "entry",
+        id: String(t.id || `${dateText}-${rows.length}`),
+        date: dateText,
+        receipt: String(t?.receiptNumber || ""),
+        particulars,
+        cashIn,
+        cashOut,
+        bankIn,
+        bankOut,
+        cashBalance: runningCash,
+        bankBalance: runningBank,
+        totalBalance: runningCash + runningBank,
+      });
+    });
+
+    pushDailyTotal(currentDay);
+    return rows;
+  }, [filteredTxns, getBalancesAt, startDate]);
+
+  const cashBookSummary = useMemo(() => {
+    const openingRow = cashBookRows.find((r) => r.rowType === "opening");
+    const lastRow = cashBookRows[cashBookRows.length - 1];
+    const entryRows = cashBookRows.filter((r) => r.rowType === "entry");
+    const totals = entryRows.reduce(
+      (acc, row) => {
+        acc.cashIn += row.cashIn;
+        acc.cashOut += row.cashOut;
+        acc.bankIn += row.bankIn;
+        acc.bankOut += row.bankOut;
+        return acc;
+      },
+      { cashIn: 0, cashOut: 0, bankIn: 0, bankOut: 0 }
+    );
+    return {
+      openingCash: openingRow?.cashBalance || 0,
+      openingBank: openingRow?.bankBalance || 0,
+      closingCash: lastRow?.cashBalance || 0,
+      closingBank: lastRow?.bankBalance || 0,
+      ...totals,
+    };
+  }, [cashBookRows]);
+
   const monthsInRange = useMemo(() => {
     const months = [];
     const start = new Date(startDate);
@@ -218,20 +545,173 @@ export default function ReportsScreen() {
     return months;
   }, [startDate, endDate]);
 
-  const scopedExpenseTransactions = useMemo(() => {
-    return filteredTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer");
+  const incomeTransactions = useMemo(() => {
+    return [...filteredTxns]
+      .filter((t: any) => t.type === "income")
+      .sort((a: any, b: any) => {
+        const da = new Date(a.date).getTime();
+        const db = new Date(b.date).getTime();
+        if (da !== db) return da - db;
+        return String(a.receiptNumber || a.id || "").localeCompare(String(b.receiptNumber || b.id || ""));
+      });
   }, [filteredTxns]);
 
-  const scopedExpenseByCategory = useMemo(() => {
-    const map = new Map<string, number>();
-    scopedExpenseTransactions.forEach((t: any) => {
-      const key = String(t.category || "other");
-      map.set(key, (map.get(key) || 0) + Number(t.amount || 0));
+  const expenseTransactions = useMemo(() => {
+    return [...filteredTxns]
+      .filter((t: any) => t.type === "expense")
+      .sort((a: any, b: any) => {
+        const da = new Date(a.date).getTime();
+        const db = new Date(b.date).getTime();
+        if (da !== db) return da - db;
+        return String(a.receiptNumber || a.id || "").localeCompare(String(b.receiptNumber || b.id || ""));
+      });
+  }, [filteredTxns]);
+
+  const transferTransactions = useMemo(() => {
+    return [...filteredTxns]
+      .filter((t: any) => t.type === "transfer" || t.category === "bank_deposit" || t.category === "bank_withdraw")
+      .sort((a: any, b: any) => {
+        const da = new Date(a.date).getTime();
+        const db = new Date(b.date).getTime();
+        if (da !== db) return da - db;
+        return String(a.receiptNumber || a.id || "").localeCompare(String(b.receiptNumber || b.id || ""));
+      });
+  }, [filteredTxns]);
+
+  const incomeByCategory = useMemo(() => {
+    const map = new Map<string, { amount: number; count: number }>();
+    incomeTransactions.forEach((t: any) => {
+      const key = String(t.category || "other_income");
+      const prev = map.get(key) || { amount: 0, count: 0 };
+      map.set(key, { amount: prev.amount + Number(t.amount || 0), count: prev.count + 1 });
     });
     return Array.from(map.entries())
-      .map(([category, amount]) => ({ category, amount }))
+      .map(([category, data]) => ({ category, amount: data.amount, count: data.count }))
       .sort((a, b) => b.amount - a.amount);
-  }, [scopedExpenseTransactions]);
+  }, [incomeTransactions]);
+
+  const expenseByCategory = useMemo(() => {
+    const map = new Map<string, { amount: number; count: number }>();
+    expenseTransactions.forEach((t: any) => {
+      const key = String(t.category || "other_expenses");
+      const prev = map.get(key) || { amount: 0, count: 0 };
+      map.set(key, { amount: prev.amount + Number(t.amount || 0), count: prev.count + 1 });
+    });
+    return Array.from(map.entries())
+      .map(([category, data]) => ({ category, amount: data.amount, count: data.count }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [expenseTransactions]);
+
+  const transferByCategory = useMemo(() => {
+    const map = new Map<string, { amount: number; count: number }>();
+    transferTransactions.forEach((t: any) => {
+      const key = String(t.category || "bank_deposit");
+      const prev = map.get(key) || { amount: 0, count: 0 };
+      map.set(key, { amount: prev.amount + Number(t.amount || 0), count: prev.count + 1 });
+    });
+    return Array.from(map.entries())
+      .map(([category, data]) => ({ category, amount: data.amount, count: data.count }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [transferTransactions]);
+
+  const memberNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    (members || []).forEach((m: any) => map.set(String(m?.id || ""), String(m?.name || "")));
+    return map;
+  }, [members]);
+
+  const receivedRegisterRows = useMemo(() => {
+    return incomeTransactions.map((t: any, index: number) => ({
+      id: String(t.id || `received-${index}`),
+      no: index + 1,
+      date: formatDateForRegister(t.date),
+      receipt: String(t.receiptNumber || "-"),
+      name: String(t.payerPayee || memberNameById.get(String(t.memberId || "")) || t.memberId || "-"),
+      amount: Number(t.amount || 0),
+      heading: getCategoryLabel(t.category),
+      notes: getReadableNotes(t.notes) || "-",
+      fromDate: t.feePeriodStart ? formatDateForRegister(t.feePeriodStart) : "-",
+      toDate: t.feePeriodEnd ? formatDateForRegister(t.feePeriodEnd) : "-",
+    }));
+  }, [incomeTransactions, memberNameById]);
+
+  const expenditureRegisterRows = useMemo(() => {
+    return expenseTransactions.map((t: any, index: number) => ({
+      id: String(t.id || `expense-${index}`),
+      no: index + 1,
+      date: formatDateForRegister(t.date),
+      receipt: String(t.receiptNumber || "-"),
+      name: String(t.payerPayee || memberNameById.get(String(t.memberId || "")) || t.memberId || "-"),
+      amount: Number(t.amount || 0),
+      heading: getCategoryLabel(t.category),
+      notes: getReadableNotes(t.notes) || "-",
+    }));
+  }, [expenseTransactions, memberNameById]);
+
+  const expenseLoanRegisterRows = useMemo(() => {
+    return expenseTransactions
+      .filter((t: any) => String(t.category || "") === "loan_disbursement")
+      .map((t: any, index: number) => ({
+        id: String(t.id || `loan-out-${index}`),
+        no: index + 1,
+        date: formatDateForRegister(t.date),
+        receipt: String(t.receiptNumber || "-"),
+        name: String(t.payerPayee || memberNameById.get(String(t.memberId || "")) || t.memberId || "-"),
+        memberId: String(t.memberId || "-"),
+        amount: Number(t.amount || 0),
+        heading: getCategoryLabel(t.category),
+        notes: getReadableNotes(t.notes) || "-",
+      }));
+  }, [expenseTransactions, memberNameById]);
+
+  const receivedLoanRegisterRows = useMemo(() => {
+    return incomeTransactions
+      .filter((t: any) => ["loan_repayment", "interest_income"].includes(String(t.category || "")))
+      .map((t: any, index: number) => ({
+        id: String(t.id || `loan-in-${index}`),
+        no: index + 1,
+        date: formatDateForRegister(t.date),
+        receipt: String(t.receiptNumber || "-"),
+        name: String(t.payerPayee || memberNameById.get(String(t.memberId || "")) || t.memberId || "-"),
+        memberId: String(t.memberId || "-"),
+        amount: Number(t.amount || 0),
+        heading: getCategoryLabel(t.category),
+        notes: getReadableNotes(t.notes) || "-",
+      }));
+  }, [incomeTransactions, memberNameById]);
+
+  const activeRegisterRows = useMemo(() => {
+    if (registerView === "received") return receivedRegisterRows;
+    if (registerView === "expenditure") return expenditureRegisterRows;
+    if (registerView === "loan_out") return expenseLoanRegisterRows;
+    return receivedLoanRegisterRows;
+  }, [registerView, receivedRegisterRows, expenditureRegisterRows, expenseLoanRegisterRows, receivedLoanRegisterRows]);
+
+  const activeRegisterTitle = useMemo(() => {
+    if (registerView === "received") return "ရငွေမှတ်ပုံတင်စာရင်း";
+    if (registerView === "expenditure") return "ထုတ်ပေးငွေမှတ်ပုံတင်စာရင်း";
+    if (registerView === "loan_out") return "ချေးငွေထုတ်ပေးစာရင်း";
+    return "ချေးငွေပြန်ရ/အတိုးရစာရင်း";
+  }, [registerView]);
+
+  const activeRegisterSummaryByHeading = useMemo(() => {
+    const map = new Map<string, { total: number; count: number }>();
+    activeRegisterRows.forEach((row: any) => {
+      const key = String(row.heading || "အခြား");
+      const prev = map.get(key) || { total: 0, count: 0 };
+      map.set(key, { total: prev.total + Number(row.amount || 0), count: prev.count + 1 });
+    });
+    return Array.from(map.entries())
+      .map(([heading, data]) => ({ heading, total: data.total, count: data.count }))
+      .sort((a, b) => b.total - a.total);
+  }, [activeRegisterRows]);
+
+  const activeRegisterTotals = useMemo(() => {
+    return {
+      count: activeRegisterRows.length,
+      amount: activeRegisterRows.reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0),
+    };
+  }, [activeRegisterRows]);
 
   const roleSummaryCards = useMemo(() => {
     const role = profile?.orgPosition || "member";
@@ -250,13 +730,13 @@ export default function ReportsScreen() {
 
     if (role === "auditor") {
       return [
-        { label: "Flagged Record", value: `${flaggedTxns.length}`, color: "#DC2626" },
+        { label: "အမှတ်အသားပြုစာရင်း", value: `${flaggedTxns.length}`, color: "#DC2626" },
         {
-          label: "Flagged Amount",
+          label: "အမှတ်အသားပြုစုစုပေါင်းငွေ",
           value: `${flaggedTxns.reduce((s: number, t: any) => s + Number(t.amount || 0), 0).toLocaleString()} KS`,
           color: "#B45309",
         },
-        { label: "စစ်ဆေးရမည့် Welfare", value: `${welfareTxns.length}`, color: "#2563EB" },
+        { label: "စစ်ဆေးရမည့်ထောက်ပံ့မှု", value: `${welfareTxns.length}`, color: "#2563EB" },
       ];
     }
 
@@ -272,7 +752,7 @@ export default function ReportsScreen() {
     return filteredTxns.filter((t: any) => {
       if (auditOnlyFlagged && !t.auditFlagged) return false;
       if (!needle) return true;
-      const categoryLabel = CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || String(t.category || "");
+      const categoryLabel = getCategoryLabel(t.category);
       return (
         String(t.memberId || "").toLowerCase().includes(needle) ||
         String(t.receiptNumber || "").toLowerCase().includes(needle) ||
@@ -315,12 +795,12 @@ export default function ReportsScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(fileUri, {
           mimeType: "application/json",
-          dialogTitle: "Auditor Flag JSON Export",
+          dialogTitle: "စာရင်းစစ် အမှတ်အသား JSON ထုတ်ယူရန်",
           UTI: "public.json",
         });
       }
     } catch {
-      Alert.alert("အမှား", "Audit JSON export မအောင်မြင်ပါ။");
+      Alert.alert("အမှား", "စာရင်းစစ် အမှတ်အသား JSON ထုတ်ယူမှု မအောင်မြင်ပါ။");
     }
   };
 
@@ -329,11 +809,11 @@ export default function ReportsScreen() {
     const rows = scopedAuditRows.map((t: any) =>
       [
         t.memberId || "",
-        CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category || "",
+        getCategoryLabel(t.category),
         t.amount || 0,
         t.date || "",
         t.receiptNumber || "",
-        t.auditFlagged ? "YES" : "NO",
+        t.auditFlagged ? "ဟုတ်" : "မဟုတ်",
         t.auditNote || "",
         t.auditFlaggedByUserId || "",
         t.auditFlaggedAt || "",
@@ -366,18 +846,18 @@ export default function ReportsScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(fileUri, {
           mimeType: "text/csv",
-          dialogTitle: "Auditor Flag CSV Export",
+          dialogTitle: "စာရင်းစစ် အမှတ်အသား CSV ထုတ်ယူရန်",
           UTI: "public.comma-separated-values-text",
         });
       }
     } catch {
-      Alert.alert("အမှား", "Audit CSV export မအောင်မြင်ပါ။");
+      Alert.alert("အမှား", "စာရင်းစစ် အမှတ်အသား CSV ထုတ်ယူမှု မအောင်မြင်ပါ။");
     }
   };
 
   const generatePdf = async () => {
     if (!canViewAllReports) {
-      Alert.alert("ခွင့်မပြုပါ", "Summary-only permission ဖြစ်သောကြောင့် detailed member report ကို PDF မထုတ်နိုင်ပါ။");
+      Alert.alert("ခွင့်မပြုပါ", "အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရှိသောကြောင့် အသင်းဝင်အသေးစိတ်အစီရင်ခံစာ PDF မထုတ်နိုင်ပါ။");
       return;
     }
 
@@ -398,19 +878,19 @@ export default function ReportsScreen() {
         </head>
         <body>
           <h1>Social Org Manager</h1>
-          <p>Member List Report • ${new Date().toLocaleDateString()}</p>
+          <p>အသင်းဝင်စာရင်း အစီရင်ခံစာ • ${new Date().toLocaleDateString()}</p>
           
           <table>
             <thead>
               <tr>
                 <th style="width: 40px;">No.</th>
-                <th>Name</th>
-                <th>ID</th>
-                <th>Phone</th>
-                <th>Email</th>
+                <th>အမည်</th>
+                <th>အသင်းဝင်အမှတ်</th>
+                <th>ဖုန်း</th>
+                <th>အီးမေးလ်</th>
                 <th>NRC</th>
-                <th>Join Date</th>
-                <th>Status</th>
+                <th>ဝင်ခွင့်နေ့</th>
+                <th>အခြေအနေ</th>
               </tr>
             </thead>
             <tbody>
@@ -428,7 +908,7 @@ export default function ReportsScreen() {
               `).join('')}
             </tbody>
           </table>
-          <div class="footer">Generated by Social Org Manager App</div>
+          <div class="footer">Social Org Manager App မှ ထုတ်ပေးသည်</div>
         </body>
       </html>
     `;
@@ -503,7 +983,11 @@ export default function ReportsScreen() {
 
           <Pressable 
             style={styles.searchBtn}
-            onPress={() => { setStartDate(pickerStartDate); setEndDate(pickerEndDate); }}
+            onPress={() => {
+              setStartDate(pickerStartDate);
+              setEndDate(pickerEndDate);
+              setActiveFilterTag("custom");
+            }}
           >
             <Ionicons name="search" size={20} color="white" />
           </Pressable>
@@ -519,6 +1003,25 @@ export default function ReportsScreen() {
               <Text style={styles.periodText}>{opt.label}</Text>
             </Pressable>
           ))}
+        </View>
+        <View style={styles.periodPicker}>
+          <Pressable
+            style={[styles.periodBtn, activeFilterTag === "all" && styles.periodBtnActive]}
+            onPress={applyAllDateRange}
+          >
+            <Text style={[styles.periodText, activeFilterTag === "all" && styles.periodTextActive]}>အစမှ အဆုံးထိ</Text>
+          </Pressable>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            {availableYears.map((year) => (
+              <Pressable
+                key={year}
+                style={[styles.periodBtn, activeFilterTag === `year-${year}` && styles.periodBtnActive]}
+                onPress={() => applyYearDateRange(year)}
+              >
+                <Text style={[styles.periodText, activeFilterTag === `year-${year}` && styles.periodTextActive]}>{year}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
         </View>
       </View>
       {canChooseScope && (
@@ -541,11 +1044,11 @@ export default function ReportsScreen() {
                 style={styles.memberSearchInput}
                 value={memberSearch}
                 onChangeText={setMemberSearch}
-                placeholder="Member ID / Full Name ရိုက်ရှာပါ"
+                placeholder="အသင်းဝင်အမှတ် / အမည်အပြည့်အစုံ ရိုက်ရှာပါ"
               />
               <Pressable style={styles.memberPickerBtn} onPress={() => setShowMemberPicker(true)}>
                 <Text style={styles.memberPickerBtnText} numberOfLines={1}>
-                  {selectedMemberId === "" ? "Dropdown မှ Member ရွေးမည်" : `${members.find((m: any) => m.id === selectedMemberId)?.name || ""} (${selectedMemberId})`}
+                  {selectedMemberId === "" ? "စာရင်းမှ အသင်းဝင်ရွေးမည်" : `${members.find((m: any) => m.id === selectedMemberId)?.name || ""} (${selectedMemberId})`}
                 </Text>
                 <Ionicons name="chevron-down" size={16} color={Colors.light.textSecondary} />
               </Pressable>
@@ -586,6 +1089,16 @@ export default function ReportsScreen() {
               {isAllScope ? "ဘဏ်/ငွေသား" : "အသင်းမှထုတ်ယူငွေ"}
             </Text>
           </Pressable>
+          <Pressable style={[styles.tab, reportTab === "registers" && styles.activeTab]} onPress={() => setReportTab("registers")}>
+            <Text style={[styles.tabText, reportTab === "registers" && styles.activeTabText]}>
+              မှတ်ပုံတင်စာရင်း
+            </Text>
+          </Pressable>
+          <Pressable style={[styles.tab, reportTab === "cash_book" && styles.activeTab]} onPress={() => setReportTab("cash_book")}>
+            <Text style={[styles.tabText, reportTab === "cash_book" && styles.activeTabText]}>
+              နှစ်ကော်လံ ငွေစာရင်း
+            </Text>
+          </Pressable>
           <Pressable style={[styles.tab, reportTab === "fees" && styles.activeTab]} onPress={() => setReportTab("fees")}>
             <Text style={[styles.tabText, reportTab === "fees" && styles.activeTabText]}>လစဉ်ကြေး</Text>
           </Pressable>
@@ -599,7 +1112,7 @@ export default function ReportsScreen() {
       {!canChooseScope && (
         <View style={styles.summaryOnlyNote}>
           <Ionicons name="person-circle-outline" size={18} color="#1E3A8A" />
-          <Text style={styles.summaryOnlyNoteText}>သင့်အကောင့်နှင့်သက်ဆိုင်သော Report အချက်အလက်များကိုသာ ပြသထားပါသည်။</Text>
+          <Text style={styles.summaryOnlyNoteText}>သင့်အကောင့်နှင့်သက်ဆိုင်သော အစီရင်ခံစာအချက်အလက်များကိုသာ ပြသထားပါသည်။</Text>
         </View>
       )}
       <View style={styles.summaryGrid}>
@@ -638,7 +1151,7 @@ export default function ReportsScreen() {
               </View>
             )}
 
-            {canViewAllReports ? (
+            {showDetailRows ? (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
                 {filteredTxns.filter((t: any) => t.type !== 'transfer').map((t: any) => (
@@ -646,7 +1159,7 @@ export default function ReportsScreen() {
                     <View style={styles.catInfo}>
                       <View style={[styles.catDot, { backgroundColor: t.type === 'income' ? '#10B981' : '#F43F5E' }]} />
                       <Text style={styles.catLabel}>
-                        {CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}
+                        {getCategoryLabel(t.category)}
                       </Text>
                       <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
                     </View>
@@ -659,7 +1172,7 @@ export default function ReportsScreen() {
             ) : (
               <View style={styles.summaryOnlyNote}>
                 <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
-                <Text style={styles.summaryOnlyNoteText}>Summary-only permission ဖြစ်သောကြောင့် အသေးစိတ်စာရင်းများ မပြထားပါ။</Text>
+                <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် အသေးစိတ်စာရင်းများ မပြထားပါ။</Text>
               </View>
             )}
         </ScrollView>
@@ -683,17 +1196,23 @@ export default function ReportsScreen() {
               <Text style={[styles.statValue, { color: "#8B5CF6" }]}>{loanStats.interest.toLocaleString()} KS</Text>
             </View>
             <View style={[styles.statBox, { borderLeftColor: "#EF4444" }]}>
-              <Text style={styles.statLabel}>လက်ကျန်ငွေပေါင်း</Text>
-              <Text style={[styles.statValue, { color: "#EF4444" }]}>{loanStats.totalOutstanding.toLocaleString()} KS</Text>
+              <Text style={styles.statLabel}>အရင်းပြန်ဆပ်ရန်ကျန်ငွေ</Text>
+              <Text style={[styles.statValue, { color: "#EF4444" }]}>{loanStats.principalOutstanding.toLocaleString()} KS</Text>
             </View>
           </View>
-          {canViewAllReports ? (
+          <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+            <View style={[styles.statBox, { borderLeftColor: "#B45309" }]}>
+              <Text style={styles.statLabel}>အတိုးဆပ်ရန်ကျန်ငွေ</Text>
+              <Text style={[styles.statValue, { color: "#B45309" }]}>{loanStats.interestOutstanding.toLocaleString()} KS</Text>
+            </View>
+          </View>
+          {showDetailRows ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</Text>
               {filteredTxns.filter((t: any) => ['loan_disbursement', 'loan_repayment', 'interest_income'].includes(t.category)).map((t: any) => (
                  <View key={t.id} style={styles.catRow}>
                     <View style={styles.catInfo}>
-                      <Text style={styles.catLabel}>{CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
+                      <Text style={styles.catLabel}>{getCategoryLabel(t.category)}</Text>
                       <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
                     </View>
                     <Text style={styles.catValue}>{t.amount.toLocaleString()}</Text>
@@ -703,7 +1222,7 @@ export default function ReportsScreen() {
           ) : (
             <View style={styles.summaryOnlyNote}>
               <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
-              <Text style={styles.summaryOnlyNoteText}>Summary-only permission ဖြစ်သောကြောင့် ချေးငွေ အသေးစိတ်မှတ်တမ်း မပြထားပါ။</Text>
+              <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် ချေးငွေ အသေးစိတ်မှတ်တမ်း မပြထားပါ။</Text>
             </View>
           )}
         </ScrollView>
@@ -712,57 +1231,304 @@ export default function ReportsScreen() {
       {reportTab === "funds" && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {isAllScope ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>လက်ကျန်ရှင်းတမ်း (Opening/Closing)</Text>
-              <View style={styles.catRow}>
-                <Text style={styles.catLabel}>စာရင်းဖွင့် လက်ကျန်</Text>
-                <Text style={styles.catValue}>{fundStats.opening.total.toLocaleString()} KS</Text>
-              </View>
-              <View style={[styles.catRow, { paddingLeft: 20 }]}>
-                 <Text style={styles.catSub}>ငွေသား: {fundStats.opening.cash.toLocaleString()}</Text>
-                 <Text style={styles.catSub}>ဘဏ်: {fundStats.opening.bank.toLocaleString()}</Text>
-              </View>
-              <View style={[styles.catRow, { borderTopWidth: 1, borderColor: '#eee', paddingTop: 10, marginTop: 10 }]}>
-                <Text style={styles.catLabel}>စာရင်းပိတ် လက်ကျန်</Text>
-                <Text style={[styles.catValue, { fontWeight: 'bold' }]}>{fundStats.closing.total.toLocaleString()} KS</Text>
-              </View>
-               <View style={[styles.catRow, { paddingLeft: 20 }]}>
-                 <Text style={styles.catSub}>ငွေသား: {fundStats.closing.cash.toLocaleString()}</Text>
-                 <Text style={styles.catSub}>ဘဏ်: {fundStats.closing.bank.toLocaleString()}</Text>
-              </View>
-            </View>
-          ) : (
             <>
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>အသုံးစရိတ် အနှစ်ချုပ် (ခေါင်းစဉ်အလိုက်)</Text>
-                {scopedExpenseByCategory.length === 0 ? (
-                  <Text style={styles.summaryOnlyNoteText}>အသုံးစရိတ်မှတ်တမ်း မရှိသေးပါ။</Text>
+                <Text style={styles.sectionTitle}>လက်ကျန်ရှင်းတမ်း (စာရင်းဖွင့်/စာရင်းပိတ်)</Text>
+                <View style={styles.catRow}>
+                  <Text style={styles.catLabel}>စာရင်းဖွင့် လက်ကျန်</Text>
+                  <Text style={styles.catValue}>{fundStats.opening.total.toLocaleString()} KS</Text>
+                </View>
+                <View style={[styles.catRow, { paddingLeft: 20 }]}>
+                    <Text style={styles.catSub}>ငွေသား: {fundStats.opening.cash.toLocaleString()}</Text>
+                    <Text style={styles.catSub}>ဘဏ်: {fundStats.opening.bank.toLocaleString()}</Text>
+                </View>
+                <View style={[styles.catRow, { borderTopWidth: 1, borderColor: '#eee', paddingTop: 10, marginTop: 10 }]}>
+                  <Text style={styles.catLabel}>စာရင်းပိတ် လက်ကျန်</Text>
+                  <Text style={[styles.catValue, { fontWeight: 'bold' }]}>{fundStats.closing.total.toLocaleString()} KS</Text>
+                </View>
+                  <View style={[styles.catRow, { paddingLeft: 20 }]}>
+                    <Text style={styles.catSub}>ငွေသား: {fundStats.closing.cash.toLocaleString()}</Text>
+                    <Text style={styles.catSub}>ဘဏ်: {fundStats.closing.bank.toLocaleString()}</Text>
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>ရငွေ စာရင်းချုပ် (ခေါင်းစဉ်အလိုက်)</Text>
+                {incomeByCategory.length === 0 ? (
+                  <Text style={styles.summaryOnlyNoteText}>ရငွေစာရင်း မရှိသေးပါ။</Text>
                 ) : (
-                  scopedExpenseByCategory.map((row) => (
-                    <View key={row.category} style={styles.catRow}>
-                      <Text style={styles.catLabel}>{CATEGORY_LABELS[row.category as keyof typeof CATEGORY_LABELS] || row.category}</Text>
+                  incomeByCategory.map((row) => (
+                    <View key={`income-${row.category}`} style={styles.catRow}>
+                      <Text style={styles.catLabel}>{getCategoryLabel(row.category)} ({row.count})</Text>
                       <Text style={styles.catValue}>{row.amount.toLocaleString()} KS</Text>
                     </View>
                   ))
                 )}
               </View>
+
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>အသုံးစရိတ် အသေးစိတ်</Text>
-                {scopedExpenseTransactions.length === 0 ? (
-                  <Text style={styles.summaryOnlyNoteText}>အသေးစိတ်စာရင်း မရှိသေးပါ။</Text>
+                <Text style={styles.sectionTitle}>အသုံးစရိတ် စာရင်းချုပ် (ခေါင်းစဉ်အလိုက်)</Text>
+                {expenseByCategory.length === 0 ? (
+                  <Text style={styles.summaryOnlyNoteText}>အသုံးစရိတ်စာရင်း မရှိသေးပါ။</Text>
                 ) : (
-                  scopedExpenseTransactions.map((t: any) => (
-                    <View key={t.id} style={styles.catRow}>
-                      <View style={styles.catInfo}>
-                        <Text style={styles.catLabel}>{CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
-                        <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
-                      </View>
-                      <Text style={styles.catValue}>{Number(t.amount || 0).toLocaleString()} KS</Text>
+                  expenseByCategory.map((row) => (
+                    <View key={`expense-${row.category}`} style={styles.catRow}>
+                      <Text style={styles.catLabel}>{getCategoryLabel(row.category)} ({row.count})</Text>
+                      <Text style={styles.catValue}>{row.amount.toLocaleString()} KS</Text>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>ဘဏ်သွင်း/ဘဏ်ထုတ် စာရင်းချုပ်</Text>
+                {transferByCategory.length === 0 ? (
+                  <Text style={styles.summaryOnlyNoteText}>ဘဏ်သွင်း/ဘဏ်ထုတ် မှတ်တမ်း မရှိသေးပါ။</Text>
+                ) : (
+                  transferByCategory.map((row) => (
+                    <View key={`transfer-${row.category}`} style={styles.catRow}>
+                      <Text style={styles.catLabel}>{getCategoryLabel(row.category)} ({row.count})</Text>
+                      <Text style={styles.catValue}>{row.amount.toLocaleString()} KS</Text>
                     </View>
                   ))
                 )}
               </View>
             </>
+          ) : (
+            <>
+              <View style={styles.summaryGrid}>
+                <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
+                  <Text style={styles.statLabel}>အသင်းသို့ပေးသွင်းငွေ</Text>
+                  <Text style={[styles.statValue, { color: "#10B981" }]}>{incomeExpenseStats.income.toLocaleString()} KS</Text>
+                </View>
+                <View style={[styles.statBox, { borderLeftColor: "#F43F5E" }]}>
+                  <Text style={styles.statLabel}>အသင်းမှထုတ်ယူငွေ</Text>
+                  <Text style={[styles.statValue, { color: "#F43F5E" }]}>{incomeExpenseStats.expense.toLocaleString()} KS</Text>
+                </View>
+              </View>
+              <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+                <View style={[styles.statBox, { borderLeftColor: "#8B5CF6" }]}>
+                  <Text style={styles.statLabel}>ခြားနားချက် (+/-)</Text>
+                  <Text style={[styles.statValue, { color: "#8B5CF6" }]}>{incomeExpenseStats.net.toLocaleString()} KS</Text>
+                </View>
+              </View>
+            </>
+          )}
+
+          {showDetailRows ? (
+            <>
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
+                {filteredTxns.filter((t: any) => t.type !== "transfer").map((t: any) => (
+                  <View key={`fund-row-${t.id}`} style={styles.cashBookLiteRow}>
+                    <Text style={styles.catLabel}>{getCategoryLabel(t.category)} - {Number(t.amount || 0).toLocaleString()} KS</Text>
+                    <Text style={styles.catSub}>{t.date || "-"} | {t.receiptNumber || "-"}</Text>
+                    {!!getReadableNotes(t.notes) && <Text style={styles.catSub}>မှတ်ချက်: {getReadableNotes(t.notes)}</Text>}
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : (
+            <View style={styles.summaryOnlyNote}>
+              <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
+              <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် အသေးစိတ်စာရင်းများ မပြထားပါ။</Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
+
+      {reportTab === "registers" && (
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>မှတ်ပုံတင်ပုံစံ စာရင်းများ</Text>
+            <View style={styles.registerModeRow}>
+              <Pressable style={[styles.registerModeChip, registerView === "received" && styles.registerModeChipActive]} onPress={() => setRegisterView("received")}>
+                <Text style={[styles.registerModeChipText, registerView === "received" && styles.registerModeChipTextActive]}>ရငွေ</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, registerView === "expenditure" && styles.registerModeChipActive]} onPress={() => setRegisterView("expenditure")}>
+                <Text style={[styles.registerModeChipText, registerView === "expenditure" && styles.registerModeChipTextActive]}>ထုတ်ပေးငွေ</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, registerView === "loan_out" && styles.registerModeChipActive]} onPress={() => setRegisterView("loan_out")}>
+                <Text style={[styles.registerModeChipText, registerView === "loan_out" && styles.registerModeChipTextActive]}>ချေးငွေထုတ်</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, registerView === "loan_in" && styles.registerModeChipActive]} onPress={() => setRegisterView("loan_in")}>
+                <Text style={[styles.registerModeChipText, registerView === "loan_in" && styles.registerModeChipTextActive]}>ချေးငွေပြန်ရ/အတိုး</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.catSub}>{activeRegisterTitle}</Text>
+          </View>
+
+          <View style={styles.summaryGrid}>
+            <View style={[styles.statBox, { borderLeftColor: "#2563EB" }]}>
+              <Text style={styles.statLabel}>စာရင်းအရေအတွက်</Text>
+              <Text style={[styles.statValue, { color: "#2563EB" }]}>{activeRegisterTotals.count.toLocaleString()}</Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
+              <Text style={styles.statLabel}>စုစုပေါင်းငွေပမာဏ</Text>
+              <Text style={[styles.statValue, { color: "#10B981" }]}>{activeRegisterTotals.amount.toLocaleString()} KS</Text>
+            </View>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>ခေါင်းစဉ်အလိုက် စာရင်းချုပ်</Text>
+            {activeRegisterSummaryByHeading.length === 0 ? (
+              <Text style={styles.summaryOnlyNoteText}>စာရင်းမရှိသေးပါ။</Text>
+            ) : (
+              activeRegisterSummaryByHeading.map((row) => (
+                <View key={`reg-sum-${row.heading}`} style={styles.catRow}>
+                  <Text style={styles.catLabel}>{row.heading} ({row.count})</Text>
+                  <Text style={styles.catValue}>{row.total.toLocaleString()} KS</Text>
+                </View>
+              ))
+            )}
+          </View>
+
+          {showDetailRows ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>အသေးစိတ်မှတ်တမ်း</Text>
+              {activeRegisterRows.length === 0 ? (
+                <Text style={styles.summaryOnlyNoteText}>အသေးစိတ်စာရင်း မရှိသေးပါ။</Text>
+              ) : (
+                activeRegisterRows.map((row: any) => (
+                  <View key={row.id} style={styles.registerCard}>
+                    <View style={styles.registerCardTopRow}>
+                      <Text style={styles.registerCardTitle}>{row.no}. {row.name}</Text>
+                      <Text style={styles.registerCardAmount}>{Number(row.amount || 0).toLocaleString()} KS</Text>
+                    </View>
+                    <Text style={styles.registerCardMeta}>ရက်စွဲ: {row.date} | ပြေစာအမှတ်: {row.receipt}</Text>
+                    <Text style={styles.registerCardMeta}>ခေါင်းစဉ်: {row.heading || "-"}</Text>
+                    {registerView === "received" && (row.fromDate !== "-" || row.toDate !== "-") ? (
+                      <Text style={styles.registerCardMeta}>ကာလ: {row.fromDate || "-"} မှ {row.toDate || "-"}</Text>
+                    ) : null}
+                    {!!row.memberId && row.memberId !== "-" ? <Text style={styles.registerCardMeta}>အသင်းဝင်အမှတ်: {row.memberId}</Text> : null}
+                    {!!row.notes && row.notes !== "-" ? <Text style={styles.registerCardNote}>မှတ်ချက်: {row.notes}</Text> : null}
+                  </View>
+                ))
+              )}
+            </View>
+          ) : (
+            <View style={styles.summaryOnlyNote}>
+              <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
+              <Text style={styles.summaryOnlyNoteText}>ကြည့်ရှုခွင့်ကန့်သတ်ထားသောကြောင့် အသေးစိတ်စာရင်း မပြထားပါ။</Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
+
+      {reportTab === "cash_book" && (
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {isAllScope ? (
+            <>
+              <View style={styles.summaryGrid}>
+                <View style={[styles.statBox, { borderLeftColor: "#0EA5A4" }]}>
+                  <Text style={styles.statLabel}>စာရင်းဖွင့် (ငွေသား/ဘဏ်)</Text>
+                  <Text style={[styles.statValue, { color: "#0EA5A4" }]}>
+                    {cashBookSummary.openingCash.toLocaleString()} / {cashBookSummary.openingBank.toLocaleString()}
+                  </Text>
+                </View>
+                <View style={[styles.statBox, { borderLeftColor: "#2563EB" }]}>
+                  <Text style={styles.statLabel}>စာရင်းပိတ် (ငွေသား/ဘဏ်)</Text>
+                  <Text style={[styles.statValue, { color: "#2563EB" }]}>
+                    {cashBookSummary.closingCash.toLocaleString()} / {cashBookSummary.closingBank.toLocaleString()}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+                <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
+                  <Text style={styles.statLabel}>ငွေသား ဝင် / ထွက်</Text>
+                  <Text style={[styles.statValue, { color: "#10B981" }]}>
+                    {cashBookSummary.cashIn.toLocaleString()} / {cashBookSummary.cashOut.toLocaleString()}
+                  </Text>
+                </View>
+                <View style={[styles.statBox, { borderLeftColor: "#F59E0B" }]}>
+                  <Text style={styles.statLabel}>ဘဏ် ဝင် / ထွက်</Text>
+                  <Text style={[styles.statValue, { color: "#F59E0B" }]}>
+                    {cashBookSummary.bankIn.toLocaleString()} / {cashBookSummary.bankOut.toLocaleString()}
+                  </Text>
+                </View>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.summaryGrid}>
+                <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
+                  <Text style={styles.statLabel}>အသင်းသို့ပေးသွင်းငွေ</Text>
+                  <Text style={[styles.statValue, { color: "#10B981" }]}>{incomeExpenseStats.income.toLocaleString()} KS</Text>
+                </View>
+                <View style={[styles.statBox, { borderLeftColor: "#F43F5E" }]}>
+                  <Text style={styles.statLabel}>အသင်းမှထုတ်ယူငွေ</Text>
+                  <Text style={[styles.statValue, { color: "#F43F5E" }]}>{incomeExpenseStats.expense.toLocaleString()} KS</Text>
+                </View>
+              </View>
+              <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+                <View style={[styles.statBox, { borderLeftColor: "#8B5CF6" }]}>
+                  <Text style={styles.statLabel}>ခြားနားချက် (+/-)</Text>
+                  <Text style={[styles.statValue, { color: "#8B5CF6" }]}>{incomeExpenseStats.net.toLocaleString()} KS</Text>
+                </View>
+              </View>
+            </>
+          )}
+
+          {showDetailRows ? (
+            isAllScope ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>နှစ်ကော်လံ ငွေစာရင်းစာအုပ် (နေ့စဉ်အသေးစိတ်)</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  <View>
+                    <View style={styles.cashBookHeaderRow}>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookDateCol]}>ရက်စွဲ</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookReceiptCol]}>ပြေစာအမှတ်</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookParticularCol]}>အကြောင်းအရာ</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ငွေသားဝင်</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ငွေသားထွက်</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ဘဏ်ဝင်</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ဘဏ်ထွက်</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ငွေသားလက်ကျန်</Text>
+                      <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ဘဏ်လက်ကျန်</Text>
+                    </View>
+                    {cashBookRows.map((row) => (
+                      <View
+                        key={row.id}
+                        style={[
+                          styles.cashBookDataRow,
+                          row.rowType === "opening" && styles.cashBookOpeningRow,
+                          row.rowType === "daily_total" && styles.cashBookTotalRow,
+                        ]}
+                      >
+                        <Text style={[styles.cashBookCell, styles.cashBookDateCol]}>{row.date || "-"}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookReceiptCol]}>{row.receipt || "-"}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookParticularCol]} numberOfLines={2}>
+                          {row.particulars}
+                        </Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookAmountCol]}>{row.cashIn ? row.cashIn.toLocaleString() : "-"}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookAmountCol]}>{row.cashOut ? row.cashOut.toLocaleString() : "-"}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookAmountCol]}>{row.bankIn ? row.bankIn.toLocaleString() : "-"}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookAmountCol]}>{row.bankOut ? row.bankOut.toLocaleString() : "-"}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookAmountCol, styles.cashBookBalanceText]}>{row.cashBalance.toLocaleString()}</Text>
+                        <Text style={[styles.cashBookCell, styles.cashBookAmountCol, styles.cashBookBalanceText]}>{row.bankBalance.toLocaleString()}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+            ) : (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
+                {filteredTxns.filter((t: any) => t.type !== "transfer").map((t: any) => (
+                  <View key={`cashbook-personal-${t.id}`} style={styles.cashBookLiteRow}>
+                    <Text style={styles.catLabel}>{getCategoryLabel(t.category)} - {Number(t.amount || 0).toLocaleString()} KS</Text>
+                    <Text style={styles.catSub}>{t.date || "-"} | {t.receiptNumber || "-"}</Text>
+                    {!!getReadableNotes(t.notes) && <Text style={styles.catSub}>မှတ်ချက်: {getReadableNotes(t.notes)}</Text>}
+                  </View>
+                ))}
+              </View>
+            )
+          ) : (
+            <View style={styles.summaryOnlyNote}>
+              <Ionicons name="shield-checkmark-outline" size={18} color="#1E3A8A" />
+              <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် နှစ်ကော်လံ ငွေစာရင်းအသေးစိတ် မပြထားပါ။</Text>
+            </View>
           )}
         </ScrollView>
       )}
@@ -845,14 +1611,14 @@ export default function ReportsScreen() {
       {reportTab === "audit_flags" && canViewAuditFlags && (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Auditor Flagged Transactions</Text>
+            <Text style={styles.sectionTitle}>စာရင်းစစ် အမှတ်အသားပြုထားသော စာရင်းများ</Text>
             <View style={styles.auditToolbar}>
               <Pressable
                 style={[styles.scopeChip, auditOnlyFlagged && styles.scopeChipActive]}
                 onPress={() => setAuditOnlyFlagged((prev) => !prev)}
               >
                 <Text style={[styles.scopeChipText, auditOnlyFlagged && styles.scopeChipTextActive]}>
-                  {auditOnlyFlagged ? "Flagged Only" : "All Rows"}
+                  {auditOnlyFlagged ? "အမှတ်အသားရှိသောစာရင်းသာ" : "စာရင်းအားလုံး"}
                 </Text>
               </Pressable>
               <Pressable style={styles.exportBtn} onPress={exportAuditJson}>
@@ -868,23 +1634,23 @@ export default function ReportsScreen() {
               style={styles.memberSearchInput}
               value={auditSearch}
               onChangeText={setAuditSearch}
-              placeholder="Member ID / category / note / receipt"
+              placeholder="အသင်းဝင်အမှတ် / ခေါင်းစဉ် / မှတ်ချက် / ပြေစာအမှတ်"
             />
-            <Text style={styles.auditMetaText}>Count: {scopedAuditRows.length}</Text>
+            <Text style={styles.auditMetaText}>အရေအတွက်: {scopedAuditRows.length}</Text>
             {scopedAuditRows.length === 0 ? (
               <View style={{ paddingVertical: 12 }}>
-                <Text style={styles.summaryOnlyNoteText}>Audit records မရှိသေးပါ။</Text>
+                <Text style={styles.summaryOnlyNoteText}>အမှတ်အသားပြုစာရင်း မရှိသေးပါ။</Text>
               </View>
             ) : (
               scopedAuditRows.map((row: any) => (
                 <View key={row.id} style={styles.auditRow}>
                   <Text style={styles.auditTitle}>
-                    {CATEGORY_LABELS[row.category as keyof typeof CATEGORY_LABELS] || row.category} - {Number(row.amount || 0).toLocaleString()} KS
+                    {getCategoryLabel(row.category)} - {Number(row.amount || 0).toLocaleString()} KS
                   </Text>
                   <Text style={styles.auditSub}>
-                    Member: {row.memberId || "-"} | Date: {row.date || "-"} | Receipt: {row.receiptNumber || "-"}
+                    အသင်းဝင်: {row.memberId || "-"} | ရက်စွဲ: {row.date || "-"} | ပြေစာအမှတ်: {row.receiptNumber || "-"}
                   </Text>
-                  <Text style={styles.auditNoteText}>Note: {row.auditNote || "-"}</Text>
+                  <Text style={styles.auditNoteText}>မှတ်ချက်: {row.auditNote || "-"}</Text>
                 </View>
               ))
             )}
@@ -901,7 +1667,7 @@ export default function ReportsScreen() {
         <View style={styles.modalContainer}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowMemberPicker(false)} />
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+            <Text style={styles.modalTitle}>အသင်းဝင် ရွေးချယ်ရန်</Text>
             <FlatList
               data={memberOptions}
               keyExtractor={(item: any) => String(item.id)}
@@ -920,7 +1686,7 @@ export default function ReportsScreen() {
               )}
               ListEmptyComponent={
                 <View style={{ paddingVertical: 20, alignItems: "center" }}>
-                  <Text style={styles.summaryOnlyNoteText}>ရွေးချယ်ရန် Member မတွေ့ပါ</Text>
+                  <Text style={styles.summaryOnlyNoteText}>ရွေးချယ်ရန် အသင်းဝင် မတွေ့ပါ</Text>
                 </View>
               }
             />
@@ -1001,13 +1767,30 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFC",
   },
   memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  registerModeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
+  registerModeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  registerModeChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  registerModeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  registerModeChipTextActive: { color: "white" },
   dateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
   searchBtn: { backgroundColor: Colors.light.tint, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   periodPicker: { flexDirection: "row", gap: 8 },
   periodBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
+  periodBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   periodText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  periodTextActive: { color: "white" },
   tabBar: { flexDirection: "row", paddingHorizontal: 20, marginBottom: 10 },
   tab: { paddingVertical: 8, paddingHorizontal: 4 },
   activeTab: { borderBottomWidth: 2, borderBottomColor: Colors.light.tint },
@@ -1037,6 +1820,15 @@ const styles = StyleSheet.create({
   catLabel: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text },
   catValue: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   catSub: { fontSize: 12, color: Colors.light.textSecondary, marginLeft: 6 },
+  cashBookLiteRow: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+    backgroundColor: "#F8FAFC",
+    gap: 4,
+  },
   tableHeader: { flexDirection: "row", backgroundColor: Colors.light.tint, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 6, marginBottom: 4 },
   tableHeaderText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#fff", textAlign: "center" },
   tableNameCol: { width: 120, paddingHorizontal: 6, justifyContent: "center" },
@@ -1069,6 +1861,63 @@ const styles = StyleSheet.create({
   auditTitle: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.text },
   auditSub: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 3 },
   auditNoteText: { fontSize: 12, color: "#B45309", marginTop: 4 },
+  registerCard: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#F8FAFC",
+    marginBottom: 10,
+    gap: 4,
+  },
+  registerCardTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  registerCardTitle: { flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  registerCardAmount: { fontSize: 14, fontFamily: "Inter_700Bold", color: "#0F766E" },
+  registerCardMeta: { fontSize: 12, color: Colors.light.textSecondary, lineHeight: 18 },
+  registerCardNote: { fontSize: 12, color: "#92400E", lineHeight: 18 },
+  cashBookHeaderRow: {
+    flexDirection: "row",
+    backgroundColor: "#0F172A",
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+  },
+  cashBookDataRow: {
+    flexDirection: "row",
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: "#E2E8F0",
+    backgroundColor: "white",
+  },
+  cashBookOpeningRow: {
+    backgroundColor: "#DBEAFE",
+  },
+  cashBookTotalRow: {
+    backgroundColor: "#ECFDF5",
+  },
+  cashBookHeaderCell: {
+    color: "white",
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    textAlign: "center",
+  },
+  cashBookCell: {
+    fontSize: 12,
+    color: Colors.light.text,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRightWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  cashBookDateCol: { width: 96 },
+  cashBookReceiptCol: { width: 130 },
+  cashBookParticularCol: { width: 250 },
+  cashBookAmountCol: { width: 120, textAlign: "right" },
+  cashBookBalanceText: {
+    fontFamily: "Inter_700Bold",
+    color: "#1E3A8A",
+  },
   summaryOnlyNote: {
     marginHorizontal: 20,
     marginTop: 4,
@@ -1101,3 +1950,4 @@ const styles = StyleSheet.create({
   cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
   cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });
+

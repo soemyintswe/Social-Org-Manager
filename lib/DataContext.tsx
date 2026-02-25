@@ -616,13 +616,48 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
     if (!loan) return 0;
-    const repayments = transactions
-      .filter((t) => t.loanId === loanId && t.type === "income")
-      .reduce((sum, t) => sum + t.amount, 0);
-    return (loan.principal || 0) - repayments;
+    const principal = Number((loan as any).principal ?? (loan as any).amount ?? (loan as any).principalAmount ?? 0);
+    const safePrincipal = Number.isFinite(principal) ? principal : 0;
+    const principalRepayments = transactions
+      .filter((t) => {
+        if (t.loanId !== loanId || t.type !== "income") return false;
+        const cat = String((t as any).category || "");
+        if (!cat) return true;
+        return cat === "loan_repayment";
+      })
+      .reduce((sum, t) => sum + Number((t as any).amount || 0), 0);
+    const outstanding = safePrincipal - principalRepayments;
+    return outstanding > 0 ? outstanding : 0;
   };
 
-  const getLoanInterestDue = (_loanId: string) => 0;
+  const getLoanInterestDue = (loanId: string) => {
+    const loan = loans.find((l) => l.id === loanId);
+    if (!loan) return 0;
+    if ((loan as any).interestSuspended) return 0;
+
+    const outstandingPrincipal = getLoanOutstanding(loanId);
+    const baseRate = Number((loan as any).interestRate || 0);
+    const overrideRate = Number((loan as any).interestRateOverride);
+    const appliedRate = Number.isFinite(overrideRate) && overrideRate >= 0 ? overrideRate : (Number.isFinite(baseRate) ? baseRate : 0);
+    const discountPercent = Number((loan as any).interestDiscountPercent || 0);
+    const discountAmount = Number((loan as any).interestDiscountAmount || 0);
+    const waivedAmount = Number((loan as any).interestWaivedAmount || 0);
+
+    const percentAfterDiscount = Math.max(0, 100 - (Number.isFinite(discountPercent) ? discountPercent : 0));
+    const interestByRate = outstandingPrincipal * (Math.max(0, appliedRate) / 100) * (percentAfterDiscount / 100);
+    const interestExpected = Math.max(0, interestByRate - (Number.isFinite(discountAmount) ? discountAmount : 0));
+
+    const interestPaid = transactions
+      .filter((t) => t.loanId === loanId && t.type === "income")
+      .filter((t) => {
+        const cat = String((t as any).category || "");
+        return cat === "interest_income" || cat === "bank_interest";
+      })
+      .reduce((sum, t) => sum + Number((t as any).amount || 0), 0);
+
+    const due = interestExpected - interestPaid - (Number.isFinite(waivedAmount) ? waivedAmount : 0);
+    return due > 0 ? due : 0;
+  };
 
   const getCashBalance = () => {
     const income = transactions.filter((t) => t.type === "income" && t.paymentMethod === "cash").reduce((sum, t) => sum + t.amount, 0);

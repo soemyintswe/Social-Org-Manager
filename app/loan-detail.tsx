@@ -27,6 +27,7 @@ export default function LoanDetailScreen() {
     transactions, 
     getLoanOutstanding, 
     getLoanInterestDue, 
+    editLoan,
     addTransaction, 
     removeLoan 
   } = useData();
@@ -41,6 +42,13 @@ export default function LoanDetailScreen() {
   const [showRepayment, setShowRepayment] = useState(false);
   const [repayAmount, setRepayAmount] = useState("");
   const [repayMethod, setRepayMethod] = useState<"cash" | "bank">("cash");
+  const [showInterestSettings, setShowInterestSettings] = useState(false);
+  const [interestSuspended, setInterestSuspended] = useState(Boolean((loan as any)?.interestSuspended));
+  const [interestRateOverride, setInterestRateOverride] = useState(String((loan as any)?.interestRateOverride ?? ""));
+  const [interestDiscountPercent, setInterestDiscountPercent] = useState(String((loan as any)?.interestDiscountPercent ?? ""));
+  const [interestDiscountAmount, setInterestDiscountAmount] = useState(String((loan as any)?.interestDiscountAmount ?? ""));
+  const [interestWaivedAmount, setInterestWaivedAmount] = useState(String((loan as any)?.interestWaivedAmount ?? ""));
+  const [interestAdjustmentNote, setInterestAdjustmentNote] = useState(String((loan as any)?.interestAdjustmentNote ?? ""));
   const [saving, setSaving] = useState(false);
 
   if (!loan) {
@@ -56,6 +64,9 @@ export default function LoanDetailScreen() {
 
   const outstanding = getLoanOutstanding(loan.id);
   const interestDue = getLoanInterestDue(loan.id);
+  const baseRate = Number((loan as any)?.interestRate || 0);
+  const overrideRateNum = Number(interestRateOverride);
+  const effectiveRate = Number.isFinite(overrideRateNum) && overrideRateNum >= 0 ? overrideRateNum : baseRate;
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   const handleRepayment = async () => {
@@ -105,6 +116,33 @@ export default function LoanDetailScreen() {
     ]);
   };
 
+  const toNumberOrUndefined = (value: string) => {
+    if (String(value ?? "").trim() === "") return undefined;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const saveInterestSettings = async () => {
+    setSaving(true);
+    try {
+      await editLoan(loan.id, {
+        interestSuspended,
+        interestRateOverride: toNumberOrUndefined(interestRateOverride),
+        interestDiscountPercent: toNumberOrUndefined(interestDiscountPercent),
+        interestDiscountAmount: toNumberOrUndefined(interestDiscountAmount),
+        interestWaivedAmount: toNumberOrUndefined(interestWaivedAmount),
+        interestAdjustmentNote: String(interestAdjustmentNote || "").trim(),
+      });
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setShowInterestSettings(false);
+      Alert.alert("အောင်မြင်ပါသည်", "အတိုးသတ်မှတ်ချက်များကို သိမ်းပြီးပါပြီ။");
+    } catch {
+      Alert.alert("အမှား", "အတိုးသတ်မှတ်ချက် သိမ်းဆည်း၍ မရပါ။");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 12 || webTopInset }]}>
@@ -125,24 +163,82 @@ export default function LoanDetailScreen() {
           <View style={styles.statsGrid}>
             <View style={styles.statBox}>
               <Text style={styles.statLabel}>Principal</Text>
-              <Text style={styles.statValue}>{(loan as any).amount || (loan as any).principalAmount} MMK</Text>
+              <Text style={styles.statValue}>{(loan as any).principal || (loan as any).amount || (loan as any).principalAmount || 0} MMK</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statLabel}>Interest Rate</Text>
-              <Text style={styles.statValue}>{loan.interestRate}% / mo</Text>
+              <Text style={styles.statValue}>{effectiveRate}%</Text>
             </View>
           </View>
         </View>
 
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Current Outstanding</Text>
+          <Text style={styles.balanceLabel}>အရင်းပြန်ဆပ်ရန်ကျန်ငွေ</Text>
           <Text style={styles.balanceValue}>{outstanding.toLocaleString()} MMK</Text>
-          <Text style={styles.interestHint}>+ {interestDue.toLocaleString()} MMK interest due</Text>
+          <Text style={styles.interestHint}>အတိုးဆပ်ရန်ကျန်ငွေ: {interestDue.toLocaleString()} MMK</Text>
+          <Text style={styles.interestHint}>
+            အတိုးအခြေအနေ: {interestSuspended ? "ဆိုင်းငံ့ထား" : "လက်ရှိတွက်ချက်နေ"}
+          </Text>
 
           <Pressable style={styles.repayBtn} onPress={() => setShowRepayment(true)}>
             <Text style={styles.repayBtnText}>Make Repayment</Text>
           </Pressable>
+          <Pressable style={[styles.repayBtn, { marginTop: 10 }]} onPress={() => setShowInterestSettings((prev) => !prev)}>
+            <Text style={styles.repayBtnText}>အတိုးသတ်မှတ်ချက် ပြင်မည်</Text>
+          </Pressable>
         </View>
+
+        {showInterestSettings && (
+          <View style={styles.repayForm}>
+            <Text style={styles.formTitle}>အတိုးသတ်မှတ်ချက်</Text>
+            <Pressable style={[styles.methodOption, interestSuspended && styles.methodActive]} onPress={() => setInterestSuspended((prev) => !prev)}>
+              <Text>{interestSuspended ? "အတိုးဆိုင်းငံ့ထားသည်" : "အတိုးတွက်ချက်နေသည်"}</Text>
+            </Pressable>
+            <TextInput
+              style={styles.input}
+              placeholder="အတိုးနှုန်းအသစ် (%) - လျှော့သတ်မှတ်လိုပါက"
+              keyboardType="numeric"
+              value={interestRateOverride}
+              onChangeText={setInterestRateOverride}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="အတိုးလျှော့ရာခိုင်နှုန်း (%)"
+              keyboardType="numeric"
+              value={interestDiscountPercent}
+              onChangeText={setInterestDiscountPercent}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="အတိုးလျှော့ပမာဏ (MMK)"
+              keyboardType="numeric"
+              value={interestDiscountAmount}
+              onChangeText={setInterestDiscountAmount}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="အတိုးလျှော်ပစ်ပမာဏ (MMK)"
+              keyboardType="numeric"
+              value={interestWaivedAmount}
+              onChangeText={setInterestWaivedAmount}
+            />
+            <TextInput
+              style={[styles.input, { minHeight: 70 }]}
+              placeholder="သတ်မှတ်ချက်မှတ်ချက်"
+              multiline
+              value={interestAdjustmentNote}
+              onChangeText={setInterestAdjustmentNote}
+            />
+            <View style={styles.formActions}>
+              <Pressable style={styles.cancelBtn} onPress={() => setShowInterestSettings(false)}>
+                <Text>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.saveBtn} onPress={saveInterestSettings} disabled={saving}>
+                <Text style={styles.saveBtnText}>{saving ? "Saving..." : "Save"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
 
         {showRepayment && (
           <View style={styles.repayForm}>
