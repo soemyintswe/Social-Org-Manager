@@ -190,9 +190,10 @@ export default function AddMemberScreen() {
     profile?.memberStatus !== "applicant" &&
     (!isEditMode || isEditingOwnRecord)
   );
-  const canEditGeneralFields = !isEditMode || canEditGeneralOwnInfo;
+  const canEditGeneralCommitteeInfo = Boolean(isEditMode && can("members.edit") && isCommitteePosition(actorPosition));
+  const canEditGeneralFields = !isEditMode || canEditGeneralOwnInfo || canEditGeneralCommitteeInfo;
   const canEditRestrictedFields = !isEditMode || canEditRestrictedDirectly || canProposeRestricted;
-  const canOpenEditForm = !isEditMode || canEditGeneralOwnInfo || canEditRestrictedDirectly || canProposeRestricted;
+  const canOpenEditForm = !isEditMode || canEditGeneralFields || canEditRestrictedDirectly || canProposeRestricted;
   const relationOptions = useMemo(() => mergeRelationOptions(customRelations, false), [customRelations]);
 
   const addFamilyMember = () => {
@@ -438,8 +439,8 @@ export default function AddMemberScreen() {
           });
           Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
         } else {
-          if (hasUnrestrictedChanges && !canEditGeneralOwnInfo) {
-            Alert.alert("ခွင့်မပြုပါ", "မိမိနှင့်မသက်ဆိုင်သည့် ကိုယ်ရေးအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+          if (hasUnrestrictedChanges && !canEditGeneralFields) {
+            Alert.alert("ခွင့်မပြုပါ", "ကော်မတီအဖွဲ့ဝင်များသာ ဤအချက်အလက်များကို ပြင်ဆင်ခွင့်ရှိပါသည်။");
             setSaving(false);
             return;
           }

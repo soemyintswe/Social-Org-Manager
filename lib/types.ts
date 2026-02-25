@@ -205,8 +205,15 @@ export interface Loan {
   dueDate?: string;
   repaymentDate?: string;
   interestRateOverride?: number;
+  interestCalcFromDate?: string;
+  interestCalcToDate?: string;
+  interestCalcMonths?: number;
+  interestSuspensionFromDate?: string;
+  interestSuspensionToDate?: string;
+  interestSuspensionMonths?: number;
   interestDiscountPercent?: number;
   interestDiscountAmount?: number;
+  interestWaivedPercent?: number;
   interestWaivedAmount?: number;
   interestSuspended?: boolean;
   interestAdjustmentNote?: string;

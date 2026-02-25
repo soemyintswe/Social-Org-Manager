@@ -1,8 +1,8 @@
 {
-    "latestVersion":  "1.1.32",
+    "latestVersion":  "1.1.33",
     "minimumVersion":  "1.0.0",
-    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.32-202602241826.apk",
-    "notes":  "Version 1.1.32: removed duplicate page-level Home buttons and standardized global top identity bar navigation.",
+    "downloadUrl":  "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.33-202602251853.apk",
+    "notes":  "Version 1.1.33: latest finance/report and loan tracking improvements.",
     "force":  false,
-    "publishedAt":  "2026-02-24T11:56:58Z"
+    "publishedAt":  "2026-02-25T12:23:51Z"
 }

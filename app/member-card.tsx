@@ -35,6 +35,13 @@ export default function MemberCardScreen() {
   const [status, requestPermission] = MediaLibrary.usePermissions();
 
   if (!member) return null;
+  const qrPayload = `ORGHUB_MEMBER:${JSON.stringify({
+    type: "ORGHUB_MEMBER_CARD",
+    memberId: String(member.id || ""),
+    name: String(member.name || ""),
+    joinDate: String(member.joinDate || ""),
+  })}`;
+
   const handleSave = async () => {
     try {
       if (!status?.granted) {
@@ -83,7 +90,7 @@ export default function MemberCardScreen() {
                 <Text style={styles.cardType}>OFFICIAL MEMBER CARD</Text>
               </View>
               <View style={styles.qrContainer}>
-                <QRCode value={member.id} size={45} />
+                <QRCode value={qrPayload} size={45} />
               </View>
             </View>
 

@@ -81,6 +81,31 @@ const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
   return "other";
 };
 
+const TXN_CATEGORY_MM_LABELS: Record<string, string> = {
+  member_fees: "လစဉ်ကြေးရငွေ",
+  donations: "အလှူငွေရရှိ",
+  donation: "အလှူငွေရရှိ",
+  bank_interest: "ဘဏ်တိုးရငွေ",
+  other_income: "အခြားရငွေ",
+  loan_repayment: "ချေးငွေပြန်ဆပ်ရရှိငွေ",
+  interest_income: "အတိုးရငွေ",
+  health_support: "ကျန်းမာရေးထောက်ပံ့ငွေ",
+  education_support: "ပညာရေးထောက်ပံ့ငွေ",
+  funeral_support: "နာရေးကူညီငွေ",
+  loan_disbursement: "ချေးငွေထုတ်ပေးငွေ",
+  bank_charges: "ဘဏ်စရိတ်ပေးငွေ",
+  general_expenses: "အထွေထွေအသုံးစရိတ်",
+  other_expenses: "အခြားအသုံးစရိတ်",
+  bank_deposit: "ဘဏ်သို့ ငွေသွင်းခြင်း",
+  bank_withdraw: "ဘဏ်မှ ငွေထုတ်ခြင်း",
+};
+
+const normalizeCategoryToken = (value: unknown): string =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
 const RESTRICTED_MEMBER_FIELDS = ["id", "orgPosition", "status", "statusDate"] as const;
 type RestrictedMemberField = (typeof RESTRICTED_MEMBER_FIELDS)[number];
 
@@ -191,7 +216,8 @@ export default function MemberDetailScreen() {
     !!currentUser?.memberId &&
     String(currentUser.memberId).trim() === String(member.id).trim();
   const canEditGeneralOwnInfo = Boolean(currentUser?.id && profile?.memberStatus !== "applicant" && isEditingOwnRecord);
-  const canEditGeneralFields = canEditGeneralOwnInfo;
+  const canEditGeneralCommitteeInfo = Boolean(can("members.edit") && isCommitteePosition(actorPosition));
+  const canEditGeneralFields = canEditGeneralOwnInfo || canEditGeneralCommitteeInfo;
   const canEditRestrictedFields = canEditRestrictedDirectly || canProposeRestricted;
   const relationOptions = useMemo(() => mergeRelationOptions(customRelations, false), [customRelations]);
 
@@ -251,6 +277,18 @@ export default function MemberDetailScreen() {
       activeLoans: memberLoans.filter((l: any) => l.status === 'active').length,
     };
   }, [memberTxns, memberLoans, getLoanOutstanding]);
+
+  const getTxnCategoryLabel = (item: any) => {
+    const labelKey = normalizeCategoryToken(item?.categoryLabel);
+    const categoryKey = normalizeCategoryToken(item?.category);
+    return (
+      TXN_CATEGORY_MM_LABELS[labelKey] ||
+      TXN_CATEGORY_MM_LABELS[categoryKey] ||
+      item?.categoryLabel ||
+      CATEGORY_LABELS[item?.category as keyof typeof CATEGORY_LABELS] ||
+      String(item?.category || "")
+    );
+  };
 
   if (!member) {
     return (
@@ -488,8 +526,8 @@ export default function MemberDetailScreen() {
         });
         Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
       } else {
-        if (hasUnrestrictedChanges && !canEditGeneralOwnInfo) {
-          Alert.alert("ခွင့်မပြုပါ", "မိမိနှင့်မသက်ဆိုင်သည့် ကိုယ်ရေးအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+        if (hasUnrestrictedChanges && !canEditGeneralFields) {
+          Alert.alert("ခွင့်မပြုပါ", "ကော်မတီအဖွဲ့ဝင်များသာ ဤအချက်အလက်များကို ပြင်ဆင်ခွင့်ရှိပါသည်။");
           setSaving(false);
           return;
         }
@@ -954,7 +992,7 @@ export default function MemberDetailScreen() {
                         <Ionicons name={t.type === 'income' ? "arrow-down" : "arrow-up"} size={16} color={t.type === 'income' ? Colors.light.success : Colors.light.accent} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.txnCat}>{t.categoryLabel || CATEGORY_LABELS[t.category as keyof typeof CATEGORY_LABELS] || t.category}</Text>
+                        <Text style={styles.txnCat}>{getTxnCategoryLabel(t)}</Text>
                         <Text style={styles.txnDate}>{new Date(t.date).toLocaleDateString()}</Text>
                       </View>
                       <Text style={[styles.txnAmount, { color: t.type === 'income' ? Colors.light.success : Colors.light.accent }]}>

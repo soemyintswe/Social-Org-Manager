@@ -80,6 +80,11 @@ export default function MembersScreen() {
     if (!canViewSelfMember || !ownMemberId) return [] as MemberListItem[];
     return (members as MemberListItem[]).filter((member) => member.id === ownMemberId);
   }, [members, canViewAllMembers, canViewSelfMember, ownMemberId]);
+  const ownMember = useMemo(
+    () => (members as MemberListItem[]).find((member) => String(member.id) === String(ownMemberId)),
+    [members, ownMemberId]
+  );
+  const canOpenOwnProfile = Boolean(ownMember?.id);
 
   const parseDate = useCallback((dateStr?: string) => {
     const parsed = parseGregorianDate(dateStr);
@@ -380,6 +385,28 @@ export default function MembersScreen() {
 
 
       <View>
+        <View style={styles.memberUtilityRow}>
+          {canOpenOwnProfile && (
+            <Pressable
+              onPress={() => router.push({ pathname: "/member-detail", params: { id: String(ownMemberId) } } as any)}
+              style={styles.memberUtilityBtn}
+              accessibilityRole="button"
+              accessibilityLabel="My Profile"
+            >
+              <Ionicons name="person-circle-outline" size={17} color={Colors.light.tint} />
+              <Text style={styles.memberUtilityText}>My Profile</Text>
+            </Pressable>
+          )}
+          <Pressable
+            onPress={() => router.push({ pathname: "/qr-scanner", params: { mode: "member_verify" } } as any)}
+            style={styles.memberUtilityBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Scan Member Card"
+          >
+            <Ionicons name="qr-code-outline" size={17} color={Colors.light.tint} />
+            <Text style={styles.memberUtilityText}>Scan Card</Text>
+          </Pressable>
+        </View>
         <View style={{ flexDirection: 'row', paddingHorizontal: 15, marginBottom: 10, gap: 10, alignItems: 'center' }}>
           <View style={[styles.searchBar, { margin: 0, flex: 1 }]}>
             <Ionicons name="search" size={20} color={Colors.light.textSecondary} />
@@ -736,6 +763,28 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
   },
   searchBar: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.light.surface, margin: 15, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, height: 44 },
+  memberUtilityRow: {
+    flexDirection: "row",
+    paddingHorizontal: 15,
+    marginBottom: 8,
+    gap: 8,
+  },
+  memberUtilityBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  memberUtilityText: {
+    fontSize: 12,
+    color: Colors.light.text,
+    fontFamily: "Inter_500Medium",
+  },
   filterBtn: {
     width: 44, height: 44, borderRadius: 10, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border, justifyContent: 'center', alignItems: 'center'
   },

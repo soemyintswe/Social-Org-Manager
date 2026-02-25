@@ -57,6 +57,31 @@ const getEventTime = (event: OrgEvent) => {
 // A utility function for consistent currency formatting
 const formatCurrency = (amount: number) => `${amount.toLocaleString()} KS`;
 
+const TXN_CATEGORY_MM_LABELS: Record<string, string> = {
+  member_fees: "လစဉ်ကြေးရငွေ",
+  donations: "အလှူငွေရရှိ",
+  donation: "အလှူငွေရရှိ",
+  bank_interest: "ဘဏ်တိုးရငွေ",
+  other_income: "အခြားရငွေ",
+  loan_repayment: "ချေးငွေပြန်ဆပ်ရရှိငွေ",
+  interest_income: "အတိုးရငွေ",
+  health_support: "ကျန်းမာရေးထောက်ပံ့ငွေ",
+  education_support: "ပညာရေးထောက်ပံ့ငွေ",
+  funeral_support: "နာရေးကူညီငွေ",
+  loan_disbursement: "ချေးငွေထုတ်ပေးငွေ",
+  bank_charges: "ဘဏ်စရိတ်ပေးငွေ",
+  general_expenses: "အထွေထွေအသုံးစရိတ်",
+  other_expenses: "အခြားအသုံးစရိတ်",
+  bank_deposit: "ဘဏ်သို့ ငွေသွင်းခြင်း",
+  bank_withdraw: "ဘဏ်မှ ငွေထုတ်ခြင်း",
+};
+
+const normalizeCategoryToken = (value: unknown): string =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
 function StatCard({
   icon,
   label,
@@ -245,6 +270,18 @@ export default function DashboardScreen() {
     if (!id) return "";
     const m = members?.find((m: any) => m.id === id);
     return m ? (m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim()) : "";
+  };
+
+  const getRecentTxnCategoryLabel = (txn: Transaction) => {
+    const categoryLabelKey = normalizeCategoryToken(txn.categoryLabel);
+    const categoryKey = normalizeCategoryToken(txn.category);
+    return (
+      TXN_CATEGORY_MM_LABELS[categoryLabelKey] ||
+      TXN_CATEGORY_MM_LABELS[categoryKey] ||
+      txn.categoryLabel ||
+      CATEGORY_LABELS[txn.category as keyof typeof CATEGORY_LABELS] ||
+      String(txn.category || "")
+    );
   };
 
   const recentTxns: Transaction[] = useMemo(() => {
@@ -947,7 +984,7 @@ export default function DashboardScreen() {
                 </View>
                 <View style={styles.recentTxnInfo}>
                   <Text style={styles.recentTxnCat} numberOfLines={1}>
-                    {txn.categoryLabel || CATEGORY_LABELS[txn.category] || txn.category}
+                    {getRecentTxnCategoryLabel(txn)}
                   </Text>
                   <Text style={styles.recentTxnMeta} numberOfLines={1}>
                     {getMemberName(txn.memberId) || txn.payerPayee || txn.receiptNumber} • {new Date(txn.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
@@ -977,12 +1014,12 @@ const styles = StyleSheet.create({
   orgName: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerIdentity: { flex: 1, marginLeft: 12, fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, textAlign: "right" },
   profileBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "white", justifyContent: "center", alignItems: "center", elevation: 2 },
-  statsGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 15, gap: 10, marginBottom: 25 },
+  statsGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", paddingHorizontal: 15, marginBottom: 25 },
   noticeRow: { flexDirection: "row", paddingHorizontal: 20, gap: 10, marginBottom: 18 },
   noticeCard: { flex: 1, backgroundColor: "white", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 12 },
   noticeTitle: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   noticeCount: { fontSize: 20, color: Colors.light.text, fontFamily: "Inter_700Bold", marginTop: 4 },
-  statCard: { flex: 1, minWidth: "45%", backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
+  statCard: { width: "48%", marginBottom: 10, backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
   statIconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 10 },
   statValue: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
   statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, marginTop: 2 },
