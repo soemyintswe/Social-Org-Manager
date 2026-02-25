@@ -915,7 +915,13 @@ export default function ReportsScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.pageContent, { paddingTop: insets.top }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
       <View style={styles.header}>
         <Text style={styles.title}>အစီရင်ခံစာ - {scopeLabel}</Text>
         <View style={styles.headerActions}>
@@ -1107,7 +1113,7 @@ export default function ReportsScreen() {
       </View>
 
       {reportTab === "income_expense" && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
             <View style={styles.summaryGrid}>
               <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
                 <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအဝင်" : "အသင်းသို့ပေးသွင်းငွေများ"}</Text>
@@ -1157,11 +1163,11 @@ export default function ReportsScreen() {
                 <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် အသေးစိတ်စာရင်းများ မပြထားပါ။</Text>
               </View>
             )}
-        </ScrollView>
+        </View>
       )}
 
       {reportTab === "loans" && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
           <View style={styles.summaryGrid}>
             <View style={[styles.statBox, { borderLeftColor: "#F59E0B" }]}>
               <Text style={styles.statLabel}>ထုတ်ချေးငွေ</Text>
@@ -1207,11 +1213,11 @@ export default function ReportsScreen() {
               <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် ချေးငွေ အသေးစိတ်မှတ်တမ်း မပြထားပါ။</Text>
             </View>
           )}
-        </ScrollView>
+        </View>
       )}
 
       {reportTab === "funds" && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
           {isAllScope ? (
             <>
               <View style={styles.section}>
@@ -1316,11 +1322,11 @@ export default function ReportsScreen() {
               <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် အသေးစိတ်စာရင်းများ မပြထားပါ။</Text>
             </View>
           )}
-        </ScrollView>
+        </View>
       )}
 
       {reportTab === "registers" && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>မှတ်ပုံတင်ပုံစံ စာရင်းများ</Text>
             <View style={styles.registerModeRow}>
@@ -1394,11 +1400,11 @@ export default function ReportsScreen() {
               <Text style={styles.summaryOnlyNoteText}>ကြည့်ရှုခွင့်ကန့်သတ်ထားသောကြောင့် အသေးစိတ်စာရင်း မပြထားပါ။</Text>
             </View>
           )}
-        </ScrollView>
+        </View>
       )}
 
       {reportTab === "cash_book" && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
           {isAllScope ? (
             <>
               <View style={styles.summaryGrid}>
@@ -1512,11 +1518,11 @@ export default function ReportsScreen() {
               <Text style={styles.summaryOnlyNoteText}>အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရရှိထားသောကြောင့် နှစ်ကော်လံ ငွေစာရင်းအသေးစိတ် မပြထားပါ။</Text>
             </View>
           )}
-        </ScrollView>
+        </View>
       )}
 
       {reportTab === "fees" && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
           <View style={{ paddingHorizontal: 20 }}>
             <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({startDate.getFullYear()})</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={true}>
@@ -1587,11 +1593,11 @@ export default function ReportsScreen() {
               </View>
             </ScrollView>
           </View>
-        </ScrollView>
+        </View>
       )}
 
       {reportTab === "audit_flags" && canViewAuditFlags && (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.scrollContent}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>စာရင်းစစ် အမှတ်အသားပြုထားသော စာရင်းများ</Text>
             <View style={styles.auditToolbar}>
@@ -1637,8 +1643,9 @@ export default function ReportsScreen() {
               ))
             )}
           </View>
-        </ScrollView>
+        </View>
       )}
+      </ScrollView>
 
       <Modal
         animationType="slide"
@@ -1684,22 +1691,23 @@ export default function ReportsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
+  pageContent: { paddingBottom: 28 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  title: { fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerActions: { flexDirection: "row", alignItems: "center" },
-  headerIconBtn: { padding: 8 },
-  filterSection: { paddingHorizontal: 20, marginBottom: 15, gap: 10 },
+  headerIconBtn: { padding: 6 },
+  filterSection: { paddingHorizontal: 16, marginBottom: 10, gap: 8 },
   scopeCard: {
-    marginHorizontal: 20,
-    marginBottom: 10,
-    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
     borderRadius: 12,
     backgroundColor: "white",
     borderWidth: 1,
@@ -1729,12 +1737,12 @@ const styles = StyleSheet.create({
   memberPickerWrap: { gap: 8, marginTop: 8 },
   memberSearchInput: {
     backgroundColor: "#F8FAFC",
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 12.5,
     color: Colors.light.text,
   },
   memberPickerBtn: {
@@ -1743,12 +1751,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     borderWidth: 1,
     borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     backgroundColor: "#F8FAFC",
   },
-  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   registerModeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
   registerModeChip: {
     paddingHorizontal: 10,
@@ -1764,22 +1772,22 @@ const styles = StyleSheet.create({
   },
   registerModeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   registerModeChipTextActive: { color: "white" },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
-  dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
-  searchBtn: { backgroundColor: Colors.light.tint, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
+  dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  searchBtn: { backgroundColor: Colors.light.tint, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   periodPicker: { flexDirection: "row", gap: 8 },
-  periodBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
+  periodBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
   periodBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
-  periodText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  periodText: { fontSize: 11.5, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   periodTextActive: { color: "white" },
-  tabBar: { flexDirection: "row", paddingHorizontal: 20, marginBottom: 10 },
-  tab: { paddingVertical: 8, paddingHorizontal: 4 },
+  tabBar: { flexDirection: "row", paddingHorizontal: 16, marginBottom: 8 },
+  tab: { paddingVertical: 6, paddingHorizontal: 4 },
   activeTab: { borderBottomWidth: 2, borderBottomColor: Colors.light.tint },
-  tabText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  tabText: { fontSize: 13.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   activeTabText: { color: Colors.light.tint },
-  scrollContent: { paddingBottom: 40 },
-  summaryGrid: { flexDirection: "row", paddingHorizontal: 20, gap: 12, marginBottom: 20 },
+  scrollContent: { paddingBottom: 24 },
+  summaryGrid: { flexDirection: "row", paddingHorizontal: 16, gap: 10, marginBottom: 14 },
   statBox: {
     flex: 1,
     backgroundColor: "white",
@@ -1797,16 +1805,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
   },
-  statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, flex: 1 },
-  statValue: { fontSize: 14, fontFamily: "Inter_700Bold" },
-  section: { backgroundColor: "white", marginHorizontal: 20, padding: 15, borderRadius: 16, marginBottom: 20 },
-  sectionTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 15 },
+  statLabel: { fontSize: 11.5, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, flex: 1 },
+  statValue: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  section: { backgroundColor: "white", marginHorizontal: 16, padding: 12, borderRadius: 14, marginBottom: 14 },
+  sectionTitle: { fontSize: 14.5, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 10 },
   catRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   catInfo: { flexDirection: "row", alignItems: "center", gap: 10 },
   catDot: { width: 8, height: 8, borderRadius: 4 },
-  catLabel: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text },
-  catValue: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  catSub: { fontSize: 12, color: Colors.light.textSecondary, marginLeft: 6 },
+  catLabel: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  catValue: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  catSub: { fontSize: 11.5, color: Colors.light.textSecondary, marginLeft: 6 },
   cashBookLiteRow: {
     borderWidth: 1,
     borderColor: Colors.light.border,

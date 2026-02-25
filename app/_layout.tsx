@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useRef, useState } from "react";
+import * as Application from "expo-application";
 import * as FileSystem from "expo-file-system/legacy";
 import * as IntentLauncher from "expo-intent-launcher";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -40,6 +41,9 @@ const APP_UPDATE_LAST_CHECKED_KEY = "@app_update_last_checked_at";
 const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
 const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
+const FLAG_GRANT_READ_URI_PERMISSION = 1;
+const FLAG_GRANT_WRITE_URI_PERMISSION = 2;
+const FLAG_ACTIVITY_NEW_TASK = 268435456;
 
 function buildUpdateDownloadUrlCandidates(rawUrl: string): string[] {
   const text = String(rawUrl || "").trim();
@@ -88,6 +92,64 @@ function buildUpdateDownloadUrlCandidates(rawUrl: string): string[] {
 function isLikelyGitLfsPointer(content: string): boolean {
   const text = String(content || "").trim();
   return text.startsWith("version https://git-lfs.github.com/spec/v1") && text.includes("oid sha256:");
+}
+
+async function openUnknownSourcesSettings(): Promise<boolean> {
+  const appId = String((Application as any).applicationId || "").trim();
+  if (!appId) return false;
+  try {
+    await IntentLauncher.startActivityAsync("android.settings.MANAGE_UNKNOWN_APP_SOURCES", {
+      data: `package:${appId}`,
+      flags: FLAG_ACTIVITY_NEW_TASK,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tryOpenInstaller(contentUri: string, fileUri: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    await IntentLauncher.startActivityAsync("android.intent.action.INSTALL_PACKAGE", {
+      data: contentUri,
+      type: "application/vnd.android.package-archive",
+      flags: FLAG_GRANT_READ_URI_PERMISSION | FLAG_GRANT_WRITE_URI_PERMISSION | FLAG_ACTIVITY_NEW_TASK,
+      extra: {
+        "android.intent.extra.NOT_UNKNOWN_SOURCE": true,
+        "android.intent.extra.RETURN_RESULT": false,
+      },
+    } as any);
+    return { ok: true };
+  } catch (e: any) {
+    const firstReason = String(e?.message || "install_package_failed");
+    try {
+      await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+        data: contentUri,
+        type: "application/vnd.android.package-archive",
+        flags: FLAG_GRANT_READ_URI_PERMISSION | FLAG_GRANT_WRITE_URI_PERMISSION | FLAG_ACTIVITY_NEW_TASK,
+      } as any);
+      return { ok: true };
+    } catch (e2: any) {
+      const secondReason = String(e2?.message || "view_content_uri_failed");
+      try {
+        await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+          data: fileUri,
+          type: "application/vnd.android.package-archive",
+          flags: FLAG_ACTIVITY_NEW_TASK,
+        } as any);
+        return { ok: true };
+      } catch (e3: any) {
+        const thirdReason = String(e3?.message || "view_file_uri_failed");
+        try {
+          await Linking.openURL(contentUri);
+          return { ok: true };
+        } catch (e4: any) {
+          const fourthReason = String(e4?.message || "linking_open_failed");
+          return { ok: false, reason: `${firstReason} | ${secondReason} | ${thirdReason} | ${fourthReason}` };
+        }
+      }
+    }
+  }
 }
 
 function RootLayoutNav() {
@@ -244,8 +306,8 @@ function RootLayoutNav() {
             continue;
           }
 
-          const fileInfo = await FileSystem.getInfoAsync(downloadResult.uri, { size: true });
-          const size = Number(fileInfo.size || 0);
+          const fileInfo: any = await FileSystem.getInfoAsync(downloadResult.uri);
+          const size = Number(fileInfo?.size || 0);
           if (!fileInfo.exists || size <= 0) {
             lastDownloadError = "downloaded_file_missing";
             continue;
@@ -277,43 +339,26 @@ function RootLayoutNav() {
 
       setUpdateProgressText("Install prompt ကိုဖွင့်နေပါသည်...");
       const contentUri = await FileSystem.getContentUriAsync(downloadedUri);
-      let installStarted = false;
-      try {
-        await IntentLauncher.startActivityAsync("android.intent.action.INSTALL_PACKAGE", {
-          data: contentUri,
-          type: "application/vnd.android.package-archive",
-          flags: 1 | 2 | 268435456,
-          extra: {
-            "android.intent.extra.NOT_UNKNOWN_SOURCE": true,
-            "android.intent.extra.RETURN_RESULT": false,
-          },
-        } as any);
-        installStarted = true;
-      } catch {
-        try {
-          await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
-            data: contentUri,
-            type: "application/vnd.android.package-archive",
-            flags: 1 | 2 | 268435456,
-          });
-          installStarted = true;
-        } catch {}
-      }
-      if (!installStarted) {
-        throw new Error("install_intent_failed");
+      const installResult = await tryOpenInstaller(contentUri, downloadedUri);
+      if (!installResult.ok) {
+        throw new Error(`install_intent_failed:${installResult.reason || "unknown"}`);
       }
       console.log("update_now_download_url_used", usedCandidate);
       setShowUpdateModal(false);
     } catch (error: any) {
+      const errText = String(error?.message || error || "");
+      const openedSettings = await openUnknownSourcesSettings();
       Alert.alert(
         "Update မလုပ်နိုင်သေးပါ",
-        "Auto install မဖြစ်သေးပါ။ Download link ကို browser ဖြင့်ဖွင့်ပေးပါမည်။"
+        openedSettings
+          ? "Install permission (Unknown sources) ကို Allow လုပ်ပြီး ပြန် Update လုပ်ပေးပါ။"
+          : "Auto install မဖြစ်သေးပါ။ Download link ကို browser ဖြင့်ဖွင့်ပေးပါမည်။"
       );
       try {
         const fallbackUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
         if (fallbackUrls[0]) await Linking.openURL(fallbackUrls[0]);
       } catch {}
-      console.log("update_now_error", String(error?.message || error));
+      console.log("update_now_error", errText);
     } finally {
       setUpdatingNow(false);
       setUpdateProgressText("");

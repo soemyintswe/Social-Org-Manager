@@ -451,6 +451,21 @@ export default function FinanceScreen() {
   }, [loanMetricRows]);
 
   const isAllScope = effectiveScope === "all";
+  const activeListData = useMemo<any[]>(() => {
+    if (activeTab === "loans") return (visibleLoans as any[]) || [];
+    if (activeTab === "transfers") {
+      return (
+        isAllScope
+          ? visibleTxns.filter((t: any) => t.type === "transfer")
+          : visibleTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
+      ) as any[];
+    }
+    return (
+      isAllScope
+        ? visibleTxns.filter((t: any) => t.type !== "transfer")
+        : visibleTxns.filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
+    ) as any[];
+  }, [activeTab, isAllScope, visibleLoans, visibleTxns]);
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -467,7 +482,13 @@ export default function FinanceScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.pageContent, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 14) + 24 }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
       <View style={[styles.header, { flexDirection: 'column', alignItems: 'stretch', gap: 5 }]}>
         <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center" }}>
           <View style={styles.headerButtons}>
@@ -693,32 +714,13 @@ export default function FinanceScreen() {
       </View>
 
       {!canViewFinanceDetail && canViewFinanceSummary && !canViewFinanceSelf ? (
-        <View style={styles.emptyContainer}>
+        <View style={styles.emptyContainerCompact}>
           <Ionicons name="shield-checkmark-outline" size={40} color={Colors.light.textSecondary} />
           <Text style={styles.emptyText}>Summary only permission ဖြစ်သောကြောင့် အသေးစိတ်စာရင်း မပြထားပါ။</Text>
         </View>
       ) : (
-      <FlatList
-        // FlatList Error အတွက် explicit typing သုံးပေးထားပါသည်
-        data={
-          activeTab === "loans" 
-            ? (visibleLoans as any[]) 
-            : activeTab === "transfers"
-              ? (
-                  isAllScope
-                    ? visibleTxns.filter(t => t.type === 'transfer')
-                    : visibleTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
-                ) as any[]
-              : (
-                  isAllScope
-                    ? visibleTxns.filter(t => t.type !== 'transfer')
-                    : visibleTxns.filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
-                ) as any[]
-        }
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        ListHeaderComponent={
-          activeTab === "loans" ? (
+        <View style={styles.listContent}>
+          {activeTab === "loans" ? (
             <View style={styles.loanSummaryWrap}>
               <Text style={styles.loanSummaryTitle}>ချေးငွေအရင်း စာရင်းချုပ်</Text>
               <View style={styles.loanPrimaryRow}>
@@ -747,46 +749,49 @@ export default function FinanceScreen() {
 
               <Text style={styles.loanSummaryTitle}>ချေးငွေအသေးစိတ်စာရင်း</Text>
             </View>
-          ) : null
-        }
-        renderItem={({ item }) => {
-          if (activeTab === "transactions" || activeTab === "transfers") {
-            const txn = item as Transaction;
-            const memberName = getMemberName(txn.memberId);
-            const displayName = memberName || (item as any).payerPayee;
-            return (
-              <TransactionRow
-                txn={txn}
-                memberName={displayName}
-                onDelete={removeTransaction}
-                canEdit={canEditFinance}
-                canDelete={canDeleteFinance}
-                canAuditFlag={canAuditFlagFinance}
-                onAuditPress={openAuditModal}
-              />
-            );
-          } else {
-            const loan = item as Loan;
-            const member = members.find((m: any) => m.id === loan.memberId);
-            const metrics = computeLoanMetrics(loan as any, balanceSourceTransactions as any);
-            return (
-              <LoanRow
-                loan={loan}
-                memberName={member?.name}
-                outstanding={getLoanOutstanding(loan.id)}
-                metrics={metrics}
-              />
-            );
-          }
-        }}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="receipt-outline" size={48} color={Colors.light.textSecondary} />
-            <Text style={styles.emptyText}>မှတ်တမ်းများ မရှိသေးပါ</Text>
-          </View>
-        }
-      />
+          ) : null}
+          {activeListData.length === 0 ? (
+            <View style={styles.emptyContainerCompact}>
+              <Ionicons name="receipt-outline" size={40} color={Colors.light.textSecondary} />
+              <Text style={styles.emptyText}>မှတ်တမ်းများ မရှိသေးပါ</Text>
+            </View>
+          ) : (
+            activeListData.map((item: any) => {
+              if (activeTab === "transactions" || activeTab === "transfers") {
+                const txn = item as Transaction;
+                const memberName = getMemberName(txn.memberId);
+                const displayName = memberName || (item as any).payerPayee;
+                return (
+                  <TransactionRow
+                    key={txn.id}
+                    txn={txn}
+                    memberName={displayName}
+                    onDelete={removeTransaction}
+                    canEdit={canEditFinance}
+                    canDelete={canDeleteFinance}
+                    canAuditFlag={canAuditFlagFinance}
+                    onAuditPress={openAuditModal}
+                  />
+                );
+              }
+
+              const loan = item as Loan;
+              const member = members.find((m: any) => m.id === loan.memberId);
+              const metrics = computeLoanMetrics(loan as any, balanceSourceTransactions as any);
+              return (
+                <LoanRow
+                  key={loan.id}
+                  loan={loan}
+                  memberName={member?.name}
+                  outstanding={getLoanOutstanding(loan.id)}
+                  metrics={metrics}
+                />
+              );
+            })
+          )}
+        </View>
       )}
+      </ScrollView>
 
       {/* Opening Balance Modal */}
       <Modal
@@ -895,20 +900,21 @@ export default function FinanceScreen() {
 // ... styles remain the same (အပေါ်က ကုဒ်ဟောင်းအတိုင်း သုံးနိုင်ပါသည်)
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
+  pageContent: { paddingBottom: 24 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  title: { fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
   scopeCard: {
-    marginHorizontal: 20,
-    marginBottom: 10,
-    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
     borderRadius: 12,
     backgroundColor: "white",
     borderWidth: 1,
@@ -938,12 +944,12 @@ const styles = StyleSheet.create({
   memberPickerWrap: { gap: 8, marginTop: 8 },
   memberSearchInput: {
     backgroundColor: "#F8FAFC",
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 12.5,
     color: Colors.light.text,
   },
   memberPickerBtn: {
@@ -952,16 +958,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     borderWidth: 1,
     borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     backgroundColor: "#F8FAFC",
   },
-  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: Colors.light.tint,
     justifyContent: "center",
     alignItems: "center",
@@ -969,9 +975,9 @@ const styles = StyleSheet.create({
   balanceGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    paddingHorizontal: 15,
+    paddingHorizontal: 14,
     gap: 10,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   balanceCard: {
     flex: 1,
@@ -1019,18 +1025,18 @@ const styles = StyleSheet.create({
   miniMetricTitle: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", flex: 1 },
   miniMetricValue: { fontSize: 12.5, fontFamily: "Inter_700Bold" },
   quickActionsTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontFamily: "Inter_700Bold",
     color: Colors.light.text,
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingHorizontal: 16,
+    marginBottom: 6,
   },
   quickActionsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 8,
   },
   quickActionBtn: {
     flexDirection: "row",
@@ -1044,21 +1050,21 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   quickActionText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontFamily: "Inter_600SemiBold",
     color: Colors.light.text,
   },
   tabBar: {
     flexDirection: "row",
-    paddingHorizontal: 20,
-    marginBottom: 10,
-    gap: 15,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    gap: 10,
   },
-  tab: { paddingVertical: 8, paddingHorizontal: 4 },
+  tab: { paddingVertical: 6, paddingHorizontal: 4 },
   activeTab: { borderBottomWidth: 2, borderBottomColor: Colors.light.tint },
-  tabText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  tabText: { fontSize: 13.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   activeTabText: { color: Colors.light.tint },
-  listContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  listContent: { paddingHorizontal: 16, paddingBottom: 8 },
   txnRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1169,10 +1175,11 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   emptyContainer: { alignItems: "center", marginTop: 50 },
+  emptyContainerCompact: { alignItems: "center", marginTop: 20, marginBottom: 12 },
   emptyText: { marginTop: 10, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  filterContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 20, marginBottom: 15 },
-  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
-  dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  filterContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, marginBottom: 10 },
+  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
+  dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
   modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
