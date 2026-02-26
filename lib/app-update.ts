@@ -1,6 +1,7 @@
 import Constants from "expo-constants";
 import * as Application from "expo-application";
 import { getAccountSettings } from "@/lib/storage";
+import { getAppUpdateJsonUrl } from "@/lib/remote-config";
 
 export type AppUpdateInfo = {
   ok: boolean;
@@ -14,8 +15,8 @@ export type AppUpdateInfo = {
   reason?: string;
 };
 
-const GITHUB_APP_UPDATE_JSON_URL =
-  "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/feature/expense-management-system/server/config/app-update.json";
+// Default GitHub URL as fallback
+const DEFAULT_GITHUB_APP_UPDATE_JSON_URL = "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/feature/expense-management-system/server/config/app-update.json";
 
 function parseVersion(version: string): number[] {
   return String(version || "")
@@ -87,35 +88,48 @@ function mapPayloadToInfo(payload: Partial<AppUpdateInfo>, currentVersion: strin
 
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = getCurrentAppVersion();
+  
+  // 1. Try Local Server / LAN Sync URL first
   try {
     const settings = await getAccountSettings();
     const baseUrl = normalizeUrl(settings.syncServerUrl || "");
     if (baseUrl) {
       try {
         const res = await fetchWithTimeout(
-          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}`
+          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}`,
+          3000 // Short timeout for LAN check
         );
         if (res.ok) {
           const payload = (await res.json()) as Partial<AppUpdateInfo>;
           return mapPayloadToInfo(payload, currentVersion);
         }
       } catch {
-        // fall through to GitHub manifest
+        // LAN failed, fall through to Cloud / Remote Config
       }
     }
+  } catch (e) {
+    // Ignore storage errors
+  }
 
-    const githubRes = await fetchWithTimeout(GITHUB_APP_UPDATE_JSON_URL);
-    if (!githubRes.ok) {
+  // 2. Try Remote Config URL or default GitHub URL
+  let updateUrl = getAppUpdateJsonUrl();
+  if (!updateUrl) {
+    updateUrl = DEFAULT_GITHUB_APP_UPDATE_JSON_URL;
+  }
+
+  try {
+    const res = await fetchWithTimeout(updateUrl);
+    if (!res.ok) {
       return {
         ok: false,
         hasUpdate: false,
         latestVersion: "",
         downloadUrl: "",
-        reason: `http_${githubRes.status}`,
+        reason: `http_${res.status}`,
       };
     }
-    const githubPayload = (await githubRes.json()) as Partial<AppUpdateInfo>;
-    return mapPayloadToInfo(githubPayload, currentVersion);
+    const payload = (await res.json()) as Partial<AppUpdateInfo>;
+    return mapPayloadToInfo(payload, currentVersion);
   } catch (e: any) {
     return {
       ok: false,

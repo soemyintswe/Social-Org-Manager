@@ -1,0 +1,8 @@
+Social-Org-Manager Deployment successfully updated.
+Version 1 on Feb 22, 2026, 3:35 AM
+Deployment ID
+AKfycbzYcaMGUO4rdmzmkUf4gXLeoAREKacDyCB1NEDZ9s9Q70NUw5BV2roWWfU7zaoGbmvf
+
+Web app
+URL
+https://script.google.com/macros/s/AKfycbzYcaMGUO4rdmzmkUf4gXLeoAREKacDyCB1NEDZ9s9Q70NUw5BV2roWWfU7zaoGbmvf/exec

@@ -223,11 +223,48 @@ function RootLayoutNav() {
       void checkForUpdateNow(true);
     });
 
+    
     return () => {
       clearInterval(timer);
       sub.remove();
     };
   }, [loading]);
+
+  useEffect(() => {
+    // Initialize Firebase Remote Config
+    if (Platform.OS === 'web') return; // Firebase Remote Config native module doesn't work on web in this setup
+
+    const initRemoteConfig = async () => {
+      try {
+        await remoteConfig().setDefaults({
+          welcome_message: 'Welcome to OrgHub',
+          feature_new_ui_enabled: false,
+        });
+
+        // Fetch and activate
+        // During development, you might want to set minimumFetchIntervalMillis to 0
+        await remoteConfig().setConfigSettings({
+          minimumFetchIntervalMillis: __DEV__ ? 0 : 3600000, // 1 hour for prod
+        });
+
+        const fetched = await remoteConfig().fetchAndActivate();
+        if (fetched) {
+          console.log('Firebase Remote Config fetched and activated');
+        } else {
+          console.log('Firebase Remote Config already activated');
+        }
+
+        // Example: Reading a value
+        // const welcomeMessage = remoteConfig().getValue('welcome_message').asString();
+        // console.log('Welcome Message:', welcomeMessage);
+
+      } catch (error) {
+        console.log('Firebase Remote Config initialization failed', error);
+      }
+    };
+
+    initRemoteConfig();
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
