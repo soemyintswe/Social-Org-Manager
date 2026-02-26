@@ -437,9 +437,10 @@ export default function FinanceScreen() {
     const repaid = visibleTxns
       .filter((t: any) => String(t?.category || "") === "loan_repayment")
       .reduce((sum: number, t: any) => sum + Number(t?.amount || 0), 0);
-    const outstanding = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.principalOutstanding || 0), 0);
+    // Use direct subtraction to ensure outstanding matches displayed totals (Disbursed - Repaid)
+    const outstanding = disbursed - repaid;
     return { disbursed, repaid, outstanding };
-  }, [visibleTxns, loanMetricRows]);
+  }, [visibleTxns]);
 
   const loanInterestSummary = useMemo(() => {
     const base = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.baseInterest || 0), 0);

@@ -322,7 +322,7 @@ export default function AddTransactionScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 20 }]} keyboardShouldPersistTaps="handled">
+            <ScrollView contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 120 }]} keyboardShouldPersistTaps="handled">
         <Text style={styles.label}>စာရင်းအမျိုးအစား</Text>
         <View style={styles.typeSelector}>
           <Pressable style={[styles.typeButton, type === "income" && styles.typeButtonActive]} onPress={() => setType("income")}>

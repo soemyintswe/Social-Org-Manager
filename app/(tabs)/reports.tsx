@@ -693,40 +693,6 @@ export default function ReportsScreen() {
     };
   }, [activeRegisterRows]);
 
-  const roleSummaryCards = useMemo(() => {
-    const role = profile?.orgPosition || "member";
-    const feeTxns = filteredTxns.filter((t: any) => t.category === "member_fees");
-    const donationTxns = filteredTxns.filter((t: any) => t.category === "donation");
-    const welfareTxns = filteredTxns.filter((t: any) => String(t.category || "").startsWith("welfare_"));
-    const flaggedTxns = filteredTxns.filter((t: any) => Boolean(t.auditFlagged));
-
-    if (role === "patron") {
-      return [
-        { label: "စုစုပေါင်းအဝင်", value: `${incomeExpenseStats.income.toLocaleString()} KS`, color: "#10B981" },
-        { label: "စုစုပေါင်းအထွက်", value: `${incomeExpenseStats.expense.toLocaleString()} KS`, color: "#F43F5E" },
-        { label: "လက်ကျန်ကွာဟချက်", value: `${incomeExpenseStats.net.toLocaleString()} KS`, color: "#8B5CF6" },
-      ];
-    }
-
-    if (role === "auditor") {
-      return [
-        { label: "အမှတ်အသားပြုစာရင်း", value: `${flaggedTxns.length}`, color: "#DC2626" },
-        {
-          label: "အမှတ်အသားပြုစုစုပေါင်းငွေ",
-          value: `${flaggedTxns.reduce((s: number, t: any) => s + Number(t.amount || 0), 0).toLocaleString()} KS`,
-          color: "#B45309",
-        },
-        { label: "စစ်ဆေးရမည့်ထောက်ပံ့မှု", value: `${welfareTxns.length}`, color: "#2563EB" },
-      ];
-    }
-
-    return [
-      { label: "ပေးသွင်းငွေ", value: `${incomeExpenseStats.income.toLocaleString()} KS`, color: "#10B981" },
-      { label: "ထုတ်ယူငွေ", value: `${incomeExpenseStats.expense.toLocaleString()} KS`, color: "#F43F5E" },
-      { label: "လစဉ်ကြေး/လှူဒါန်းမှု", value: `${(feeTxns.length + donationTxns.length).toLocaleString()}`, color: "#0EA5A4" },
-    ];
-  }, [profile?.orgPosition, filteredTxns, incomeExpenseStats]);
-
   const scopedAuditRows = useMemo(() => {
     const needle = auditSearch.trim().toLowerCase();
     return filteredTxns.filter((t: any) => {
@@ -1103,41 +1069,29 @@ export default function ReportsScreen() {
           <Text style={styles.summaryOnlyNoteText}>သင့်အကောင့်နှင့်သက်ဆိုင်သော အစီရင်ခံစာအချက်အလက်များကိုသာ ပြသထားပါသည်။</Text>
         </View>
       )}
-      <View style={styles.summaryGrid}>
-        {roleSummaryCards.map((card) => (
-          <View key={card.label} style={[styles.statBox, { borderLeftColor: card.color }]}>
-            <Text style={styles.statLabel}>{card.label}</Text>
-            <Text style={[styles.statValue, { color: card.color }]}>{card.value}</Text>
-          </View>
-        ))}
-      </View>
 
       {reportTab === "income_expense" && (
         <View style={styles.scrollContent}>
             <View style={styles.summaryGrid}>
               <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
-                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအဝင်" : "အသင်းသို့ပေးသွင်းငွေများ"}</Text>
+                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအဝင်" : "ပေးသွင်းငွေ"}</Text>
                 <Text style={[styles.statValue, { color: "#10B981" }]}>
                   {incomeExpenseStats.income.toLocaleString()} KS
                 </Text>
               </View>
               <View style={[styles.statBox, { borderLeftColor: "#F43F5E" }]}>
-                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအထွက်" : "အသင်းမှထုတ်ယူငွေ"}</Text>
+                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအထွက်" : "ထုတ်ယူငွေ"}</Text>
                 <Text style={[styles.statValue, { color: "#F43F5E" }]}>
                   {incomeExpenseStats.expense.toLocaleString()} KS
                 </Text>
               </View>
-            </View>
-            {!isAllScope && (
-              <View style={[styles.summaryGrid, { marginTop: -10 }]}>
-                <View style={[styles.statBox, { borderLeftColor: "#8B5CF6" }]}>
-                  <Text style={styles.statLabel}>စုစုပေါင်းကွာဟချက်</Text>
-                  <Text style={[styles.statValue, { color: "#8B5CF6" }]}>
-                    {incomeExpenseStats.net.toLocaleString()} KS
-                  </Text>
-                </View>
+              <View style={[styles.statBox, { borderLeftColor: "#8B5CF6" }]}>
+                <Text style={styles.statLabel}>ခြားနားချက်</Text>
+                <Text style={[styles.statValue, { color: "#8B5CF6" }]}>
+                  {incomeExpenseStats.net.toLocaleString()} KS
+                </Text>
               </View>
-            )}
+            </View>
 
             {showDetailRows ? (
               <View style={styles.section}>
@@ -1945,4 +1899,3 @@ const styles = StyleSheet.create({
   cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
   cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });
-

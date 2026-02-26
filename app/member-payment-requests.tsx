@@ -481,7 +481,7 @@ export default function MemberPaymentRequestsScreen() {
               <Text style={styles.saveBtn}>{submitting ? "Saving..." : "တင်မည်"}</Text>
             </Pressable>
           </View>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 20 }}>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 120 }}>
             <Text style={styles.label}>တောင်းခံအမျိုးအစား</Text>
             <View style={styles.pillRow}>
               {REQUEST_KIND_OPTIONS.map((option) => (

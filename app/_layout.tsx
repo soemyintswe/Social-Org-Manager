@@ -35,8 +35,10 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
+import remoteConfig from '@react-native-firebase/remote-config';
 
 SplashScreen.preventAutoHideAsync();
+
 const APP_UPDATE_LAST_CHECKED_KEY = "@app_update_last_checked_at";
 const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
 const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;

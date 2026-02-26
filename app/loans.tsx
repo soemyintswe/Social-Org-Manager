@@ -131,7 +131,9 @@ export default function LoansScreen() {
   const principalSummary = useMemo(() => {
     const issued = loanRows.reduce((sum: number, row: any) => sum + getLoanPrincipal(row.loan), 0);
     const repaid = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.principalRepaid || 0), 0);
-    const outstanding = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.principalOutstanding || 0), 0);
+
+    // Use direct subtraction to ensure outstanding reflects the difference
+    const outstanding = issued - repaid;
     return { issued, repaid, outstanding };
   }, [loanRows]);
 
