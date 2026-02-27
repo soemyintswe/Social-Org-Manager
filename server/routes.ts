@@ -12,6 +12,7 @@ type SyncSnapshot = {
 
 type AppUpdateConfig = {
   latestVersion: string;
+  latestBuildNumber?: string | number;
   minimumVersion?: string;
   downloadUrl: string;
   notes?: string;
@@ -59,6 +60,12 @@ function compareVersion(left: string, right: string): number {
     if (av < bv) return -1;
   }
   return 0;
+}
+
+function parseBuildNumber(value: unknown): number | null {
+  const n = Number(String(value ?? "").replace(/[^\d]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 function readSnapshot(): SyncSnapshot | null {
@@ -193,9 +200,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const currentVersion = String(req.query.version || "").trim();
-      const hasUpdate = currentVersion
+      const currentBuildNumber = parseBuildNumber(req.query.build);
+      const latestBuildNumber = parseBuildNumber(config.latestBuildNumber);
+
+      const hasUpdateByVersion = currentVersion
         ? compareVersion(config.latestVersion, currentVersion) > 0
         : true;
+      const hasUpdateByBuild =
+        currentBuildNumber !== null && latestBuildNumber !== null
+          ? latestBuildNumber > currentBuildNumber
+          : false;
+      const hasUpdate = hasUpdateByVersion || hasUpdateByBuild;
       const mustUpdate = !!(
         config.minimumVersion &&
         currentVersion &&
@@ -205,6 +220,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({
         ok: true,
         latestVersion: config.latestVersion,
+        latestBuildNumber: config.latestBuildNumber ? String(config.latestBuildNumber) : "",
         minimumVersion: config.minimumVersion || "",
         downloadUrl: config.downloadUrl,
         notes: config.notes || "",

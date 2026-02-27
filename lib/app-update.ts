@@ -7,6 +7,7 @@ export type AppUpdateInfo = {
   ok: boolean;
   hasUpdate: boolean;
   latestVersion: string;
+  latestBuildNumber?: string;
   minimumVersion?: string;
   downloadUrl: string;
   notes?: string;
@@ -15,8 +16,11 @@ export type AppUpdateInfo = {
   reason?: string;
 };
 
-// Default GitHub URL as fallback
-const DEFAULT_GITHUB_APP_UPDATE_JSON_URL = "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/feature/expense-management-system/server/config/app-update.json";
+const DEFAULT_GITHUB_APP_UPDATE_JSON_URLS = [
+  String((process.env as any).EXPO_PUBLIC_APP_UPDATE_JSON_URL || "").trim(),
+  "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/main/server/config/app-update.json",
+  "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/feature/expense-management-system/server/config/app-update.json",
+].filter(Boolean);
 
 function parseVersion(version: string): number[] {
   return String(version || "")
@@ -55,6 +59,12 @@ export function getCurrentBuildNumber(): string {
   );
 }
 
+function parseBuildNumber(value: string): number | null {
+  const n = Number(String(value || "").replace(/[^\d]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 function normalizeUrl(raw: string): string {
   const trimmed = String(raw || "").trim();
   if (!trimmed) return "";
@@ -62,81 +72,124 @@ function normalizeUrl(raw: string): string {
   return withProtocol.replace(/\/+$/, "");
 }
 
-async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
-  return await Promise.race([
-    fetch(url, { method: "GET" }),
-    new Promise<Response>((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
-  ]);
+function withCacheBust(url: string): string {
+  try {
+    const target = new URL(url);
+    target.searchParams.set("_ts", String(Date.now()));
+    return target.toString();
+  } catch {
+    return url;
+  }
 }
 
-function mapPayloadToInfo(payload: Partial<AppUpdateInfo>, currentVersion: string): AppUpdateInfo {
+function getRemoteUpdateJsonCandidates(remoteUrlRaw: string): string[] {
+  const fromRemoteConfig = String(remoteUrlRaw || "").trim();
+  return Array.from(new Set([fromRemoteConfig, ...DEFAULT_GITHUB_APP_UPDATE_JSON_URLS].filter(Boolean)));
+}
+
+async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function mapPayloadToInfo(payload: Partial<AppUpdateInfo>, currentVersion: string, currentBuild: string): AppUpdateInfo {
   const latestVersion = String(payload.latestVersion || "");
+  const latestBuildNumber = String((payload as any).latestBuildNumber || "");
+  const minimumVersion = String(payload.minimumVersion || "");
   const downloadUrl = String(payload.downloadUrl || "");
   const hasUpdateByCompare = latestVersion ? compareVersion(latestVersion, currentVersion) > 0 : false;
-  const hasUpdate = Boolean(payload.hasUpdate ?? hasUpdateByCompare);
+  const currentBuildNum = parseBuildNumber(currentBuild);
+  const latestBuildNum = parseBuildNumber(latestBuildNumber);
+  const hasUpdateByBuild =
+    currentBuildNum !== null && latestBuildNum !== null
+      ? latestBuildNum > currentBuildNum
+      : false;
+  const mustUpdateByMinimumVersion =
+    minimumVersion && currentVersion
+      ? compareVersion(minimumVersion, currentVersion) > 0
+      : false;
+  const hasUpdate = Boolean(
+    payload.force ||
+      payload.hasUpdate ||
+      hasUpdateByCompare ||
+      hasUpdateByBuild ||
+      mustUpdateByMinimumVersion
+  );
   return {
     ok: true,
     hasUpdate,
     latestVersion,
-    minimumVersion: String(payload.minimumVersion || ""),
+    latestBuildNumber,
+    minimumVersion,
     downloadUrl,
     notes: String(payload.notes || ""),
-    force: Boolean(payload.force),
+    force: Boolean(payload.force || mustUpdateByMinimumVersion),
     publishedAt: String(payload.publishedAt || ""),
   };
 }
 
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = getCurrentAppVersion();
+  const currentBuild = getCurrentBuildNumber();
   
   // 1. Try Local Server / LAN Sync URL first
   try {
     const settings = await getAccountSettings();
     const baseUrl = normalizeUrl(settings.syncServerUrl || "");
-    if (baseUrl) {
+    const lanSyncEnabled = settings.syncEnabled !== false && !!baseUrl;
+    if (lanSyncEnabled) {
       try {
         const res = await fetchWithTimeout(
-          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}`,
+          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}&build=${encodeURIComponent(currentBuild)}`,
           3000 // Short timeout for LAN check
         );
         if (res.ok) {
           const payload = (await res.json()) as Partial<AppUpdateInfo>;
-          return mapPayloadToInfo(payload, currentVersion);
+          return mapPayloadToInfo(payload, currentVersion, currentBuild);
         }
       } catch {
         // LAN failed, fall through to Cloud / Remote Config
       }
     }
-  } catch (e) {
+  } catch {
     // Ignore storage errors
   }
 
-  // 2. Try Remote Config URL or default GitHub URL
-  let updateUrl = getAppUpdateJsonUrl();
-  if (!updateUrl) {
-    updateUrl = DEFAULT_GITHUB_APP_UPDATE_JSON_URL;
+  // 2. Try Remote Config URL and GitHub fallbacks
+  const candidates = getRemoteUpdateJsonCandidates(getAppUpdateJsonUrl());
+  let lastReason = "update_check_failed";
+  for (const candidate of candidates) {
+    try {
+      const res = await fetchWithTimeout(withCacheBust(candidate), 10000);
+      if (!res.ok) {
+        lastReason = `http_${res.status}`;
+        continue;
+      }
+      const payload = (await res.json()) as Partial<AppUpdateInfo>;
+      return mapPayloadToInfo(payload, currentVersion, currentBuild);
+    } catch (e: any) {
+      lastReason = String(e?.message || "update_check_failed");
+    }
   }
 
-  try {
-    const res = await fetchWithTimeout(updateUrl);
-    if (!res.ok) {
-      return {
-        ok: false,
-        hasUpdate: false,
-        latestVersion: "",
-        downloadUrl: "",
-        reason: `http_${res.status}`,
-      };
-    }
-    const payload = (await res.json()) as Partial<AppUpdateInfo>;
-    return mapPayloadToInfo(payload, currentVersion);
-  } catch (e: any) {
-    return {
-      ok: false,
-      hasUpdate: false,
-      latestVersion: "",
-      downloadUrl: "",
-      reason: String(e?.message || "update_check_failed"),
-    };
-  }
+  return {
+    ok: false,
+    hasUpdate: false,
+    latestVersion: "",
+    latestBuildNumber: "",
+    downloadUrl: "",
+    reason: lastReason,
+  };
 }

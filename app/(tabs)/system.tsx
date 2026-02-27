@@ -72,13 +72,17 @@ export default function SystemScreen() {
       Alert.alert("Update Check", `Update စစ်ဆေးရာတွင် မအောင်မြင်ပါ။\nReason: ${info.reason || "unknown"}`);
       return;
     }
+    const latestBuild = String(info.latestBuildNumber || "-");
     if (!info.hasUpdate) {
-      Alert.alert("Update Check", `အသစ်မရှိသေးပါ။\nCurrent Version: ${currentVersion}`);
+      Alert.alert(
+        "Update Check",
+        `အသစ်မရှိသေးပါ။\nCurrent Version: ${currentVersion} (${currentBuild || "-"})\nLatest: ${info.latestVersion || "-"} (${latestBuild})`
+      );
       return;
     }
     Alert.alert(
       "Update Available",
-      `Current: ${currentVersion}\nLatest: ${info.latestVersion}\n\n${info.notes || ""}`,
+      `Current: ${currentVersion} (${currentBuild || "-"})\nLatest: ${info.latestVersion} (${latestBuild})\n\n${info.notes || ""}`,
       [
         { text: "Later", style: "cancel" },
         {

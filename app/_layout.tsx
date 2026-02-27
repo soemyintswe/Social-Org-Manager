@@ -27,7 +27,7 @@ import { queryClient } from "@/lib/query-client";
 import { DataProvider } from "@/lib/DataContext";
 import { AuthProvider, useAuth } from "@/lib/AuthContext";
 import Colors from "@/constants/colors";
-import { checkForAppUpdate, getCurrentAppVersion, type AppUpdateInfo } from "@/lib/app-update";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "@/lib/app-update";
 import {
   useFonts,
   Inter_400Regular,
@@ -46,6 +46,13 @@ const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 const FLAG_GRANT_WRITE_URI_PERMISSION = 2;
 const FLAG_ACTIVITY_NEW_TASK = 268435456;
+
+function getUpdateSkipToken(info: Pick<AppUpdateInfo, "latestVersion" | "latestBuildNumber" | "publishedAt">): string {
+  const version = String(info.latestVersion || "").trim();
+  const build = String(info.latestBuildNumber || "").trim();
+  const publishedAt = String(info.publishedAt || "").trim();
+  return `${version}|${build}|${publishedAt}`;
+}
 
 function buildUpdateDownloadUrlCandidates(rawUrl: string): string[] {
   const text = String(rawUrl || "").trim();
@@ -201,8 +208,8 @@ function RootLayoutNav() {
         await AsyncStorage.setItem(APP_UPDATE_LAST_CHECKED_KEY, String(now));
         if (!info.ok || !info.hasUpdate || !info.latestVersion || !info.downloadUrl) return;
 
-        const skippedVersion = String((await AsyncStorage.getItem(APP_UPDATE_SKIPPED_VERSION_KEY)) || "");
-        if (!info.force && skippedVersion && skippedVersion === info.latestVersion) return;
+        const skippedToken = String((await AsyncStorage.getItem(APP_UPDATE_SKIPPED_VERSION_KEY)) || "");
+        if (!info.force && skippedToken && skippedToken === getUpdateSkipToken(info)) return;
 
         setUpdateInfo(info);
         setShowUpdateModal(true);
@@ -411,7 +418,7 @@ function RootLayoutNav() {
 
   const handleSkipThisVersion = async () => {
     if (updateInfo?.latestVersion) {
-      await AsyncStorage.setItem(APP_UPDATE_SKIPPED_VERSION_KEY, updateInfo.latestVersion);
+      await AsyncStorage.setItem(APP_UPDATE_SKIPPED_VERSION_KEY, getUpdateSkipToken(updateInfo));
     }
     setShowUpdateModal(false);
   };
@@ -481,8 +488,8 @@ function RootLayoutNav() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Update Available</Text>
-            <Text style={styles.modalText}>Current: {getCurrentAppVersion()}</Text>
-            <Text style={styles.modalText}>Latest: {updateInfo?.latestVersion || "-"}</Text>
+            <Text style={styles.modalText}>Current: {getCurrentAppVersion()} ({getCurrentBuildNumber() || "-"})</Text>
+            <Text style={styles.modalText}>Latest: {updateInfo?.latestVersion || "-"} ({updateInfo?.latestBuildNumber || "-"})</Text>
             {updateInfo?.notes ? <Text style={styles.modalNotes}>{updateInfo.notes}</Text> : null}
             {updatingNow ? (
               <>

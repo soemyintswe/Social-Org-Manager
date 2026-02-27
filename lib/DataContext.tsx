@@ -52,7 +52,7 @@ interface DataContextValue {
   chatMessages: ChatMessage[];
   accountSettings: AccountSettings;
   loading: boolean;
-  refreshData: (options?: { skipPull?: boolean }) => Promise<void>;
+  refreshData: (options?: { skipPull?: boolean; markLocalMutation?: boolean }) => Promise<void>;
   addMember: (m: Omit<Member, "id">) => Promise<Member>;
   updateMember: (id: string, u: Partial<Member>) => Promise<void>;
   deleteMember: (id: string) => Promise<void>;
@@ -207,9 +207,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const bootstrappedRef = useRef(false);
   const lastLocalMutationAtRef = useRef(0);
+  const pullInFlightRef = useRef(false);
+  const pushInFlightRef = useRef(false);
   const LOCAL_PULL_GUARD_MS = 12000;
-  const AUTO_PUSH_DEBOUNCE_MS = 350;
-  const AUTO_PULL_INTERVAL_MS = 3000;
+  const LOCAL_MUTATION_PUSH_WINDOW_MS = 15000;
+  const AUTO_PUSH_DEBOUNCE_MS = 800;
+  const AUTO_PULL_INTERVAL_MS = 15000;
 
   const pushAllSyncTargets = useCallback(async () => {
     await Promise.allSettled([
@@ -228,12 +231,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return changedFromLan || changedFromCloud;
   }, []);
 
-  const refreshData = useCallback(async (options?: { skipPull?: boolean }) => {
+  const refreshData = useCallback(async (options?: { skipPull?: boolean; markLocalMutation?: boolean }) => {
     try {
       if (!options?.skipPull) {
         await pullAllSyncTargets();
       } else {
-        lastLocalMutationAtRef.current = Date.now();
+        if (options?.markLocalMutation !== false) {
+          lastLocalMutationAtRef.current = Date.now();
+        }
       }
       await store.seedDefaultAdminUser();
       const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, cth, ctm, s] = await Promise.all([
@@ -285,8 +290,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
       bootstrappedRef.current = true;
       return;
     }
+    const elapsedSinceLocalMutation = Date.now() - lastLocalMutationAtRef.current;
+    if (elapsedSinceLocalMutation > LOCAL_MUTATION_PUSH_WINDOW_MS) return;
+
     const timer = setTimeout(() => {
-      void pushAllSyncTargets();
+      if (pushInFlightRef.current) return;
+      pushInFlightRef.current = true;
+      void (async () => {
+        try {
+          await pushAllSyncTargets();
+        } finally {
+          pushInFlightRef.current = false;
+        }
+      })();
     }, AUTO_PUSH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [
@@ -307,21 +323,37 @@ export function DataProvider({ children }: { children: ReactNode }) {
     chatMessages,
     accountSettings,
     pushAllSyncTargets,
+    LOCAL_MUTATION_PUSH_WINDOW_MS,
+    AUTO_PUSH_DEBOUNCE_MS,
   ]);
 
   useEffect(() => {
     const timer = setInterval(() => {
       void (async () => {
+        if (pullInFlightRef.current) return;
+        if (!(accountSettings.syncEnabled || accountSettings.cloudSyncEnabled)) return;
         const elapsed = Date.now() - lastLocalMutationAtRef.current;
         if (elapsed < LOCAL_PULL_GUARD_MS) return;
-        const changed = await pullAllSyncTargets();
-        if (changed) {
-          await refreshData({ skipPull: true });
+        pullInFlightRef.current = true;
+        try {
+          const changed = await pullAllSyncTargets();
+          if (changed) {
+            await refreshData({ skipPull: true, markLocalMutation: false });
+          }
+        } finally {
+          pullInFlightRef.current = false;
         }
       })();
     }, AUTO_PULL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [pullAllSyncTargets, refreshData]);
+  }, [
+    pullAllSyncTargets,
+    refreshData,
+    accountSettings.syncEnabled,
+    accountSettings.cloudSyncEnabled,
+    AUTO_PULL_INTERVAL_MS,
+    LOCAL_PULL_GUARD_MS,
+  ]);
 
   // --- Actions ---
   const addMember = async (m: Omit<Member, "id">) => {
