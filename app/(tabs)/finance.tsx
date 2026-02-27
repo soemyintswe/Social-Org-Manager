@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  InteractionManager,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -20,12 +21,14 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
-import { Transaction, Loan, CATEGORY_LABELS, type MemberPaymentRequestKind } from "@/lib/types";
+import { Transaction, Loan, type MemberPaymentRequestKind } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "@/lib/loan-metrics";
+import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription } from "@/lib/transaction-display";
 
 type Tab = "transactions" | "transfers" | "loans";
 type FinanceViewScope = "all" | "self" | "member";
+const FINANCE_PAGE_SIZE = 40;
 
 const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} KS`;
 
@@ -107,10 +110,10 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
       </View>
       <View style={styles.txnInfo}>
         <Text style={styles.txnCategory} numberOfLines={1}>
-          {(txn as any).categoryLabel || CATEGORY_LABELS[txn.category] || txn.category}
+          {getLocalizedTransactionCategoryLabel((txn as any).category, (txn as any).categoryLabel)}
         </Text>
-        <Text style={styles.txnDesc} numberOfLines={1}>
-          {memberName ? memberName + " - " : ""}{(txn as any).notes || (txn as any).description || txn.receiptNumber}
+        <Text style={styles.txnDesc} numberOfLines={2}>
+          {getTransactionDisplayDescription(txn as any, memberName) || txn.receiptNumber || "-"}
         </Text>
         {txn.auditFlagged ? (
           <View style={styles.auditBadge}>
@@ -227,6 +230,8 @@ export default function FinanceScreen() {
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [computeReady, setComputeReady] = useState(false);
+  const [visibleListCount, setVisibleListCount] = useState(FINANCE_PAGE_SIZE);
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -238,6 +243,40 @@ export default function FinanceScreen() {
   const canAuditFlagFinance = can("finance.audit_flag");
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
   const effectiveScope: FinanceViewScope = canViewFinanceDetail ? viewScope : "self";
+  const startDateMs = startDate.getTime();
+  const endDateMs = endDate.getTime();
+  const transactionCount = transactions?.length ?? 0;
+  const loanCount = loans?.length ?? 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    setComputeReady(false);
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => {
+        if (!cancelled) setComputeReady(true);
+      }, 40);
+    });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (typeof (task as any)?.cancel === "function") {
+        (task as any).cancel();
+      }
+    };
+  }, [
+    transactionCount,
+    loanCount,
+    startDateMs,
+    endDateMs,
+    effectiveScope,
+    selectedMemberId,
+    activeTab,
+  ]);
+
+  const computeTransactions = useMemo(() => (computeReady ? (transactions || []) : []), [computeReady, transactions]);
+  const computeLoans = useMemo(() => (computeReady ? (loans || []) : []), [computeReady, loans]);
+
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
     router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
   };
@@ -336,7 +375,7 @@ export default function FinanceScreen() {
 
   // Filter transactions by date range
   const sortedTxns = useMemo(
-    () => [...(transactions || [])]
+    () => [...computeTransactions]
     .sort((a, b) => {
       const getDate = (d: any) => {
         if (!d) return 0;
@@ -360,7 +399,7 @@ export default function FinanceScreen() {
       }
       return current >= start && current <= end;
     }),
-    [transactions, startDate, endDate]
+    [computeTransactions, startDate, endDate]
   );
 
   const visibleTxns = useMemo(() => {
@@ -369,12 +408,12 @@ export default function FinanceScreen() {
   }, [sortedTxns, scopedMemberId]);
 
   const sortedLoans = useMemo(
-    () => [...(loans || [])].sort((a, b) => {
+    () => [...computeLoans].sort((a, b) => {
       if (a.status === "active" && b.status !== "active") return -1;
       if (a.status !== "active" && b.status === "active") return 1;
       return new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime();
     }),
-    [loans]
+    [computeLoans]
   );
 
   const visibleLoans = useMemo(() => {
@@ -383,9 +422,9 @@ export default function FinanceScreen() {
   }, [sortedLoans, scopedMemberId]);
 
   const balanceSourceTransactions = useMemo(() => {
-    if (scopedMemberId === null) return transactions || [];
-    return (transactions || []).filter((t: any) => t.memberId === scopedMemberId);
-  }, [transactions, scopedMemberId]);
+    if (scopedMemberId === null) return computeTransactions;
+    return computeTransactions.filter((t: any) => t.memberId === scopedMemberId);
+  }, [computeTransactions, scopedMemberId]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -468,16 +507,27 @@ export default function FinanceScreen() {
     ) as any[];
   }, [activeTab, isAllScope, visibleLoans, visibleTxns]);
 
+  useEffect(() => {
+    setVisibleListCount(FINANCE_PAGE_SIZE);
+  }, [activeTab, effectiveScope, scopedMemberId, startDateMs, endDateMs, activeListData.length]);
+
+  const pagedActiveListData = useMemo(() => activeListData.slice(0, visibleListCount), [activeListData, visibleListCount]);
+  const hasMoreActiveListData = pagedActiveListData.length < activeListData.length;
+
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   if (!canViewAnyFinance) {
     return <AccessDenied showBack={false} />;
   }
 
-  if (loading) {
+  if (loading || !computeReady) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
+        <Text style={styles.loadingHint}>လုပ်ဆောင်နေပါတယ် ခေတ္တစောင့်ပါ။</Text>
+        <View style={styles.loadingBarTrack}>
+          <View style={styles.loadingBarFill} />
+        </View>
       </View>
     );
   }
@@ -490,42 +540,47 @@ export default function FinanceScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-      <View style={[styles.header, { flexDirection: 'column', alignItems: 'stretch', gap: 5 }]}>
-        <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center" }}>
-          <View style={styles.headerButtons}>
-            {canManageFinance && (
-              <Pressable
-                style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-                onPress={() => router.push("/transaction-data-management")}
-              >
-                <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} />
-              </Pressable>
-            )}
-            {canManageFinance && (
-              <Pressable
-                style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-                onPress={handleOpenSettings}
-              >
-                <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
-              </Pressable>
-            )}
-            {canCreateFinance && (
-              <Pressable
-                style={styles.addButton}
-                onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
-              >
-                <Ionicons name="add" size={24} color="white" />
-              </Pressable>
-            )}
-            <Pressable
-              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-              onPress={() => router.push("/expense-claims" as any)}
-            >
-              <Ionicons name="document-text-outline" size={20} color={Colors.light.text} />
-            </Pressable>
-          </View>
+      <View style={styles.header}>
+        <View style={styles.headerTopRow}>
+          <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း - {scopeLabel}</Text>
+          {(canManageFinance || canCreateFinance) && (
+            <View style={styles.headerButtons}>
+              {canManageFinance && (
+                <Pressable
+                  style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+                  onPress={() => router.push("/transaction-data-management")}
+                >
+                  <Ionicons name="cloud-download-outline" size={20} color={Colors.light.text} />
+                </Pressable>
+              )}
+              {canManageFinance && (
+                <Pressable
+                  style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+                  onPress={handleOpenSettings}
+                >
+                  <Ionicons name="wallet-outline" size={20} color={Colors.light.text} />
+                </Pressable>
+              )}
+              {canCreateFinance && (
+                <Pressable
+                  style={styles.addButton}
+                  onPress={() => router.push(activeTab === "loans" ? "/add-loan" : "/add-transaction" as any)}
+                >
+                  <Ionicons name="add" size={24} color="white" />
+                </Pressable>
+              )}
+            </View>
+          )}
         </View>
-        <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း - {scopeLabel}</Text>
+        <View style={styles.headerClaimRow}>
+          <Pressable
+            style={styles.claimButton}
+            onPress={() => router.push("/expense-claims" as any)}
+          >
+            <Ionicons name="add-circle-outline" size={18} color="white" />
+            <Text style={styles.claimButtonText}>ငွေတောင်းခံရန်</Text>
+          </Pressable>
+        </View>
       </View>
 
       {canViewFinanceDetail && (
@@ -733,7 +788,7 @@ export default function FinanceScreen() {
                   <Text style={styles.loanPrimaryLabel}>ပြန်ဆပ်ငွေ</Text>
                   <Text style={[styles.loanPrimaryValue, { color: "#10B981" }]}>{formatKs(loanPrincipalSummary.repaid)}</Text>
                 </View>
-                <View style={styles.loanPrimaryBox}>
+                <View style={[styles.loanPrimaryBox, styles.loanPrimaryBoxWide]}>
                   <Text style={styles.loanPrimaryLabel}>ပြန်ဆပ်ရန်ကျန်ငွေ</Text>
                   <Text style={[styles.loanPrimaryValue, { color: "#EF4444" }]}>{formatKs(loanPrincipalSummary.outstanding)}</Text>
                 </View>
@@ -757,7 +812,7 @@ export default function FinanceScreen() {
               <Text style={styles.emptyText}>မှတ်တမ်းများ မရှိသေးပါ</Text>
             </View>
           ) : (
-            activeListData.map((item: any) => {
+            pagedActiveListData.map((item: any) => {
               if (activeTab === "transactions" || activeTab === "transfers") {
                 const txn = item as Transaction;
                 const memberName = getMemberName(txn.memberId);
@@ -790,6 +845,15 @@ export default function FinanceScreen() {
               );
             })
           )}
+          {hasMoreActiveListData ? (
+            <View style={styles.loadMoreWrap}>
+              <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleListCount((prev) => prev + FINANCE_PAGE_SIZE)}>
+                <Text style={styles.loadMoreBtnText}>
+                  နောက်ထပ် {Math.min(FINANCE_PAGE_SIZE, activeListData.length - pagedActiveListData.length).toLocaleString()} ခု ပြရန်
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       )}
       </ScrollView>
@@ -903,15 +967,74 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   pageContent: { paddingBottom: 24 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+  loadingHint: {
+    marginTop: 10,
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
   },
-  title: { fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  loadingBarTrack: {
+    marginTop: 12,
+    width: 220,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#E5E7EB",
+    overflow: "hidden",
+  },
+  loadingBarFill: {
+    width: "62%",
+    height: "100%",
+    backgroundColor: Colors.light.tint,
+    borderRadius: 999,
+  },
+  header: {
+    flexDirection: "column",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 6,
+    gap: 8,
+  },
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  title: { flex: 1, fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
+  headerClaimRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center" },
+  claimButton: {
+    height: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.light.tint,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  claimButtonText: {
+    color: "white",
+    fontSize: 12.5,
+    fontFamily: "Inter_700Bold",
+  },
+  loadMoreWrap: {
+    paddingTop: 6,
+    paddingBottom: 10,
+    alignItems: "center",
+  },
+  loadMoreBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "white",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  loadMoreBtnText: {
+    fontSize: 12.5,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.tint,
+  },
   scopeCard: {
     marginHorizontal: 16,
     marginBottom: 8,
@@ -1144,32 +1267,33 @@ const styles = StyleSheet.create({
   },
   loanPrimaryRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 8,
     marginBottom: 8,
   },
   loanPrimaryBox: {
-    flex: 1,
+    width: "48%",
     backgroundColor: "#fff",
     borderRadius: 12,
     borderWidth: 1,
     borderColor: Colors.light.border,
     paddingHorizontal: 10,
     paddingVertical: 9,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     gap: 6,
   },
+  loanPrimaryBoxWide: {
+    width: "100%",
+  },
   loanPrimaryLabel: {
-    fontSize: 11,
+    fontSize: 12.5,
+    lineHeight: 18,
     color: Colors.light.textSecondary,
     fontFamily: "Inter_500Medium",
-    flex: 1,
   },
   loanPrimaryValue: {
-    fontSize: 12.5,
+    fontSize: 22,
     fontFamily: "Inter_700Bold",
+    lineHeight: 28,
   },
   loanInterestRow: {
     paddingBottom: 4,

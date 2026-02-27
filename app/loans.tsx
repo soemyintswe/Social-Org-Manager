@@ -33,6 +33,25 @@ const toYmd = (date: Date) => {
 const formatDateBtn = (date: Date) => date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const WEB_DATE_INPUT_STYLE: any = { border: "none", outline: "none", backgroundColor: "transparent", fontSize: 13, color: Colors.light.text, width: 115 };
 
+const normalizeCategoryToken = (value: unknown): string =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+const isLoanDisbursementCategory = (value: unknown): boolean => {
+  const token = normalizeCategoryToken(value);
+  return token === "loan_disbursement" || token === "loan_issued";
+};
+
+const isLoanRepaymentCategory = (value: unknown): boolean =>
+  normalizeCategoryToken(value) === "loan_repayment";
+
+const isInterestIncomeCategory = (value: unknown): boolean => {
+  const token = normalizeCategoryToken(value);
+  return token === "interest_income" || token === "bank_interest";
+};
+
 export default function LoansScreen() {
   const insets = useSafeAreaInsets();
   const { loans = [], transactions = [], members = [] } = useData() as any;
@@ -128,23 +147,107 @@ export default function LoansScreen() {
     });
   }, [visibleLoans, members, transactions]);
 
-  const principalSummary = useMemo(() => {
-    const issued = loanRows.reduce((sum: number, row: any) => sum + getLoanPrincipal(row.loan), 0);
-    const repaid = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.principalRepaid || 0), 0);
+  const scopedTransactions = useMemo(() => {
+    const start = new Date(startDate); start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate); end.setHours(23, 59, 59, 999);
+    return (transactions || []).filter((tx: any) => {
+      const d = parseFlexibleDate(tx?.date);
+      if (d && (d < start || d > end)) return false;
+      if (scopedMemberId === null) return true;
+      return String(tx?.memberId || "") === String(scopedMemberId || "");
+    });
+  }, [transactions, startDate, endDate, scopedMemberId]);
 
-    // Use direct subtraction to ensure outstanding reflects the difference
-    const outstanding = issued - repaid;
+  const fallbackLoanRows = useMemo(() => {
+    const disbursements = scopedTransactions.filter((tx: any) => isLoanDisbursementCategory(tx?.category));
+    if (disbursements.length === 0) return [] as any[];
+
+    const principalByMember = new Map<string, number>();
+    const firstDisbursementDateByMember = new Map<string, string>();
+    disbursements.forEach((tx: any) => {
+      const memberId = String(tx?.memberId || "").trim() || "__unknown__";
+      const amount = Number(tx?.amount || 0);
+      principalByMember.set(memberId, (principalByMember.get(memberId) || 0) + amount);
+      if (!firstDisbursementDateByMember.has(memberId)) {
+        firstDisbursementDateByMember.set(memberId, String(tx?.date || ""));
+      }
+    });
+
+    const repaidByMember = new Map<string, number>();
+    scopedTransactions
+      .filter((tx: any) => isLoanRepaymentCategory(tx?.category))
+      .forEach((tx: any) => {
+        const memberId = String(tx?.memberId || "").trim() || "__unknown__";
+        repaidByMember.set(memberId, (repaidByMember.get(memberId) || 0) + Number(tx?.amount || 0));
+      });
+
+    const interestByMember = new Map<string, number>();
+    scopedTransactions
+      .filter((tx: any) => isInterestIncomeCategory(tx?.category))
+      .forEach((tx: any) => {
+        const memberId = String(tx?.memberId || "").trim() || "__unknown__";
+        interestByMember.set(memberId, (interestByMember.get(memberId) || 0) + Number(tx?.amount || 0));
+      });
+
+    return Array.from(principalByMember.entries()).map(([memberId, issued], index) => {
+      const principal = Math.max(0, Number(issued || 0));
+      const principalRepaid = Math.max(0, Number(repaidByMember.get(memberId) || 0));
+      const principalOutstanding = Math.max(0, principal - principalRepaid);
+      const interestPaid = Math.max(0, Number(interestByMember.get(memberId) || 0));
+      const memberName = members.find((m: any) => String(m?.id || "") === memberId)?.name || "အမည်မသိ";
+
+      return {
+        loan: {
+          id: `legacy-loan-${memberId}-${index}`,
+          memberId,
+          principal,
+          issueDate: firstDisbursementDateByMember.get(memberId) || "",
+          status: principalOutstanding <= 0 ? "paid" : "active",
+          interestRate: 0,
+        },
+        metrics: {
+          principal,
+          principalRepaid,
+          principalOutstanding,
+          baseRate: 0,
+          appliedRate: 0,
+          calcMonths: 0,
+          suspensionMonths: 0,
+          effectiveMonths: 0,
+          interestSuspended: false,
+          baseInterest: interestPaid,
+          discountPercent: 0,
+          discountAmount: 0,
+          waivedPercent: 0,
+          waivedAmount: 0,
+          interestRelief: 0,
+          interestPayable: interestPaid,
+          interestPaid,
+          interestOutstanding: 0,
+        },
+        memberName,
+      };
+    });
+  }, [scopedTransactions, members]);
+
+  const hasStructuredLoanRows = loanRows.length > 0;
+  const displayLoanRows = hasStructuredLoanRows ? loanRows : fallbackLoanRows;
+
+  const principalSummary = useMemo(() => {
+    const issued = displayLoanRows.reduce((sum: number, row: any) => sum + getLoanPrincipal(row.loan), 0);
+    const repaid = displayLoanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.principalRepaid || 0), 0);
+    const outstanding = Math.max(0, issued - repaid);
     return { issued, repaid, outstanding };
-  }, [loanRows]);
+  }, [displayLoanRows]);
 
   const interestSummary = useMemo(() => {
-    const base = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.baseInterest || 0), 0);
-    const relief = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestRelief || 0), 0);
-    const payable = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPayable || 0), 0);
-    const paid = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPaid || 0), 0);
-    const outstanding = loanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestOutstanding || 0), 0);
+    const base = displayLoanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.baseInterest || 0), 0);
+    const relief = displayLoanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestRelief || 0), 0);
+    const payable = displayLoanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPayable || 0), 0);
+    const paid = displayLoanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPaid || 0), 0);
+    const outstanding = displayLoanRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestOutstanding || 0), 0);
     return { base, relief, payable, paid, outstanding };
-  }, [loanRows]);
+  }, [displayLoanRows]);
 
   const calculator = useMemo(() => {
     const principal = Math.max(0, Number(calcPrincipal || 0));
@@ -232,7 +335,7 @@ export default function LoansScreen() {
       )}
 
       <FlatList
-        data={loanRows}
+        data={displayLoanRows}
         keyExtractor={(item) => String(item.loan.id)}
         contentContainerStyle={styles.content}
         ListHeaderComponent={
@@ -309,8 +412,15 @@ export default function LoansScreen() {
           const loan = item.loan as any;
           const metrics = item.metrics;
           const progress = loan?.status === "paid" ? 100 : (metrics.principal > 0 ? ((metrics.principalRepaid / metrics.principal) * 100) : 0);
+          const canOpenDetail = hasStructuredLoanRows && !String(loan?.id || "").startsWith("legacy-loan-");
           return (
-            <Pressable style={styles.loanCard} onPress={() => router.push({ pathname: "/loan-detail", params: { id: loan.id } } as any)}>
+            <Pressable
+              style={[styles.loanCard, !canOpenDetail && { opacity: 0.85 }]}
+              onPress={() => {
+                if (!canOpenDetail) return;
+                router.push({ pathname: "/loan-detail", params: { id: loan.id } } as any);
+              }}
+            >
               <View style={styles.loanHeader}><Text style={styles.memberName}>{item.memberName}</Text><Text style={styles.loanAmount}>{formatKs(getLoanPrincipal(loan))}</Text></View>
               <Text style={styles.loanMeta}>ထုတ်ချေးရက်: {String(loan?.issueDate || loan?.date || "-")} • အတိုးနှုန်း: {metrics.appliedRate}%</Text>
               <View style={styles.loanDetailRow}><Text style={styles.loanDetailText}>အရင်းပြန်ဆပ်ပြီး: {formatKs(metrics.principalRepaid)}</Text><Text style={styles.loanDetailText}>အရင်းကျန်: {formatKs(metrics.principalOutstanding)}</Text></View>

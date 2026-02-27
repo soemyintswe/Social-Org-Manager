@@ -2,7 +2,7 @@
   "expo": {
     "name": "Social Org Manager",
     "slug": "orghub",
-    "version": "1.1.34",
+    "version": "1.1.35",
     "orientation": "portrait",
     "extra": {
       "eas": {
@@ -26,6 +26,7 @@
       "bundleIdentifier": "com.soemyintswe.orghub"
     },
     "android": {
+      "versionCode": 36,
       "package": "com.soemyintswe.orghub",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",

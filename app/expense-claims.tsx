@@ -3,13 +3,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AccessDenied from "@/components/AccessDenied";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { normalizeOrgPosition, type ExpenseClaim, type StandardAmountChangeRequest, type StandardAmountRule } from "@/lib/types";
 
 type Tab = "claims" | "amounts";
@@ -96,6 +97,7 @@ function eventRequiredForCategory(categoryId: string): boolean {
 
 export default function ExpenseClaimsScreen() {
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const {
     members = [],
     events = [],
@@ -670,7 +672,11 @@ export default function ExpenseClaimsScreen() {
   if (!canViewFinance) return <AccessDenied showBack={true} />;
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}> 
+    <KeyboardAvoidingView
+      style={[styles.container, { paddingTop: insets.top }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+    >
       <View style={styles.header}>
         <View style={styles.topRow}>
           <Pressable style={styles.createBtn} onPress={openClaimModal}>
@@ -747,7 +753,17 @@ export default function ExpenseClaimsScreen() {
       )}
 
       <Modal visible={showClaimModal} transparent animationType="slide" onRequestClose={() => setShowClaimModal(false)}>
-        <View style={styles.modalWrap}><View style={styles.modalBox}><ScrollView keyboardShouldPersistTaps="handled">
+        <KeyboardAvoidingView
+          style={styles.modalWrap}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
+          <View style={[styles.modalBox, Platform.OS === "android" ? { marginBottom: keyboardInset } : null]}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) + (Platform.OS === "android" ? keyboardInset : 0) + 24 }}
+            >
           <Text style={styles.modalTitle}>ငွေတောင်းခံလွှာ</Text>
           <Text style={styles.label}>Claim Date / Time</Text>
           <View style={styles.dateTimeRow}>
@@ -869,7 +885,7 @@ export default function ExpenseClaimsScreen() {
           {claimRule ? <Text style={styles.meta}>Rule: {claimRule.label} ({claimRule.enabled ? "Auto" : "Manual"}) • {Number(claimRule.amount || 0).toLocaleString()} KS</Text> : null}
 
           <View style={styles.rowEnd}><Pressable onPress={() => setShowClaimModal(false)}><Text style={styles.cancel}>Cancel</Text></Pressable><Pressable style={styles.okBtn} onPress={() => void submitClaim()}><Text style={styles.okTxt}>Submit</Text></Pressable></View>
-        </ScrollView></View></View>
+        </ScrollView></View></KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={showReviewModal} transparent animationType="fade" onRequestClose={() => setShowReviewModal(false)}>
@@ -891,7 +907,7 @@ export default function ExpenseClaimsScreen() {
       <Modal visible={showPicker} transparent animationType="fade" onRequestClose={() => setShowPicker(false)}>
         <View style={styles.modalWrap}><View style={styles.pickerBox}><Text style={styles.modalTitle}>{pickerTitle}</Text><ScrollView style={{ maxHeight: 340 }}>{pickerOptions.map((opt: { id: string; label: string }) => { const active = getCurrentPickerSelected() === opt.id; return (<Pressable key={opt.id} style={[styles.pickerRow, active && styles.pickerRowActive]} onPress={() => onSelectPickerOption(opt.id)}><Text style={[styles.pickerText, active && styles.pickerTextActive]}>{opt.label}</Text></Pressable>); })}</ScrollView><View style={styles.rowEnd}><Pressable onPress={() => setShowPicker(false)}><Text style={styles.cancel}>Close</Text></Pressable></View></View></View>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

@@ -170,6 +170,34 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   // 2. Try Remote Config URL and GitHub fallbacks
   const candidates = getRemoteUpdateJsonCandidates(getAppUpdateJsonUrl());
   let lastReason = "update_check_failed";
+  let bestInfo: AppUpdateInfo | null = null;
+
+  const pickBetter = (nextInfo: AppUpdateInfo) => {
+    if (!bestInfo) {
+      bestInfo = nextInfo;
+      return;
+    }
+    const cmpVersion = compareVersion(nextInfo.latestVersion, bestInfo.latestVersion);
+    if (cmpVersion > 0) {
+      bestInfo = nextInfo;
+      return;
+    }
+    if (cmpVersion < 0) return;
+
+    const nextBuild = parseBuildNumber(nextInfo.latestBuildNumber || "");
+    const bestBuild = parseBuildNumber(bestInfo.latestBuildNumber || "");
+    if (nextBuild !== null && bestBuild !== null && nextBuild > bestBuild) {
+      bestInfo = nextInfo;
+      return;
+    }
+
+    const nextPublished = new Date(String(nextInfo.publishedAt || "")).getTime();
+    const bestPublished = new Date(String(bestInfo.publishedAt || "")).getTime();
+    if (Number.isFinite(nextPublished) && Number.isFinite(bestPublished) && nextPublished > bestPublished) {
+      bestInfo = nextInfo;
+    }
+  };
+
   for (const candidate of candidates) {
     try {
       const res = await fetchWithTimeout(withCacheBust(candidate), 10000);
@@ -178,11 +206,16 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
         continue;
       }
       const payload = (await res.json()) as Partial<AppUpdateInfo>;
-      return mapPayloadToInfo(payload, currentVersion, currentBuild);
+      const mapped = mapPayloadToInfo(payload, currentVersion, currentBuild);
+      if (mapped.ok && mapped.latestVersion) {
+        pickBetter(mapped);
+      }
     } catch (e: any) {
       lastReason = String(e?.message || "update_check_failed");
     }
   }
+
+  if (bestInfo) return bestInfo;
 
   return {
     ok: false,

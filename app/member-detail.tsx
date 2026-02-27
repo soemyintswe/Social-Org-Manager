@@ -24,6 +24,7 @@ import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { isCommitteePosition } from "@/lib/access-control";
 import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import {
   CATEGORY_LABELS,
   ORG_POSITION_LABELS,
@@ -175,6 +176,7 @@ function InfoRow({ icon, label, value }: {
 
 export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { members, groups, updateMember, deleteMember, createMemberChangeRequest, transactions, loans, getLoanOutstanding } = useData() as any;
   const { can, currentUser, profile } = useAuth();
@@ -633,7 +635,8 @@ export default function MemberDetailScreen() {
 
   return (
     <KeyboardAvoidingView 
-      behavior={Platform.OS === "ios" ? "padding" : "height"} 
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
       style={styles.container}
     >
       <View style={[styles.header, { paddingTop: insets.top + 12 || webTopInset }]}>
@@ -650,7 +653,14 @@ export default function MemberDetailScreen() {
         )}
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: 20 + insets.bottom + (Platform.OS === "android" ? keyboardInset : 0) + 80 },
+        ]}
+      >
         <View style={styles.profileHeader}>
           <View style={[styles.avatar, { backgroundColor: member.avatarColor, overflow: "hidden" }]}>
             {member.profileImage ? (

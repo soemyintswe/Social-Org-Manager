@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import * as Application from "expo-application";
 import * as FileSystem from "expo-file-system/legacy";
 import * as IntentLauncher from "expo-intent-launcher";
+import * as Sharing from "expo-sharing";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   ActivityIndicator,
@@ -28,6 +29,7 @@ import { DataProvider } from "@/lib/DataContext";
 import { AuthProvider, useAuth } from "@/lib/AuthContext";
 import Colors from "@/constants/colors";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "@/lib/app-update";
+import { initializeRemoteConfig } from "@/lib/remote-config";
 import {
   useFonts,
   Inter_400Regular,
@@ -35,7 +37,6 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
-import remoteConfig from '@react-native-firebase/remote-config';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -240,39 +241,18 @@ function RootLayoutNav() {
   }, [loading]);
 
   useEffect(() => {
-    // Initialize Firebase Remote Config
-    if (Platform.OS === 'web') return; // Firebase Remote Config native module doesn't work on web in this setup
-
     const initRemoteConfig = async () => {
-      try {
-        await remoteConfig().setDefaults({
-          welcome_message: 'Welcome to OrgHub',
-          feature_new_ui_enabled: false,
-        });
-
-        // Fetch and activate
-        // During development, you might want to set minimumFetchIntervalMillis to 0
-        await remoteConfig().setConfigSettings({
-          minimumFetchIntervalMillis: __DEV__ ? 0 : 3600000, // 1 hour for prod
-        });
-
-        const fetched = await remoteConfig().fetchAndActivate();
-        if (fetched) {
-          console.log('Firebase Remote Config fetched and activated');
-        } else {
-          console.log('Firebase Remote Config already activated');
+      const result = await initializeRemoteConfig(__DEV__ ? 0 : 3600000);
+      if (!result.ok) {
+        if (Platform.OS !== "web") {
+          console.log("Firebase Remote Config initialization failed", result.reason || "unknown");
         }
-
-        // Example: Reading a value
-        // const welcomeMessage = remoteConfig().getValue('welcome_message').asString();
-        // console.log('Welcome Message:', welcomeMessage);
-
-      } catch (error) {
-        console.log('Firebase Remote Config initialization failed', error);
+        return;
       }
+      console.log(result.fetched ? "Firebase Remote Config fetched and activated" : "Firebase Remote Config already activated");
     };
 
-    initRemoteConfig();
+    void initRemoteConfig();
   }, []);
 
   useEffect(() => {
@@ -302,6 +282,7 @@ function RootLayoutNav() {
   const handleUpdateNow = async () => {
     if (!updateInfo?.downloadUrl) return;
     if (updatingNow) return;
+    let downloadedUriForFallback = "";
     try {
       const candidateUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
       if (Platform.OS !== "android") {
@@ -374,6 +355,7 @@ function RootLayoutNav() {
           }
 
           downloadedUri = downloadResult.uri;
+          downloadedUriForFallback = downloadedUri;
           usedCandidate = candidateUrl;
           setUpdateProgressRatio(1);
           break;
@@ -394,12 +376,25 @@ function RootLayoutNav() {
     } catch (error: any) {
       const errText = String(error?.message || error || "");
       const openedSettings = await openUnknownSourcesSettings();
+      let manualFallbackText = "";
+      if (downloadedUriForFallback) {
+        manualFallbackText = `\n\nAPK ဖိုင်လမ်းကြောင်း:\n${downloadedUriForFallback}`;
+      }
       Alert.alert(
         "Update မလုပ်နိုင်သေးပါ",
         openedSettings
-          ? "Install permission (Unknown sources) ကို Allow လုပ်ပြီး ပြန် Update လုပ်ပေးပါ။"
-          : "Auto install မဖြစ်သေးပါ။ Download link ကို browser ဖြင့်ဖွင့်ပေးပါမည်။"
+          ? `Install permission (Unknown sources) ကို Allow လုပ်ပြီး ပြန် Update လုပ်ပေးပါ။${manualFallbackText}`
+          : `Auto install မဖြစ်သေးပါ။ Manual Install လုပ်နိုင်ရန် APK link/browser ကိုဖွင့်ပေးပါမည်။${manualFallbackText}`
       );
+      try {
+        if (downloadedUriForFallback && (await Sharing.isAvailableAsync())) {
+          await Sharing.shareAsync(downloadedUriForFallback, {
+            mimeType: "application/vnd.android.package-archive",
+            dialogTitle: "Downloaded APK ကို Share / Manual Install လုပ်ရန်",
+            UTI: "public.data",
+          });
+        }
+      } catch {}
       try {
         const fallbackUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
         if (fallbackUrls[0]) await Linking.openURL(fallbackUrls[0]);
@@ -422,6 +417,18 @@ function RootLayoutNav() {
     }
     setShowUpdateModal(false);
   };
+
+  if (loading) {
+    return (
+      <View style={styles.appLoadingShell}>
+        <ActivityIndicator size="large" color={Colors.light.tint} />
+        <Text style={styles.appLoadingText}>လုပ်ဆောင်နေပါတယ် ခေတ္တစောင့်ပါ။</Text>
+        <View style={styles.appLoadingTrack}>
+          <View style={styles.appLoadingFill} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <>
@@ -568,6 +575,34 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
+  appLoadingShell: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 24,
+  },
+  appLoadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+    textAlign: "center",
+  },
+  appLoadingTrack: {
+    marginTop: 12,
+    width: 240,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#E5E7EB",
+    overflow: "hidden",
+  },
+  appLoadingFill: {
+    width: "62%",
+    height: "100%",
+    borderRadius: 999,
+    backgroundColor: Colors.light.tint,
+  },
   rootShell: {
     flex: 1,
     backgroundColor: "#F8FAFC",

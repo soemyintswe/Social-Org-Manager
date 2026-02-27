@@ -82,6 +82,14 @@ const normalizeCategoryToken = (value: unknown): string =>
     .toLowerCase()
     .replace(/\s+/g, "_");
 
+const isLoanDisbursementCategory = (value: unknown): boolean => {
+  const token = normalizeCategoryToken(value);
+  return token === "loan_disbursement" || token === "loan_issued";
+};
+
+const isLoanRepaymentCategory = (value: unknown): boolean =>
+  normalizeCategoryToken(value) === "loan_repayment";
+
 function StatCard({
   icon,
   label,
@@ -300,14 +308,38 @@ export default function DashboardScreen() {
     .sort((a, b) => getEventTime(b) - getEventTime(a))
     .slice(0, 5);
 
-  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
+  const totalLoanOutstanding = useMemo(() => {
+    const disbursed = (transactions || [])
+      .filter((tx: any) => isLoanDisbursementCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    const repaid = (transactions || [])
+      .filter((tx: any) => isLoanRepaymentCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    const txBasedOutstanding = Math.max(0, disbursed - repaid);
+
+    // If structured loan rows exist, prefer their computed value.
+    const loanBasedOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
+    return loanBasedOutstanding > 0 ? loanBasedOutstanding : txBasedOutstanding;
+  }, [transactions, loans, getLoanOutstanding]);
+
   const personalLoanOutstanding = useMemo(() => {
     const myMemberId = String(currentUser?.memberId || "");
     if (!myMemberId) return 0;
-    return (loans || [])
+    const loanBasedOutstanding = (loans || [])
       .filter((loan: any) => String(loan.memberId || "") === myMemberId)
       .reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
-  }, [loans, getLoanOutstanding, currentUser?.memberId]);
+    if (loanBasedOutstanding > 0) return loanBasedOutstanding;
+
+    const disbursed = (transactions || [])
+      .filter((tx: any) => String(tx?.memberId || "") === myMemberId)
+      .filter((tx: any) => isLoanDisbursementCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    const repaid = (transactions || [])
+      .filter((tx: any) => String(tx?.memberId || "") === myMemberId)
+      .filter((tx: any) => isLoanRepaymentCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    return Math.max(0, disbursed - repaid);
+  }, [loans, transactions, getLoanOutstanding, currentUser?.memberId]);
 
   const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
     const name = String(rawName || "").trim();

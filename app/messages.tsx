@@ -19,9 +19,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const { currentUser, currentMember } = useAuth();
   const {
     users,
@@ -168,8 +170,8 @@ export default function MessagesScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: insets.top }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
     >
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.iconBtn}>
@@ -212,7 +214,11 @@ export default function MessagesScreen() {
               <View style={styles.chatHeader}>
                 <Text style={styles.chatTitle}>{threadTitle(selectedThread)}</Text>
               </View>
-              <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                contentContainerStyle={{ padding: 12, gap: 10 }}
+              >
                 {selectedMessages.map((msg: any) => {
                   const mine = String(msg.senderUserId) === meUserId;
                   return (
@@ -254,7 +260,15 @@ export default function MessagesScreen() {
                 </View>
               ) : null}
 
-              <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 10), marginBottom: 6 }]}>
+              <View
+                style={[
+                  styles.composer,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 10) + (Platform.OS === "android" ? keyboardInset : 0),
+                    marginBottom: 6,
+                  },
+                ]}
+              >
                 <Pressable style={styles.pickBtn} onPress={() => void pickImage()}>
                   <Ionicons name="image-outline" size={18} color={Colors.light.tint} />
                 </Pressable>

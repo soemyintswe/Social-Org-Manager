@@ -7,6 +7,7 @@ import {
   Alert,
   FlatList,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -25,6 +26,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 
 type EventType = "activity" | "news" | "announcement";
 
@@ -194,6 +196,7 @@ function mapClaimCategoryToTopic(categoryId?: string): string {
 export default function EventsScreen() {
   const params = useLocalSearchParams<{ source?: string; claimCategory?: string }>();
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
   const { can, currentUser } = useAuth();
   const canViewEvents = can("events.view_public");
@@ -928,8 +931,19 @@ export default function EventsScreen() {
       />
 
       <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <ScrollView style={styles.modalContent} contentContainerStyle={{ paddingBottom: 20 }}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
+          <ScrollView
+            style={[styles.modalContent, Platform.OS === "android" ? { marginBottom: keyboardInset } : null]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{
+              paddingBottom: 20 + insets.bottom + (Platform.OS === "android" ? keyboardInset : 0),
+            }}
+          >
             <Text style={styles.modalTitle}>{editingId ? "သတင်းပြင်ဆင်ရန်" : "သတင်းအသစ်ပို့ရန်"}</Text>
 
             <Text style={styles.label}>သတင်းခေါင်းစဉ် (Dropdown)</Text>
@@ -1523,7 +1537,7 @@ export default function EventsScreen() {
               </Pressable>
             </View>
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal animationType="slide" transparent visible={topicPickerVisible} onRequestClose={() => setTopicPickerVisible(false)}>

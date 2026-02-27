@@ -36,6 +36,43 @@ function readBuildNumber() {
   return '';
 }
 
+function getGitRemoteMeta() {
+  try {
+    const raw = execSync('git remote get-url origin', {
+      cwd: path.resolve(__dirname, '..'),
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    }).trim();
+    const normalized = raw.replace(/\.git$/, '');
+    const match = normalized.match(/github\.com[:/]([^/]+)\/([^/]+)$/i);
+    if (!match) return null;
+    return { owner: match[1], repo: match[2] };
+  } catch {
+    return null;
+  }
+}
+
+function getCurrentBranchName() {
+  try {
+    return execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: path.resolve(__dirname, '..'),
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function getDownloadBaseUrl() {
+  const envBase = String(process.env.APP_UPDATE_DOWNLOAD_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (envBase) return envBase;
+  const meta = getGitRemoteMeta();
+  const branch = getCurrentBranchName();
+  if (!meta || !branch) return '';
+  return `https://media.githubusercontent.com/media/${meta.owner}/${meta.repo}/${branch}/releases`;
+}
+
 function updateAppUpdateConfig({ version, buildNumber, filename }) {
   const configPath = path.resolve(__dirname, '../server/config/app-update.json');
   if (!fs.existsSync(configPath)) return;
@@ -52,7 +89,7 @@ function updateAppUpdateConfig({ version, buildNumber, filename }) {
   if (buildNumber) config.latestBuildNumber = String(buildNumber);
   config.publishedAt = new Date().toISOString();
 
-  const baseUrl = String(process.env.APP_UPDATE_DOWNLOAD_BASE_URL || '').trim().replace(/\/+$/, '');
+  const baseUrl = getDownloadBaseUrl();
   if (baseUrl) {
     config.downloadUrl = `${baseUrl}/${filename}`;
   }

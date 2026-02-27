@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   Alert,
   Linking,
+  KeyboardAvoidingView,
   Modal,
   Pressable,
   ScrollView,
@@ -22,6 +23,7 @@ import * as IntentLauncher from "expo-intent-launcher";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import {
   MEMBER_PAYMENT_REQUEST_KIND_LABELS,
   MOBILE_WALLET_PROVIDER_LABELS,
@@ -106,6 +108,7 @@ const toDisplayDateTime = (date?: string, time?: string, fallbackIso?: string) =
 
 export default function MemberPaymentRequestsScreen() {
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const { kind } = useLocalSearchParams<{ kind?: string }>();
   const {
     memberPaymentRequests = [],
@@ -378,7 +381,11 @@ export default function MemberPaymentRequestsScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <KeyboardAvoidingView
+      style={[styles.container, { paddingTop: insets.top }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+    >
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.headerBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
@@ -394,7 +401,11 @@ export default function MemberPaymentRequestsScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}
+      >
         {visibleRequests.map((item: any) => {
           const isPending = item.status === "pending_treasurer_review";
           const statusColor = item.status === "approved" ? "#10B981" : item.status === "rejected" ? "#EF4444" : "#F59E0B";
@@ -471,7 +482,11 @@ export default function MemberPaymentRequestsScreen() {
       </ScrollView>
 
       <Modal visible={openCreate} animationType="slide" onRequestClose={() => setOpenCreate(false)}>
-        <View style={[styles.modalWrap, { paddingTop: insets.top }]}>
+        <KeyboardAvoidingView
+          style={[styles.modalWrap, { paddingTop: insets.top }]}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
           <View style={styles.modalHeader}>
             <Pressable onPress={() => setOpenCreate(false)} style={styles.headerBtn}>
               <Ionicons name="close" size={24} color={Colors.light.text} />
@@ -481,7 +496,14 @@ export default function MemberPaymentRequestsScreen() {
               <Text style={styles.saveBtn}>{submitting ? "Saving..." : "တင်မည်"}</Text>
             </Pressable>
           </View>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 120 }}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{
+              padding: 16,
+              paddingBottom: insets.bottom + 120 + (Platform.OS === "android" ? keyboardInset : 0),
+            }}
+          >
             <Text style={styles.label}>တောင်းခံအမျိုးအစား</Text>
             <View style={styles.pillRow}>
               {REQUEST_KIND_OPTIONS.map((option) => (
@@ -737,7 +759,7 @@ export default function MemberPaymentRequestsScreen() {
               placeholder="အထောက်အထား/မှတ်ချက်"
             />
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal transparent visible={memberPickerOpen} animationType="slide" onRequestClose={() => setMemberPickerOpen(false)}>
@@ -763,8 +785,12 @@ export default function MemberPaymentRequestsScreen() {
       </Modal>
 
       <Modal transparent visible={!!reviewModalId} animationType="fade" onRequestClose={() => setReviewModalId(null)}>
-        <View style={styles.overlay}>
-          <View style={styles.reviewBox}>
+        <KeyboardAvoidingView
+          style={styles.overlay}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
+          <View style={[styles.reviewBox, Platform.OS === "android" ? { marginBottom: keyboardInset } : null]}>
             <Text style={styles.reviewTitle}>{reviewDecision === "approved" ? "Approve Request" : "Reject Request"}</Text>
             {!!selectedReviewRequest?.proofImage && (
               <Pressable onPress={() => setPreviewImage(String(selectedReviewRequest.proofImage))} style={{ marginBottom: 10 }}>
@@ -838,7 +864,7 @@ export default function MemberPaymentRequestsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal transparent visible={!!previewImage} animationType="fade" onRequestClose={() => setPreviewImage(null)}>
@@ -849,7 +875,7 @@ export default function MemberPaymentRequestsScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

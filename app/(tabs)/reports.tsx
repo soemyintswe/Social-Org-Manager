@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
   StyleSheet,
   Text,
@@ -11,6 +11,8 @@ import {
   FlatList,
   TextInput,
   Alert,
+  InteractionManager,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,11 +20,12 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { CATEGORY_LABELS, MEMBER_STATUS_LABELS, MemberStatus } from "@/lib/types";
+import { MEMBER_STATUS_LABELS, MemberStatus } from "@/lib/types";
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from "expo-file-system/legacy";
 import AccessDenied from "@/components/AccessDenied";
+import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -34,31 +37,12 @@ const PERIOD_OPTIONS = [
 type ReportTab = "income_expense" | "loans" | "funds" | "registers" | "cash_book" | "fees" | "audit_flags";
 type ReportViewScope = "all" | "self" | "member";
 type RegisterView = "received" | "expenditure" | "loan_out" | "loan_in";
-
-const CATEGORY_LABELS_MM: Record<string, string> = {
-  member_fees: "လစဉ်ကြေးရငွေ",
-  monthly_fee: "လစဉ်ကြေးရငွေ",
-  donations: "အလှူငွေရရှိ",
-  donation: "အလှူငွေ",
-  bank_interest: "ဘဏ်တိုးရငွေ",
-  other_income: "အခြားရငွေ",
-  loan_repayment: "ချေးငွေပြန်ဆပ်ရရှိငွေ",
-  interest_income: "အတိုးရငွေ",
-  health_support: "ကျန်းမာရေးထောက်ပံ့ငွေ",
-  education_support: "ပညာရေးထောက်ပံ့ငွေ",
-  funeral_support: "နာရေးကူညီငွေ",
-  loan_disbursement: "ချေးငွေထုတ်ပေးငွေ",
-  bank_charges: "ဘဏ်စရိတ်ပေးငွေ",
-  general_expenses: "အထွေထွေအသုံးစရိတ်",
-  other_expenses: "အခြားအသုံးစရိတ်",
-  bank_deposit: "ဘဏ်သို့ ငွေသွင်းခြင်း",
-  bank_withdraw: "ဘဏ်မှ ငွေထုတ်ခြင်း",
-  loan_issued: "ချေးငွေထုတ်ပေးခြင်း",
-  general_expense: "အထွေထွေအသုံးစရိတ်",
-  welfare_health: "ကျန်းမာရေးထောက်ပံ့မှု",
-  welfare_education: "ပညာရေးထောက်ပံ့မှု",
-  welfare_funeral: "နာရေးကူညီမှု",
-};
+type DetailSortOrder = "newest" | "oldest";
+const REPORT_TXN_PAGE_SIZE = 60;
+const REPORT_REGISTER_PAGE_SIZE = 50;
+const REPORT_CASHBOOK_PAGE_SIZE = 80;
+const REPORT_AUDIT_PAGE_SIZE = 50;
+const REPORT_MEMBER_PAGE_SIZE = 40;
 
 function csvEscape(value: unknown): string {
   const text = String(value ?? "");
@@ -69,49 +53,38 @@ function csvEscape(value: unknown): string {
 }
 
 function getCategoryLabel(category: unknown): string {
-  const key = String(category || "").trim();
-  if (!key) return "-";
-  return CATEGORY_LABELS_MM[key] || CATEGORY_LABELS[key as keyof typeof CATEGORY_LABELS] || key;
+  return getLocalizedTransactionCategoryLabel(category);
 }
 
 function getReadableNotes(notes: unknown): string {
-  const raw = String(notes || "").trim();
-  if (!raw) return "";
-  const parts = raw.split("|").map((p) => p.trim()).filter(Boolean);
-  if (!parts.length) return raw;
-
-  const out: string[] = [];
-  parts.forEach((part) => {
-    if (part.startsWith("beneficiary_scope=")) {
-      const value = part.slice("beneficiary_scope=".length).trim();
-      const label =
-        value === "self_member"
-          ? "ကိုယ်တိုင်"
-          : value === "family_member"
-          ? "မိသားစုဝင်"
-          : value === "external_or_group"
-          ? "ပြင်ပ/အဖွဲ့အစည်း"
-          : value;
-      out.push(`ထောက်ပံ့မှုအုပ်စု - ${label}`);
-      return;
-    }
-    if (part.startsWith("linked_member=")) {
-      out.push(`သက်ဆိုင်အသင်းဝင် - ${part.slice("linked_member=".length).trim()}`);
-      return;
-    }
-    if (part.startsWith("source_category=")) {
-      out.push(`မူလစာရင်းခေါင်းစဉ် - ${part.slice("source_category=".length).trim()}`);
-      return;
-    }
-    out.push(part);
-  });
-  return out.join(" | ");
+  return stripTechnicalNoteText(notes);
 }
 
 function formatDateForRegister(dateValue: unknown): string {
   const d = new Date(String(dateValue || ""));
   if (Number.isNaN(d.getTime())) return "-";
   return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+}
+
+function parseDateMs(dateValue: unknown): number {
+  const raw = String(dateValue || "").trim();
+  if (!raw) return 0;
+
+  const dotParts = raw.split(".");
+  if (dotParts.length === 3) {
+    const day = Number(dotParts[0]);
+    const month = Number(dotParts[1]);
+    const year = Number(dotParts[2]);
+    if (Number.isFinite(day) && Number.isFinite(month) && Number.isFinite(year)) {
+      const parsed = new Date(year, month - 1, day).getTime();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+
+  const direct = new Date(raw).getTime();
+  if (Number.isFinite(direct)) return direct;
+
+  return 0;
 }
 
 function normalizeMemberText(value: unknown): string {
@@ -142,6 +115,7 @@ function transactionBelongsToMember(tx: any, memberId: string, memberName: strin
 
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const { transactions, members, loading, accountSettings, loans, getLoanInterestDue } = useData() as any;
   const { can, currentUser, profile } = useAuth();
   const canViewAllReports = can("reports.view_all");
@@ -166,11 +140,25 @@ export default function ReportsScreen() {
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [showYearPicker, setShowYearPicker] = useState(false);
   const [auditSearch, setAuditSearch] = useState("");
   const [auditOnlyFlagged, setAuditOnlyFlagged] = useState(true);
-  const [activeFilterTag, setActiveFilterTag] = useState("year-current");
+  const [detailSortOrder, setDetailSortOrder] = useState<DetailSortOrder>("newest");
+  const [activeFilterTag, setActiveFilterTag] = useState("all");
+  const [computeReady, setComputeReady] = useState(false);
+  const [visibleTxnDetailCount, setVisibleTxnDetailCount] = useState(REPORT_TXN_PAGE_SIZE);
+  const [visibleLoanTxnCount, setVisibleLoanTxnCount] = useState(REPORT_TXN_PAGE_SIZE);
+  const [visibleRegisterCount, setVisibleRegisterCount] = useState(REPORT_REGISTER_PAGE_SIZE);
+  const [visibleCashBookCount, setVisibleCashBookCount] = useState(REPORT_CASHBOOK_PAGE_SIZE);
+  const [visibleAuditCount, setVisibleAuditCount] = useState(REPORT_AUDIT_PAGE_SIZE);
+  const [visibleMemberCount, setVisibleMemberCount] = useState(REPORT_MEMBER_PAGE_SIZE);
   const effectiveScope: ReportViewScope = canChooseScope ? viewScope : "self";
   const showDetailRows = canViewAllReports || effectiveScope !== "all";
+  const useInlineYearPicker = width >= 768;
+  const startDateMs = startDate.getTime();
+  const endDateMs = endDate.getTime();
+  const transactionCount = transactions?.length ?? 0;
+  const loanCount = loans?.length ?? 0;
 
   const handlePeriodSelect = (months: number) => {
     const now = new Date();
@@ -214,6 +202,32 @@ export default function ReportsScreen() {
   }, [effectiveScope, currentUser?.memberId, selectedMemberId]);
   const isAllScope = effectiveScope === "all";
 
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    setComputeReady(false);
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => {
+        if (!cancelled) setComputeReady(true);
+      }, 40);
+    });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (typeof (task as any)?.cancel === "function") {
+        (task as any).cancel();
+      }
+    };
+  }, [
+    transactionCount,
+    loanCount,
+    startDateMs,
+    endDateMs,
+    scopedMemberId,
+    reportTab,
+    registerView,
+  ]);
+
   const scopeLabel = useMemo(() => {
     if (effectiveScope === "all") return "အားလုံး";
     if (effectiveScope === "self") return "ကိုယ်တိုင်";
@@ -240,15 +254,49 @@ export default function ReportsScreen() {
     return loans.filter((loan: any) => loan.memberId === scopedMemberId);
   }, [loans, scopedMemberId]);
 
+  const computeTransactions = useMemo(() => (computeReady ? reportTransactions : []), [computeReady, reportTransactions]);
+  const computeLoans = useMemo(() => (computeReady ? reportLoans : []), [computeReady, reportLoans]);
+
   const availableYears = useMemo(() => {
     const years = new Set<number>();
-    (reportTransactions || []).forEach((t: any) => {
+    (computeTransactions || []).forEach((t: any) => {
       const d = new Date(t?.date);
       if (!Number.isNaN(d.getTime())) years.add(d.getFullYear());
     });
     years.add(new Date().getFullYear());
     return Array.from(years).sort((a, b) => b - a);
-  }, [reportTransactions]);
+  }, [computeTransactions]);
+
+  const yearOptions = useMemo(() => {
+    const minYear = 2018;
+    const currentYear = new Date().getFullYear();
+    const maxDetectedYear = availableYears.length > 0 ? Math.max(...availableYears) : currentYear;
+    const maxYear = Math.max(currentYear + 10, maxDetectedYear + 2);
+    const years: number[] = [];
+    for (let year = maxYear; year >= minYear; year -= 1) {
+      years.push(year);
+    }
+    return years;
+  }, [availableYears]);
+
+  const selectedYearValue = useMemo(() => {
+    if (!activeFilterTag.startsWith("year-")) return null;
+    const value = Number(activeFilterTag.replace("year-", ""));
+    return Number.isFinite(value) ? value : null;
+  }, [activeFilterTag]);
+
+  const selectedYearLabel = useMemo(
+    () => (selectedYearValue ? String(selectedYearValue) : "ခုနှစ်ရွေးရန်"),
+    [selectedYearValue]
+  );
+
+  const isYearFilterActive = selectedYearValue !== null;
+
+  useEffect(() => {
+    if (useInlineYearPicker && showYearPicker) {
+      setShowYearPicker(false);
+    }
+  }, [useInlineYearPicker, showYearPicker]);
 
   const applyAllDateRange = useCallback(() => {
     const now = new Date();
@@ -275,13 +323,13 @@ export default function ReportsScreen() {
   }, []);
 
   const filteredTxns = useMemo(
-    () => reportTransactions.filter((t: any) => {
+    () => computeTransactions.filter((t: any) => {
       const d = new Date(t.date);
       const start = new Date(startDate); start.setHours(0,0,0,0);
       const end = new Date(endDate); end.setHours(23,59,59,999);
       return d >= start && d <= end;
     }),
-    [reportTransactions, startDate, endDate]
+    [computeTransactions, startDate, endDate]
   );
 
   const incomeExpenseStats = useMemo(() => {
@@ -308,19 +356,19 @@ export default function ReportsScreen() {
     // Business rule: principal outstanding = total disbursed - total repaid (within selected filter scope)
     const principalOutstanding = Math.max(0, Number(disbursed || 0) - Number(repaid || 0));
 
-    const interestOutstanding = (reportLoans || []).reduce((acc: number, l: any) => {
+    const interestOutstanding = (computeLoans || []).reduce((acc: number, l: any) => {
       const amount = Number(getLoanInterestDue(l.id) || 0);
       return acc + (Number.isFinite(amount) ? Math.max(0, amount) : 0);
     }, 0);
     
     return { disbursed, repaid, interest, principalOutstanding, interestOutstanding };
-  }, [filteredTxns, reportLoans, getLoanInterestDue]);
+  }, [filteredTxns, computeLoans, getLoanInterestDue]);
 
   const getBalancesAt = useCallback((date: Date) => {
     let cash = accountSettings?.openingBalanceCash || 0;
     let bank = accountSettings?.openingBalanceBank || 0;
     
-    reportTransactions.forEach((t: any) => {
+    computeTransactions.forEach((t: any) => {
       const tDate = new Date(t.date);
       if (tDate <= date) {
          const amt = t.amount;
@@ -337,7 +385,7 @@ export default function ReportsScreen() {
       }
     });
     return { cash, bank, total: cash + bank };
-  }, [accountSettings, reportTransactions]);
+  }, [accountSettings, computeTransactions]);
 
   const fundStats = useMemo(() => {
     const start = new Date(startDate); start.setDate(start.getDate() - 1);
@@ -525,6 +573,47 @@ export default function ReportsScreen() {
     return months;
   }, [startDate, endDate]);
 
+  const feePaidMonthSet = useMemo(() => {
+    const set = new Set<string>();
+    const monthKey = (memberId: string, year: number, monthIdx: number) => `${memberId}|${year}|${monthIdx}`;
+    (reportTransactions || []).forEach((t: any) => {
+      if (String(t?.category || "") !== "member_fees") return;
+      const memberId = String(t?.memberId || "").trim();
+      if (!memberId) return;
+
+      if (t?.feePeriodStart && t?.feePeriodEnd) {
+        const start = new Date(t.feePeriodStart);
+        const end = new Date(t.feePeriodEnd);
+        if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+          let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+          const boundary = new Date(end.getFullYear(), end.getMonth(), 1);
+          while (cursor <= boundary) {
+            set.add(monthKey(memberId, cursor.getFullYear(), cursor.getMonth()));
+            cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+          }
+          return;
+        }
+      }
+
+      const d = new Date(t?.date);
+      if (!Number.isNaN(d.getTime())) {
+        set.add(monthKey(memberId, d.getFullYear(), d.getMonth()));
+      }
+    });
+    return set;
+  }, [reportTransactions]);
+
+  const memberFeeTotalsByMemberId = useMemo(() => {
+    const map = new Map<string, number>();
+    filteredTxns.forEach((t: any) => {
+      if (String(t?.category || "") !== "member_fees") return;
+      const memberId = String(t?.memberId || "").trim();
+      if (!memberId) return;
+      map.set(memberId, (map.get(memberId) || 0) + Number(t?.amount || 0));
+    });
+    return map;
+  }, [filteredTxns]);
+
   const incomeTransactions = useMemo(() => {
     return [...filteredTxns]
       .filter((t: any) => t.type === "income")
@@ -708,6 +797,114 @@ export default function ReportsScreen() {
     });
   }, [filteredTxns, auditSearch, auditOnlyFlagged]);
 
+  const compareDateWithReceipt = useCallback(
+    (a: any, b: any) => {
+      const aMs = parseDateMs(a?.date);
+      const bMs = parseDateMs(b?.date);
+      if (aMs !== bMs) {
+        return detailSortOrder === "newest" ? bMs - aMs : aMs - bMs;
+      }
+      const aReceipt = String(a?.receiptNumber || a?.receipt || a?.id || "");
+      const bReceipt = String(b?.receiptNumber || b?.receipt || b?.id || "");
+      return detailSortOrder === "newest"
+        ? bReceipt.localeCompare(aReceipt)
+        : aReceipt.localeCompare(bReceipt);
+    },
+    [detailSortOrder]
+  );
+
+  const nonTransferRows = useMemo(() => filteredTxns.filter((t: any) => t.type !== "transfer"), [filteredTxns]);
+  const loanTxnRows = useMemo(
+    () => filteredTxns.filter((t: any) => ["loan_disbursement", "loan_repayment", "interest_income"].includes(String(t.category || ""))),
+    [filteredTxns]
+  );
+  const sortedNonTransferRows = useMemo(() => [...nonTransferRows].sort(compareDateWithReceipt), [nonTransferRows, compareDateWithReceipt]);
+  const sortedLoanTxnRows = useMemo(() => [...loanTxnRows].sort(compareDateWithReceipt), [loanTxnRows, compareDateWithReceipt]);
+  const sortedRegisterRows = useMemo(() => [...activeRegisterRows].sort(compareDateWithReceipt), [activeRegisterRows, compareDateWithReceipt]);
+  const pagedNonTransferRows = useMemo(() => sortedNonTransferRows.slice(0, visibleTxnDetailCount), [sortedNonTransferRows, visibleTxnDetailCount]);
+  const pagedLoanTxnRows = useMemo(() => sortedLoanTxnRows.slice(0, visibleLoanTxnCount), [sortedLoanTxnRows, visibleLoanTxnCount]);
+  const pagedRegisterRows = useMemo(() => sortedRegisterRows.slice(0, visibleRegisterCount), [sortedRegisterRows, visibleRegisterCount]);
+  const pagedCashBookRows = useMemo(() => cashBookRows.slice(0, visibleCashBookCount), [cashBookRows, visibleCashBookCount]);
+  const pagedAuditRows = useMemo(() => scopedAuditRows.slice(0, visibleAuditCount), [scopedAuditRows, visibleAuditCount]);
+  const pagedReportMembers = useMemo(() => reportMembers.slice(0, visibleMemberCount), [reportMembers, visibleMemberCount]);
+
+  const hasMoreNonTransferRows = pagedNonTransferRows.length < sortedNonTransferRows.length;
+  const hasMoreLoanTxnRows = pagedLoanTxnRows.length < sortedLoanTxnRows.length;
+  const hasMoreRegisterRows = pagedRegisterRows.length < sortedRegisterRows.length;
+  const hasMoreCashBookRows = pagedCashBookRows.length < cashBookRows.length;
+  const hasMoreAuditRows = pagedAuditRows.length < scopedAuditRows.length;
+  const hasMoreReportMembers = pagedReportMembers.length < reportMembers.length;
+
+  const renderTransactionDetailCard = useCallback(
+    (t: any, index: number, keyPrefix: string) => {
+      const name = String(
+        t?.payerPayee ||
+          memberNameById.get(String(t?.memberId || "")) ||
+          t?.memberId ||
+          "-"
+      );
+      const notes = getReadableNotes(t?.notes);
+      const amount = Number(t?.amount || 0);
+      const isExpense = String(t?.type || "") === "expense";
+      const amountColor = isExpense ? "#EF4444" : "#0F766E";
+      const amountPrefix = isExpense ? "-" : "+";
+      const fromDate = t?.feePeriodStart ? formatDateForRegister(t.feePeriodStart) : "-";
+      const toDate = t?.feePeriodEnd ? formatDateForRegister(t.feePeriodEnd) : "-";
+      const hasPeriod = fromDate !== "-" || toDate !== "-";
+      const memberIdText = String(t?.memberId || "").trim();
+
+      return (
+        <View key={`${keyPrefix}-${t?.id || index}`} style={styles.registerCard}>
+          <Text style={styles.registerCardTitle}>{index + 1}. {name}</Text>
+          <Text style={[styles.registerCardAmount, { color: amountColor }]}>
+            {amountPrefix}{amount.toLocaleString()} KS
+          </Text>
+          <Text style={styles.registerCardMeta}>
+            ရက်စွဲ: {formatDateForRegister(t?.date)} | ပြေစာအမှတ်: {String(t?.receiptNumber || "-")}
+          </Text>
+          <Text style={styles.registerCardMeta}>ခေါင်းစဉ်: {getCategoryLabel(t?.category)}</Text>
+          {hasPeriod ? <Text style={styles.registerCardMeta}>ကာလ: {fromDate} မှ {toDate}</Text> : null}
+          {memberIdText ? <Text style={styles.registerCardMeta}>အသင်းဝင်အမှတ်: {memberIdText}</Text> : null}
+          {notes ? <Text style={styles.registerCardNote}>မှတ်ချက်: {notes}</Text> : null}
+        </View>
+      );
+    },
+    [memberNameById]
+  );
+
+  const renderDetailSortToggle = useCallback(
+    () => (
+      <View style={styles.detailSortRow}>
+        <Pressable
+          style={[styles.detailSortChip, detailSortOrder === "newest" && styles.detailSortChipActive]}
+          onPress={() => setDetailSortOrder("newest")}
+        >
+          <Text style={[styles.detailSortChipText, detailSortOrder === "newest" && styles.detailSortChipTextActive]}>
+            နောက်ဆုံးမှစ
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.detailSortChip, detailSortOrder === "oldest" && styles.detailSortChipActive]}
+          onPress={() => setDetailSortOrder("oldest")}
+        >
+          <Text style={[styles.detailSortChipText, detailSortOrder === "oldest" && styles.detailSortChipTextActive]}>
+            အစဆုံးမှစ
+          </Text>
+        </Pressable>
+      </View>
+    ),
+    [detailSortOrder]
+  );
+
+  useEffect(() => {
+    setVisibleTxnDetailCount(REPORT_TXN_PAGE_SIZE);
+    setVisibleLoanTxnCount(REPORT_TXN_PAGE_SIZE);
+    setVisibleRegisterCount(REPORT_REGISTER_PAGE_SIZE);
+    setVisibleCashBookCount(REPORT_CASHBOOK_PAGE_SIZE);
+    setVisibleAuditCount(REPORT_AUDIT_PAGE_SIZE);
+    setVisibleMemberCount(REPORT_MEMBER_PAGE_SIZE);
+  }, [reportTab, registerView, startDateMs, endDateMs, scopedMemberId, computeReady]);
+
   const exportAuditJson = async () => {
     const payload = {
       type: "auditor_flagged_transactions",
@@ -868,10 +1065,14 @@ export default function ReportsScreen() {
     }
   };
 
-  if (loading) {
+  if (loading || !computeReady) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
+        <Text style={styles.loadingHint}>လုပ်ဆောင်နေပါတယ် ခေတ္တစောင့်ပါ။</Text>
+        <View style={styles.loadingBarTrack}>
+          <View style={styles.loadingBarFill} />
+        </View>
       </View>
     );
   }
@@ -963,17 +1164,35 @@ export default function ReportsScreen() {
           >
             <Text style={[styles.periodText, activeFilterTag === "all" && styles.periodTextActive]}>အစမှ အဆုံးထိ</Text>
           </Pressable>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-            {availableYears.map((year) => (
-              <Pressable
-                key={year}
-                style={[styles.periodBtn, activeFilterTag === `year-${year}` && styles.periodBtnActive]}
-                onPress={() => applyYearDateRange(year)}
-              >
-                <Text style={[styles.periodText, activeFilterTag === `year-${year}` && styles.periodTextActive]}>{year}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
+          {useInlineYearPicker ? (
+            <View style={styles.inlineYearPickerWrap}>
+              {yearOptions.map((year) => (
+                <Pressable
+                  key={year}
+                  style={[styles.periodBtn, activeFilterTag === `year-${year}` && styles.periodBtnActive]}
+                  onPress={() => applyYearDateRange(year)}
+                >
+                  <Text style={[styles.periodText, activeFilterTag === `year-${year}` && styles.periodTextActive]}>
+                    {year}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : (
+            <Pressable
+              style={[styles.periodBtn, styles.yearDropdownBtn, isYearFilterActive && styles.periodBtnActive]}
+              onPress={() => setShowYearPicker(true)}
+            >
+              <Text style={[styles.periodText, styles.yearDropdownText, isYearFilterActive && styles.periodTextActive]}>
+                {selectedYearLabel}
+              </Text>
+              <Ionicons
+                name="chevron-down"
+                size={14}
+                color={isYearFilterActive ? "#fff" : Colors.light.textSecondary}
+              />
+            </Pressable>
+          )}
         </View>
       </View>
       {canChooseScope && (
@@ -1029,7 +1248,7 @@ export default function ReportsScreen() {
       )}
 
       <View style={styles.tabBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 15 }}>
+        <View style={styles.tabBarWrap}>
           <Pressable style={[styles.tab, reportTab === "income_expense" && styles.activeTab]} onPress={() => setReportTab("income_expense")}>
             <Text style={[styles.tabText, reportTab === "income_expense" && styles.activeTabText]}>
               {isAllScope ? "ရငွေ/အသုံးစရိတ်" : "အသင်းသို့ပေးသွင်းငွေ"}
@@ -1061,7 +1280,7 @@ export default function ReportsScreen() {
               <Text style={[styles.tabText, reportTab === "audit_flags" && styles.activeTabText]}>Audit Flag</Text>
             </Pressable>
           )}
-        </ScrollView>
+        </View>
       </View>
       {!canChooseScope && (
         <View style={styles.summaryOnlyNote}>
@@ -1096,20 +1315,17 @@ export default function ReportsScreen() {
             {showDetailRows ? (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
-                {filteredTxns.filter((t: any) => t.type !== 'transfer').map((t: any) => (
-                  <View key={t.id} style={styles.catRow}>
-                    <View style={styles.catInfo}>
-                      <View style={[styles.catDot, { backgroundColor: t.type === 'income' ? '#10B981' : '#F43F5E' }]} />
-                      <Text style={styles.catLabel}>
-                        {getCategoryLabel(t.category)}
+                {renderDetailSortToggle()}
+                {pagedNonTransferRows.map((t: any, index: number) => renderTransactionDetailCard(t, index, "income-expense"))}
+                {hasMoreNonTransferRows ? (
+                  <View style={styles.loadMoreWrap}>
+                    <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleTxnDetailCount((prev) => prev + REPORT_TXN_PAGE_SIZE)}>
+                      <Text style={styles.loadMoreBtnText}>
+                        နောက်ထပ် {Math.min(REPORT_TXN_PAGE_SIZE, sortedNonTransferRows.length - pagedNonTransferRows.length).toLocaleString()} ခု ပြရန်
                       </Text>
-                      <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
-                    </View>
-                    <Text style={[styles.catValue, { color: t.type === 'income' ? '#10B981' : '#F43F5E' }]}>
-                      {t.type === 'income' ? '+' : '-'}{t.amount.toLocaleString()}
-                    </Text>
+                    </Pressable>
                   </View>
-                ))}
+                ) : null}
               </View>
             ) : (
               <View style={styles.summaryOnlyNote}>
@@ -1151,15 +1367,17 @@ export default function ReportsScreen() {
           {showDetailRows ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</Text>
-              {filteredTxns.filter((t: any) => ['loan_disbursement', 'loan_repayment', 'interest_income'].includes(t.category)).map((t: any) => (
-                 <View key={t.id} style={styles.catRow}>
-                    <View style={styles.catInfo}>
-                      <Text style={styles.catLabel}>{getCategoryLabel(t.category)}</Text>
-                      <Text style={styles.catSub}>{new Date(t.date).toLocaleDateString()}</Text>
-                    </View>
-                    <Text style={styles.catValue}>{t.amount.toLocaleString()}</Text>
-                 </View>
-              ))}
+              {renderDetailSortToggle()}
+              {pagedLoanTxnRows.map((t: any, index: number) => renderTransactionDetailCard(t, index, "loan"))}
+              {hasMoreLoanTxnRows ? (
+                <View style={styles.loadMoreWrap}>
+                  <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleLoanTxnCount((prev) => prev + REPORT_TXN_PAGE_SIZE)}>
+                    <Text style={styles.loadMoreBtnText}>
+                      နောက်ထပ် {Math.min(REPORT_TXN_PAGE_SIZE, sortedLoanTxnRows.length - pagedLoanTxnRows.length).toLocaleString()} ခု ပြရန်
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           ) : (
             <View style={styles.summaryOnlyNote}>
@@ -1261,13 +1479,17 @@ export default function ReportsScreen() {
             <>
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
-                {filteredTxns.filter((t: any) => t.type !== "transfer").map((t: any) => (
-                  <View key={`fund-row-${t.id}`} style={styles.cashBookLiteRow}>
-                    <Text style={styles.catLabel}>{getCategoryLabel(t.category)} - {Number(t.amount || 0).toLocaleString()} KS</Text>
-                    <Text style={styles.catSub}>{t.date || "-"} | {t.receiptNumber || "-"}</Text>
-                    {!!getReadableNotes(t.notes) && <Text style={styles.catSub}>မှတ်ချက်: {getReadableNotes(t.notes)}</Text>}
+                {renderDetailSortToggle()}
+                {pagedNonTransferRows.map((t: any, index: number) => renderTransactionDetailCard(t, index, "fund"))}
+                {hasMoreNonTransferRows ? (
+                  <View style={styles.loadMoreWrap}>
+                    <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleTxnDetailCount((prev) => prev + REPORT_TXN_PAGE_SIZE)}>
+                      <Text style={styles.loadMoreBtnText}>
+                        နောက်ထပ် {Math.min(REPORT_TXN_PAGE_SIZE, sortedNonTransferRows.length - pagedNonTransferRows.length).toLocaleString()} ခု ပြရန်
+                      </Text>
+                    </Pressable>
                   </View>
-                ))}
+                ) : null}
               </View>
             </>
           ) : (
@@ -1328,15 +1550,14 @@ export default function ReportsScreen() {
           {showDetailRows ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>အသေးစိတ်မှတ်တမ်း</Text>
-              {activeRegisterRows.length === 0 ? (
+              {renderDetailSortToggle()}
+              {sortedRegisterRows.length === 0 ? (
                 <Text style={styles.summaryOnlyNoteText}>အသေးစိတ်စာရင်း မရှိသေးပါ။</Text>
               ) : (
-                activeRegisterRows.map((row: any) => (
+                pagedRegisterRows.map((row: any) => (
                   <View key={row.id} style={styles.registerCard}>
-                    <View style={styles.registerCardTopRow}>
-                      <Text style={styles.registerCardTitle}>{row.no}. {row.name}</Text>
-                      <Text style={styles.registerCardAmount}>{Number(row.amount || 0).toLocaleString()} KS</Text>
-                    </View>
+                    <Text style={styles.registerCardTitle}>{row.no}. {row.name}</Text>
+                    <Text style={styles.registerCardAmount}>{Number(row.amount || 0).toLocaleString()} KS</Text>
                     <Text style={styles.registerCardMeta}>ရက်စွဲ: {row.date} | ပြေစာအမှတ်: {row.receipt}</Text>
                     <Text style={styles.registerCardMeta}>ခေါင်းစဉ်: {row.heading || "-"}</Text>
                     {registerView === "received" && (row.fromDate !== "-" || row.toDate !== "-") ? (
@@ -1347,6 +1568,15 @@ export default function ReportsScreen() {
                   </View>
                 ))
               )}
+              {hasMoreRegisterRows ? (
+                <View style={styles.loadMoreWrap}>
+                  <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleRegisterCount((prev) => prev + REPORT_REGISTER_PAGE_SIZE)}>
+                    <Text style={styles.loadMoreBtnText}>
+                      နောက်ထပ် {Math.min(REPORT_REGISTER_PAGE_SIZE, sortedRegisterRows.length - pagedRegisterRows.length).toLocaleString()} ခု ပြရန်
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           ) : (
             <View style={styles.summaryOnlyNote}>
@@ -1429,7 +1659,7 @@ export default function ReportsScreen() {
                       <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ငွေသားလက်ကျန်</Text>
                       <Text style={[styles.cashBookHeaderCell, styles.cashBookAmountCol]}>ဘဏ်လက်ကျန်</Text>
                     </View>
-                    {cashBookRows.map((row) => (
+                    {pagedCashBookRows.map((row) => (
                       <View
                         key={row.id}
                         style={[
@@ -1453,17 +1683,30 @@ export default function ReportsScreen() {
                     ))}
                   </View>
                 </ScrollView>
+                {hasMoreCashBookRows ? (
+                  <View style={styles.loadMoreWrap}>
+                    <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleCashBookCount((prev) => prev + REPORT_CASHBOOK_PAGE_SIZE)}>
+                      <Text style={styles.loadMoreBtnText}>
+                        နောက်ထပ် {Math.min(REPORT_CASHBOOK_PAGE_SIZE, cashBookRows.length - pagedCashBookRows.length).toLocaleString()} ခု ပြရန်
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
             ) : (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
-                {filteredTxns.filter((t: any) => t.type !== "transfer").map((t: any) => (
-                  <View key={`cashbook-personal-${t.id}`} style={styles.cashBookLiteRow}>
-                    <Text style={styles.catLabel}>{getCategoryLabel(t.category)} - {Number(t.amount || 0).toLocaleString()} KS</Text>
-                    <Text style={styles.catSub}>{t.date || "-"} | {t.receiptNumber || "-"}</Text>
-                    {!!getReadableNotes(t.notes) && <Text style={styles.catSub}>မှတ်ချက်: {getReadableNotes(t.notes)}</Text>}
+                {renderDetailSortToggle()}
+                {pagedNonTransferRows.map((t: any, index: number) => renderTransactionDetailCard(t, index, "fund-personal"))}
+                {hasMoreNonTransferRows ? (
+                  <View style={styles.loadMoreWrap}>
+                    <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleTxnDetailCount((prev) => prev + REPORT_TXN_PAGE_SIZE)}>
+                      <Text style={styles.loadMoreBtnText}>
+                        နောက်ထပ် {Math.min(REPORT_TXN_PAGE_SIZE, sortedNonTransferRows.length - pagedNonTransferRows.length).toLocaleString()} ခု ပြရန်
+                      </Text>
+                    </Pressable>
                   </View>
-                ))}
+                ) : null}
               </View>
             )
           ) : (
@@ -1495,7 +1738,7 @@ export default function ReportsScreen() {
                   </View>
                 </View>
 
-                {reportMembers.map((member: any) => (
+                {pagedReportMembers.map((member: any) => (
                   <View key={member.id} style={styles.tableRow}>
                     <View style={styles.tableNameCol}>
                       <Text style={styles.tableName} numberOfLines={1}>
@@ -1503,24 +1746,7 @@ export default function ReportsScreen() {
                       </Text>
                     </View>
                     {monthsInRange.map((m) => {
-                      const monthlyPayments = reportTransactions.filter(
-                        (t: any) => {
-                          if (t.memberId !== member.id || t.category !== "member_fees") return false;
-
-                          if (t.feePeriodStart && t.feePeriodEnd) {
-                            const start = new Date(t.feePeriodStart); start.setHours(0,0,0,0);
-                            const end = new Date(t.feePeriodEnd); end.setHours(23,59,59,999);
-                            const monthStart = new Date(m.year, m.monthIdx, 1);
-                            const monthEnd = new Date(m.year, m.monthIdx + 1, 0);
-                            return start <= monthEnd && end >= monthStart;
-                          }
-
-                          const d = new Date(t.date);
-                          return d.getMonth() === m.monthIdx && d.getFullYear() === m.year;
-                        }
-                      );
-
-                      const isPaid = monthlyPayments.length > 0;
+                      const isPaid = feePaidMonthSet.has(`${member.id}|${m.year}|${m.monthIdx}`);
                       return (
                         <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
                           {isPaid ? (
@@ -1536,14 +1762,20 @@ export default function ReportsScreen() {
 
                     <View style={[styles.tableMonthCol, { width: 90 }]}>
                       <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
-                        {filteredTxns
-                          .filter((t: any) => t.memberId === member.id && t.category === "member_fees")
-                          .reduce((sum: number, t: any) => sum + t.amount, 0)
-                          .toLocaleString()}
+                        {(memberFeeTotalsByMemberId.get(String(member.id || "")) || 0).toLocaleString()}
                       </Text>
                     </View>
                   </View>
                 ))}
+                {hasMoreReportMembers ? (
+                  <View style={styles.loadMoreWrap}>
+                    <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleMemberCount((prev) => prev + REPORT_MEMBER_PAGE_SIZE)}>
+                      <Text style={styles.loadMoreBtnText}>
+                        နောက်ထပ် {Math.min(REPORT_MEMBER_PAGE_SIZE, reportMembers.length - pagedReportMembers.length).toLocaleString()} ဦး ပြရန်
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
             </ScrollView>
           </View>
@@ -1584,7 +1816,7 @@ export default function ReportsScreen() {
                 <Text style={styles.summaryOnlyNoteText}>အမှတ်အသားပြုစာရင်း မရှိသေးပါ။</Text>
               </View>
             ) : (
-              scopedAuditRows.map((row: any) => (
+              pagedAuditRows.map((row: any) => (
                 <View key={row.id} style={styles.auditRow}>
                   <Text style={styles.auditTitle}>
                     {getCategoryLabel(row.category)} - {Number(row.amount || 0).toLocaleString()} KS
@@ -1596,10 +1828,58 @@ export default function ReportsScreen() {
                 </View>
               ))
             )}
+            {hasMoreAuditRows ? (
+              <View style={styles.loadMoreWrap}>
+                <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleAuditCount((prev) => prev + REPORT_AUDIT_PAGE_SIZE)}>
+                  <Text style={styles.loadMoreBtnText}>
+                    နောက်ထပ် {Math.min(REPORT_AUDIT_PAGE_SIZE, scopedAuditRows.length - pagedAuditRows.length).toLocaleString()} ခု ပြရန်
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         </View>
       )}
       </ScrollView>
+
+      {!useInlineYearPicker && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showYearPicker}
+          onRequestClose={() => setShowYearPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowYearPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>ခုနှစ်ရွေးချယ်ရန်</Text>
+              <FlatList
+                data={yearOptions}
+                keyExtractor={(item: number) => String(item)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: number }) => {
+                  const isActive = activeFilterTag === `year-${item}`;
+                  return (
+                    <Pressable
+                      style={[styles.yearOptionRow, isActive && styles.yearOptionRowActive]}
+                      onPress={() => {
+                        applyYearDateRange(item);
+                        setShowYearPicker(false);
+                      }}
+                    >
+                      <Text style={[styles.yearOptionText, isActive && styles.yearOptionTextActive]}>{item}</Text>
+                      {isActive ? <Ionicons name="checkmark" size={16} color={Colors.light.tint} /> : null}
+                    </Pressable>
+                  );
+                }}
+              />
+              <Pressable style={styles.cancelBtn} onPress={() => setShowYearPicker(false)}>
+                <Text style={styles.cancelBtnText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+      )}
 
       <Modal
         animationType="slide"
@@ -1647,6 +1927,26 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   pageContent: { paddingBottom: 28 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingHint: {
+    marginTop: 10,
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+  },
+  loadingBarTrack: {
+    marginTop: 12,
+    width: 220,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#E5E7EB",
+    overflow: "hidden",
+  },
+  loadingBarFill: {
+    width: "62%",
+    height: "100%",
+    backgroundColor: Colors.light.tint,
+    borderRadius: 999,
+  },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1726,16 +2026,75 @@ const styles = StyleSheet.create({
   },
   registerModeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   registerModeChipTextActive: { color: "white" },
+  loadMoreWrap: {
+    paddingTop: 6,
+    paddingBottom: 4,
+    alignItems: "center",
+  },
+  loadMoreBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    backgroundColor: "#fff",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  loadMoreBtnText: {
+    fontSize: 12.5,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.tint,
+  },
+  detailSortRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+    flexWrap: "wrap",
+  },
+  detailSortChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  detailSortChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  detailSortChipText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+  },
+  detailSortChipTextActive: {
+    color: "white",
+  },
   dateRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   searchBtn: { backgroundColor: Colors.light.tint, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  periodPicker: { flexDirection: "row", gap: 8 },
+  periodPicker: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   periodBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
   periodBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   periodText: { fontSize: 11.5, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   periodTextActive: { color: "white" },
+  yearDropdownBtn: {
+    minWidth: 130,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  yearDropdownText: { flex: 1 },
+  inlineYearPickerWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    flex: 1,
+  },
   tabBar: { flexDirection: "row", paddingHorizontal: 16, marginBottom: 8 },
+  tabBarWrap: { flexDirection: "row", flexWrap: "wrap", columnGap: 15, rowGap: 8 },
   tab: { paddingVertical: 6, paddingHorizontal: 4 },
   activeTab: { borderBottomWidth: 2, borderBottomColor: Colors.light.tint },
   tabText: { fontSize: 13.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
@@ -1819,9 +2178,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 4,
   },
-  registerCardTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
   registerCardTitle: { flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  registerCardAmount: { fontSize: 14, fontFamily: "Inter_700Bold", color: "#0F766E" },
+  registerCardAmount: { fontSize: 20, fontFamily: "Inter_700Bold", color: "#0F766E", lineHeight: 24, marginBottom: 2 },
   registerCardMeta: { fontSize: 12, color: Colors.light.textSecondary, lineHeight: 18 },
   registerCardNote: { fontSize: 12, color: "#92400E", lineHeight: 18 },
   cashBookHeaderRow: {
@@ -1896,6 +2254,19 @@ const styles = StyleSheet.create({
   },
   memberOptionName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   memberOptionId: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  yearOptionRow: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  yearOptionRowActive: {
+    backgroundColor: Colors.light.tint + "10",
+  },
+  yearOptionText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  yearOptionTextActive: { color: Colors.light.tint },
   cancelBtn: { paddingVertical: 14, alignItems: "center", marginTop: 5 },
   cancelBtnText: { color: Colors.light.textSecondary, fontSize: 15, fontFamily: "Inter_500Medium" },
 });
