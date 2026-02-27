@@ -481,6 +481,7 @@ function RootLayoutNav() {
             <Stack.Screen name="members" options={{ headerShown: false }} />
             <Stack.Screen name="events" options={{ headerShown: false }} />
             <Stack.Screen name="messages" options={{ headerShown: false }} />
+            <Stack.Screen name="notifications" options={{ headerShown: false }} />
             <Stack.Screen name="loans" options={{ headerShown: false }} />
             <Stack.Screen name="expense-claims" options={{ headerShown: false }} />
           </Stack>

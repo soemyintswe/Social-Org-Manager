@@ -60,6 +60,7 @@ export default function AuditChangeRequestsScreen() {
     transactions,
     loans,
     members,
+    users,
     addAuditChangeRequestMessage,
     changeAuditChangeRequestStatus,
     applyAuditChangeRequestPatch,
@@ -75,6 +76,10 @@ export default function AuditChangeRequestsScreen() {
   const [showFixModal, setShowFixModal] = useState(false);
   const [messageNote, setMessageNote] = useState("");
   const [decisionNote, setDecisionNote] = useState("");
+  const [forwardToUserId, setForwardToUserId] = useState("");
+  const [tagUserIds, setTagUserIds] = useState<string[]>([]);
+  const [showForwardPicker, setShowForwardPicker] = useState(false);
+  const [showTagPicker, setShowTagPicker] = useState(false);
   const [fixPayerPayee, setFixPayerPayee] = useState("");
   const [fixAmount, setFixAmount] = useState("");
   const [fixDate, setFixDate] = useState("");
@@ -138,11 +143,50 @@ export default function AuditChangeRequestsScreen() {
     const member = members.find((m: any) => String(m?.id || "") === memberId);
     return member?.name || memberId;
   }, [members, selectedTxn, selectedLoan]);
+  const activeUsers = useMemo(
+    () => (Array.isArray(users) ? users : []).filter((row: any) => row?.isActive !== false),
+    [users]
+  );
+  const visibleForwardUsers = useMemo(
+    () => activeUsers.filter((row: any) => String(row?.id || "") !== String(currentUser?.id || "")),
+    [activeUsers, currentUser?.id]
+  );
+  const selectedForwardUser = useMemo(
+    () => visibleForwardUsers.find((row: any) => String(row?.id || "") === String(forwardToUserId || "")) || null,
+    [visibleForwardUsers, forwardToUserId]
+  );
+  const selectedTagUsers = useMemo(() => {
+    const set = new Set((tagUserIds || []).map((v) => String(v || "").trim()).filter(Boolean));
+    return activeUsers.filter((row: any) => set.has(String(row?.id || "")));
+  }, [activeUsers, tagUserIds]);
+
+  const getOrgRoleLabel = (value?: string): string => {
+    const role = normalizeOrgPosition(value || "member");
+    if (role === "patron") return "နာယက";
+    if (role === "chairperson") return "ဥက္ကဌ";
+    if (role === "vice_chairperson") return "ဒုတိယဥက္ကဌ";
+    if (role === "secretary") return "အတွင်းရေးမှူး";
+    if (role === "joint_secretary") return "တွဲဘက်အတွင်းရေးမှူး";
+    if (role === "treasurer") return "ဘဏ္ဍာရေးမှူး";
+    if (role === "auditor") return "စာရင်းစစ်";
+    if (role === "committee_member") return "ကော်မတီဝင်";
+    if (role === "applicant") return "လျှောက်ထားသူ";
+    return "အသင်းဝင်";
+  };
+
+  const getUserLabel = (user: any): string => {
+    const name = String(user?.displayName || user?.id || "-");
+    const memberId = String(user?.memberId || "").trim();
+    const roleLabel = getOrgRoleLabel(String(user?.orgPosition || ""));
+    return `${name}${memberId ? ` (${memberId})` : ""} • ${roleLabel}`;
+  };
 
   const openDetail = (requestId: string) => {
     setSelectedRequestId(requestId);
     setMessageNote("");
     setDecisionNote("");
+    setForwardToUserId("");
+    setTagUserIds([]);
     setShowDetailModal(true);
   };
 
@@ -159,21 +203,75 @@ export default function AuditChangeRequestsScreen() {
     setShowFixModal(true);
   };
 
-  const submitMessage = async (forwardChair = false) => {
+  const resolveReplyTarget = () => {
+    if (!selectedRequest || !currentUser?.id) return { toUserId: "", replyToMessageId: "" };
+    const me = String(currentUser.id || "").trim();
+    const messages = Array.isArray(selectedRequest.messages) ? selectedRequest.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i] as any;
+      const fromUserId = String(msg?.byUserId || "").trim();
+      if (!fromUserId || fromUserId === me) continue;
+      return {
+        toUserId: fromUserId,
+        replyToMessageId: String(msg?.id || "").trim(),
+      };
+    }
+    const creatorId = String(selectedRequest.createdByUserId || "").trim();
+    if (creatorId && creatorId !== me) return { toUserId: creatorId, replyToMessageId: "" };
+    return { toUserId: "", replyToMessageId: "" };
+  };
+
+  const toggleTagUser = (userId: string) => {
+    const id = String(userId || "").trim();
+    if (!id) return;
+    setTagUserIds((prev) => {
+      if (prev.includes(id)) return prev.filter((row) => row !== id);
+      return [...prev, id];
+    });
+  };
+
+  const submitMessage = async (isForward = false) => {
     if (!selectedRequest || !currentUser?.id) return;
     const note = messageNote.trim();
     if (!note) return Alert.alert("လိုအပ်ချက်", "Reply/Forward note ဖြည့်ရန်လိုပါသည်။");
+    let toUserId = "";
+    let replyToMessageId = "";
+    let toRole: any = undefined;
+
+    if (isForward) {
+      toUserId = String(forwardToUserId || "").trim();
+      if (!toUserId) {
+        return Alert.alert("လိုအပ်ချက်", "Forward လက်ခံမည့် User ကို ရွေးချယ်ပါ။");
+      }
+      const targetUser = activeUsers.find((row: any) => String(row?.id || "") === toUserId);
+      toRole = targetUser?.orgPosition ? normalizeOrgPosition(String(targetUser.orgPosition)) : undefined;
+    } else {
+      const target = resolveReplyTarget();
+      toUserId = String(target.toUserId || "").trim();
+      replyToMessageId = String(target.replyToMessageId || "").trim();
+      if (!toUserId) {
+        return Alert.alert("မတွေ့ပါ", "Reply ပို့ရန် မူရင်းလက်ခံသူကို မသတ်မှတ်နိုင်ပါ။");
+      }
+    }
+
+    const tagTargets = (tagUserIds || []).filter((id) => String(id || "").trim() && String(id || "").trim() !== toUserId);
+
     await addAuditChangeRequestMessage({
       requestId: selectedRequest.id,
       byUserId: currentUser.id,
       byMemberId: currentUser.memberId,
       byDisplayName: currentUser.displayName,
-      messageType: forwardChair ? "forward" : "reply",
+      messageType: isForward ? "forward" : "reply",
       note,
-      toRole: forwardChair ? "chairperson" : undefined,
-      setSuspended: forwardChair,
+      toRole,
+      toUserId,
+      tagUserIds: tagTargets,
+      replyToMessageId: replyToMessageId || undefined,
+      setSuspended: false,
     });
     setMessageNote("");
+    setForwardToUserId("");
+    setTagUserIds([]);
   };
 
   const submitStatus = async (status: AuditChangeRequestStatus) => {
@@ -468,13 +566,38 @@ export default function AuditChangeRequestsScreen() {
               placeholder="ညှိနှိုင်းမှတ်ချက် / ကန့်ကွက်ရှင်းလင်းချက်"
               multiline
             />
+            {!isDeleteRequest ? (
+              <Pressable style={styles.selectionInput} onPress={() => setShowForwardPicker(true)}>
+                <Text style={[styles.selectionInputText, !selectedForwardUser && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                  {selectedForwardUser ? getUserLabel(selectedForwardUser) : "Forward လက်ခံသူရွေးပါ"}
+                </Text>
+                <Ionicons name="chevron-down" size={18} color={Colors.light.textSecondary} />
+              </Pressable>
+            ) : null}
+            <Pressable style={styles.selectionInput} onPress={() => setShowTagPicker(true)}>
+              <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                {selectedTagUsers.length > 0
+                  ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
+                  : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
+              </Text>
+              <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
+            </Pressable>
+            {selectedTagUsers.length > 0 ? (
+              <View style={styles.tagPreviewWrap}>
+                {selectedTagUsers.map((user: any) => (
+                  <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
+                    <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             <View style={styles.actionRow}>
               <Pressable style={[styles.actionBtn, { backgroundColor: Colors.light.tint }]} onPress={() => void submitMessage(false)}>
                 <Text style={styles.actionBtnText}>Reply ပို့မည်</Text>
               </Pressable>
               {!isDeleteRequest ? (
                 <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }]} onPress={() => void submitMessage(true)}>
-                  <Text style={styles.actionBtnText}>Chair ထံ Forward</Text>
+                  <Text style={styles.actionBtnText}>Forward ပို့မည်</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -484,6 +607,18 @@ export default function AuditChangeRequestsScreen() {
               selectedRequest.messages.map((msg: any) => (
                 <View key={msg.id} style={styles.messageCard}>
                   <Text style={styles.messageMeta}>{msg.messageType || "note"} • {msg.byDisplayName || msg.byUserId || "-"}</Text>
+                  {msg.toUserId ? (
+                    <Text style={styles.messageSubMeta}>
+                      To: {activeUsers.find((row: any) => String(row?.id || "") === String(msg.toUserId || ""))?.displayName || msg.toUserId}
+                    </Text>
+                  ) : null}
+                  {Array.isArray(msg.tagUserIds) && msg.tagUserIds.length > 0 ? (
+                    <Text style={styles.messageSubMeta}>
+                      Tag: {msg.tagUserIds
+                        .map((id: string) => activeUsers.find((row: any) => String(row?.id || "") === String(id || ""))?.displayName || id)
+                        .join(", ")}
+                    </Text>
+                  ) : null}
                   <Text style={styles.messageBody}>{msg.note || "-"}</Text>
                   <Text style={styles.messageTime}>{fmtDateTime(msg.createdAt)}</Text>
                 </View>
@@ -540,6 +675,61 @@ export default function AuditChangeRequestsScreen() {
             </Pressable>
           </ScrollView>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal animationType="fade" transparent visible={showForwardPicker} onRequestClose={() => setShowForwardPicker(false)}>
+        <View style={styles.pickerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowForwardPicker(false)} />
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle}>Forward လက်ခံသူရွေးရန်</Text>
+            <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
+              {visibleForwardUsers.map((user: any) => {
+                const selected = String(user?.id || "") === String(forwardToUserId || "");
+                return (
+                  <Pressable
+                    key={String(user?.id || "")}
+                    style={[styles.pickerItem, selected && styles.pickerItemActive]}
+                    onPress={() => {
+                      setForwardToUserId(String(user?.id || ""));
+                      setShowForwardPicker(false);
+                    }}
+                  >
+                    <Text style={[styles.pickerItemText, selected && styles.pickerItemTextActive]}>{getUserLabel(user)}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Pressable style={styles.closeBtn} onPress={() => setShowForwardPicker(false)}>
+              <Text style={styles.closeBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="fade" transparent visible={showTagPicker} onRequestClose={() => setShowTagPicker(false)}>
+        <View style={styles.pickerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowTagPicker(false)} />
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle}>Tag တွဲပေးမည့် User များ</Text>
+            <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
+              {visibleForwardUsers.map((user: any) => {
+                const selected = tagUserIds.includes(String(user?.id || ""));
+                return (
+                  <Pressable
+                    key={String(user?.id || "")}
+                    style={[styles.pickerItem, selected && styles.pickerItemActive]}
+                    onPress={() => toggleTagUser(String(user?.id || ""))}
+                  >
+                    <Text style={[styles.pickerItemText, selected && styles.pickerItemTextActive]}>{getUserLabel(user)}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Pressable style={styles.closeBtn} onPress={() => setShowTagPicker(false)}>
+              <Text style={styles.closeBtnText}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -605,6 +795,31 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
   },
   noteInput: { minHeight: 86, textAlignVertical: "top" },
+  selectionInput: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#F8FAFC",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  selectionInputText: { flex: 1, color: Colors.light.text, fontFamily: "Inter_500Medium", fontSize: 13 },
+  selectionInputPlaceholder: { color: Colors.light.textSecondary },
+  tagPreviewWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  tagChip: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: "#ECFEFF",
+  },
+  tagChipText: { color: Colors.light.text, fontFamily: "Inter_500Medium", fontSize: 12 },
   actionRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   actionBtn: { flex: 1, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
   actionBtnText: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 },
@@ -618,8 +833,33 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   messageMeta: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
+  messageSubMeta: { fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   messageBody: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_500Medium" },
   messageTime: { fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
+  pickerOverlay: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "rgba(0,0,0,0.45)", padding: 20 },
+  pickerCard: {
+    width: "100%",
+    maxHeight: "75%",
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  pickerTitle: { fontSize: 18, color: Colors.light.text, fontFamily: "Inter_700Bold", marginBottom: 8 },
+  pickerList: { maxHeight: 380 },
+  pickerItem: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    marginBottom: 8,
+    backgroundColor: "#fff",
+  },
+  pickerItemActive: { backgroundColor: "#ECFEFF", borderColor: Colors.light.tint },
+  pickerItemText: { color: Colors.light.text, fontFamily: "Inter_500Medium", fontSize: 13 },
+  pickerItemTextActive: { color: Colors.light.tint, fontFamily: "Inter_600SemiBold" },
   closeBtn: { alignItems: "center", paddingVertical: 12, marginTop: 8 },
   closeBtnText: { color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold", fontSize: 14 },
 });

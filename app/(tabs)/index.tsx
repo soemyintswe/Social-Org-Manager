@@ -142,7 +142,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
@@ -304,7 +304,15 @@ export default function DashboardScreen() {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 5);
   }, [transactions, canViewOrgFinanceSummary, currentUser?.memberId]);
-  const recentEvents: OrgEvent[] = [...(events || [])]
+  const publicEvents: OrgEvent[] = useMemo(
+    () =>
+      [...(events || [])].filter(
+        (item: any) => String(item?.location || "").trim().toLowerCase() !== "system"
+      ),
+    [events]
+  );
+
+  const recentEvents: OrgEvent[] = [...publicEvents]
     .sort((a, b) => getEventTime(b) - getEventTime(a))
     .slice(0, 5);
 
@@ -416,7 +424,7 @@ export default function DashboardScreen() {
     return { cash, bank, total: cash + bank };
   }, [transactions, accountSettings]);
 
-  const eventCount = Array.isArray(events) ? events.length : 0;
+  const eventCount = Array.isArray(publicEvents) ? publicEvents.length : 0;
   const formatSignedDifference = (value: number) => `${value >= 0 ? "+" : "-"} ${formatCurrency(Math.abs(value))}`;
   const personalFinanceStats = useMemo(() => {
     const myMemberId = String(currentUser?.memberId || "");
@@ -433,8 +441,19 @@ export default function DashboardScreen() {
 
   const unreadEventCount = useMemo(() => {
     if (!currentUser?.id) return 0;
-    return (events || []).filter((item: any) => !item?.readBy?.[currentUser.id]).length;
-  }, [events, currentUser?.id]);
+    return (publicEvents || []).filter((item: any) => !item?.readBy?.[currentUser.id]).length;
+  }, [publicEvents, currentUser?.id]);
+
+  const unreadRequestNotificationCount = useMemo(() => {
+    const me = String(currentUser?.id || "").trim();
+    if (!me) return 0;
+    return (notifications || []).filter((item: any) => {
+      const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+      if (!targets.includes(me)) return false;
+      const readBy = Array.isArray(item?.readByUserIds) ? item.readByUserIds.map((v: any) => String(v || "").trim()) : [];
+      return !readBy.includes(me);
+    }).length;
+  }, [notifications, currentUser?.id]);
 
   const unreadMessageCount = useMemo(() => {
     if (!currentUser?.id) return 0;
@@ -712,6 +731,83 @@ export default function DashboardScreen() {
   }, [events, currentUser?.id]);
 
   useEffect(() => {
+    const scheduleRequestNotifications = async () => {
+      const isExpoGo = Constants.appOwnership === "expo";
+      if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
+      const me = String(currentUser?.id || "").trim();
+      if (!me) return;
+      if (!Array.isArray(notifications) || notifications.length === 0) return;
+      try {
+        const Notifications = require("expo-notifications");
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        const key = `@request_notification_seen_ids_${me}`;
+        const existingRaw = await AsyncStorage.getItem(key);
+        const seen = new Set<string>(existingRaw ? JSON.parse(existingRaw) : []);
+        const myNotificationIds = (notifications || [])
+          .filter((item: any) => {
+            const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+            return targets.includes(me);
+          })
+          .map((item: any) => String(item?.id || ""))
+          .filter(Boolean);
+
+        if (!existingRaw) {
+          await AsyncStorage.setItem(key, JSON.stringify(myNotificationIds));
+          return;
+        }
+
+        const { status } = await Notifications.getPermissionsAsync();
+        let finalStatus = status;
+        if (status !== "granted") {
+          const req = await Notifications.requestPermissionsAsync();
+          finalStatus = req.status;
+        }
+        if (finalStatus !== "granted") return;
+
+        let changed = false;
+        const ordered = [...(notifications as any[])].sort(
+          (a, b) => new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime()
+        );
+        for (const item of ordered) {
+          const id = String(item?.id || "");
+          if (!id || seen.has(id)) continue;
+          const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+          if (!targets.includes(me)) continue;
+          if (String(item?.createdByUserId || "") === me) {
+            seen.add(id);
+            changed = true;
+            continue;
+          }
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: `🔔 ${String(item?.title || "အသိပေးချက်")}`,
+              body: String(item?.description || ""),
+            },
+            trigger: null,
+          });
+          seen.add(id);
+          changed = true;
+        }
+        if (changed) {
+          await AsyncStorage.setItem(key, JSON.stringify(Array.from(seen)));
+        }
+      } catch (error) {
+        console.log("Request notification scheduling failed:", error);
+      }
+    };
+    void scheduleRequestNotifications();
+  }, [notifications, currentUser?.id]);
+
+  useEffect(() => {
     const scheduleCommentMentionNotifications = async () => {
       const isExpoGo = Constants.appOwnership === 'expo';
       if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
@@ -916,6 +1012,10 @@ export default function DashboardScreen() {
         <Pressable style={styles.noticeCard} onPress={() => router.push("/events" as any)}>
           <Text style={styles.noticeTitle}>📰 Event အသစ်</Text>
           <Text style={styles.noticeCount}>{unreadEventCount}</Text>
+        </Pressable>
+        <Pressable style={styles.noticeCard} onPress={() => router.push("/notifications" as any)}>
+          <Text style={styles.noticeTitle}>🔔 Request အသိပေး</Text>
+          <Text style={styles.noticeCount}>{unreadRequestNotificationCount}</Text>
         </Pressable>
         <Pressable style={styles.noticeCard} onPress={() => router.push("/messages" as any)}>
           <Text style={styles.noticeTitle}>💬 Message အသစ်</Text>

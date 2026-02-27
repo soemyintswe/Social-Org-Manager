@@ -17,6 +17,7 @@ interface OrgEventNotice {
   images?: string[];
   senderName?: string;
   senderMemberId?: string;
+  senderPhone?: string;
   senderDate?: string;
   senderTime?: string;
   summary?: string;
@@ -319,6 +320,7 @@ export default function EventDetailScreen() {
           <View style={styles.senderBox}>
             <Text style={styles.senderText}>သတင်းပေးပို့သူ: {event.senderName || "-"}</Text>
             <Text style={styles.senderText}>အဖွဲ့ဝင် ID: {event.senderMemberId || "-"}</Text>
+            <Text style={styles.senderText}>ဖုန်း: {event.senderPhone || "-"}</Text>
           </View>
 
           <View style={styles.scheduleBox}>

@@ -336,7 +336,12 @@ export default function MemberPaymentRequestsScreen() {
         "တင်သွင်းပြီးပါပြီ",
         "ငွေပေးသွင်းတောင်းခံမှုကို ဘဏ္ဍာရေးမှူးထံ ပို့ပြီးပါပြီ။ အတည်ပြုပြီးမှ ရငွေစာရင်းသို့ သွင်းပါမည်။"
       );
-    } catch {
+    } catch (error: any) {
+      const reason = String(error?.message || "");
+      if (reason.includes("request_conflict_in_progress")) {
+        Alert.alert("မရပါ", "ဤအကြောင်းအရာအတွက် Pending Request တစ်ခုရှိနေပြီးဖြစ်သဖြင့် အသစ်တင်သွင်းလို့မရပါ။");
+        return;
+      }
       Alert.alert("အမှားအယွင်း", "တင်သွင်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSubmitting(false);

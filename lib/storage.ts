@@ -33,6 +33,9 @@ import {
   DisbursementMethod,
   ChatThread,
   ChatMessage,
+  AppNotification,
+  OrgPosition,
+  normalizeOrgPosition,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 import {
@@ -59,6 +62,7 @@ const KEYS = {
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
   CHAT_THREADS: "@orghub_chat_threads",
   CHAT_MESSAGES: "@orghub_chat_messages",
+  NOTIFICATIONS: "@orghub_notifications",
 };
 
 const EXTRA_SHARED_KEYS = [
@@ -957,6 +961,17 @@ async function saveAuditChangeRequests(rows: AuditChangeRequest[]): Promise<void
   await AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(rows));
 }
 
+async function getAuditRequestTargetMemberId(req: AuditChangeRequest): Promise<string> {
+  if (String(req?.targetType || "") === "loan") {
+    const loans = await getLoans();
+    const loan = loans.find((row: any) => String(row?.id || "") === String(req?.targetId || req?.relatedLoanId || ""));
+    return String((loan as any)?.memberId || "").trim();
+  }
+  const txns = await getTransactions();
+  const txn = txns.find((row: any) => String(row?.id || "") === String(req?.targetId || req?.transactionId || ""));
+  return String((txn as any)?.memberId || "").trim();
+}
+
 export async function createAuditChangeRequest(input: {
   requestKind?: AuditChangeRequestKind;
   targetType?: AuditChangeTargetType;
@@ -983,15 +998,19 @@ export async function createAuditChangeRequest(input: {
   if (resolvedTargetType === "transaction" && !txn) throw new Error("transaction_not_found");
   if (resolvedTargetType === "loan" && !loan) throw new Error("loan_not_found");
 
-  const activeExisting = requests.find(
-    (row: any) =>
-      row?.requestKind === requestKind &&
-      row?.targetType === resolvedTargetType &&
-      String(row?.targetId || "") === targetId &&
-      (row?.status === "pending" || row?.status === "suspended" || (row?.status === "approved" && row?.workflowStage === "treasurer_execution"))
-  );
-  if (activeExisting) {
-    return activeExisting;
+  const activeConflict = requests.find((row: any) => {
+    const sameTarget =
+      String(row?.targetType || "") === resolvedTargetType &&
+      String(row?.targetId || "") === targetId;
+    if (!sameTarget) return false;
+    return (
+      row?.status === "pending" ||
+      row?.status === "suspended" ||
+      (row?.status === "approved" && row?.workflowStage === "treasurer_execution")
+    );
+  });
+  if (activeConflict) {
+    throw new Error("request_conflict_in_progress");
   }
 
   const now = new Date().toISOString();
@@ -1031,6 +1050,10 @@ export async function createAuditChangeRequest(input: {
   };
 
   await saveAuditChangeRequests([request, ...requests]);
+  const targetMemberId =
+    resolvedTargetType === "loan"
+      ? String((loan as any)?.memberId || "").trim()
+      : String((txn as any)?.memberId || "").trim();
   await pushSystemEvent({
     title: requestKind === "delete"
       ? `Delete Request Submitted (${request.requestNumber})`
@@ -1038,8 +1061,12 @@ export async function createAuditChangeRequest(input: {
     description: requestKind === "delete"
       ? `${resolvedTargetType === "loan" ? "Loan" : "Transaction"} ${targetId} ကို ပယ်ဖျက်ရန် တင်သွင်းထားပါသည်`
       : `Transaction ${transactionId} ကို စိစစ်ပြင်ဆင်ရန် တင်သွင်းထားပါသည်`,
+    category: requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.createdByUserId,
     createdByMemberId: input.createdByMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: request.id,
   });
   return request;
 }
@@ -1052,6 +1079,8 @@ export async function addAuditChangeRequestMessage(input: {
   messageType?: AuditChangeMessageType;
   note: string;
   toRole?: "treasurer" | "auditor" | "chairperson" | "vice_chairperson" | "secretary" | "joint_secretary" | "committee_member" | "member" | "patron" | "applicant";
+  toUserId?: string;
+  tagUserIds?: string[];
   replyToMessageId?: string;
   setSuspended?: boolean;
 }): Promise<void> {
@@ -1073,6 +1102,10 @@ export async function addAuditChangeRequestMessage(input: {
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
     toRole: input.toRole,
+    toUserId: input.toUserId ? String(input.toUserId).trim() : undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     replyToMessageId: input.replyToMessageId,
     createdAt: now,
   };
@@ -1095,8 +1128,16 @@ export async function addAuditChangeRequestMessage(input: {
   await pushSystemEvent({
     title: `Audit Change Request Updated (${req.requestNumber})`,
     description: `${note.slice(0, 80)}${note.length > 80 ? "..." : ""}`,
+    category: "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: [
+      ...(message.toUserId ? [message.toUserId] : []),
+      ...((message.tagUserIds || []) as string[]),
+      String(req.createdByUserId || "").trim(),
+    ].filter(Boolean),
+    relatedType: "audit_change_request",
+    relatedId: req.id,
   });
 }
 
@@ -1156,11 +1197,16 @@ export async function changeAuditChangeRequestStatus(input: {
     messages: [...(req.messages || []), message],
   };
   await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
     title: `Audit Change Request ${status.toUpperCase()} (${req.requestNumber})`,
     description: decisionNote || `Status: ${status}`,
+    category: "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
   });
 }
 
@@ -1205,11 +1251,16 @@ export async function forwardDeleteAuditRequestToChair(input: {
     messages: [...(req.messages || []), msg],
   };
   await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
     title: `Delete Request Forwarded to Chair (${req.requestNumber})`,
     description: `${req.targetType} ${req.targetId} - chair approval requested`,
+    category: "delete_request",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
   });
 }
 
@@ -1259,13 +1310,18 @@ export async function chairReviewDeleteAuditRequest(input: {
     messages: [...(req.messages || []), msg],
   };
   await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
     title: approved
       ? `Delete Request Approved by Chair (${req.requestNumber})`
       : `Delete Request Rejected by Chair (${req.requestNumber})`,
     description: note,
+    category: "delete_request",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
   });
 }
 
@@ -1363,14 +1419,19 @@ export async function confirmDeleteAuditRequestExecution(input: {
     [KEYS.TRANSACTIONS, JSON.stringify(txns)],
     [KEYS.LOANS, JSON.stringify(loans)],
   ]);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
     title: `Delete Executed (${req.requestNumber})`,
     description:
       req.targetType === "loan" && removedLinkedTransactionIds.length > 0
         ? `${req.targetType} ${req.targetId} ကို ပယ်ဖျက်ပြီး linked transactions ${removedLinkedTransactionIds.length} ခု ဖယ်ရှားပြီးပါပြီ`
         : `${req.targetType} ${req.targetId} ကို ပယ်ဖျက်ပြီးပါပြီ`,
+    category: "delete_request",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
   });
 }
 
@@ -1448,11 +1509,16 @@ export async function applyAuditChangeRequestPatch(input: {
     [KEYS.TRANSACTIONS, JSON.stringify(txns)],
     [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
   ]);
+  const targetMemberId = String((afterTxn as any)?.memberId || "").trim();
   await pushSystemEvent({
     title: `Audit Change Applied (${req.requestNumber})`,
     description: `Transaction ${req.transactionId} ကို ပြင်ဆင်ပြီး အတည်ပြုခဲ့ပါသည်`,
+    category: "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
   });
 }
 
@@ -1465,31 +1531,182 @@ function mapPaymentRequestKindToIncomeCategory(
   return { category: "interest_income", categoryLabel: "အတိုးရငွေ" };
 }
 
+const COMMITTEE_NOTIFICATION_ROLES: OrgPosition[] = [
+  "patron",
+  "chairperson",
+  "vice_chairperson",
+  "secretary",
+  "joint_secretary",
+  "treasurer",
+  "auditor",
+  "committee_member",
+];
+
+function normalizeOrgPositionList(values: unknown[]): OrgPosition[] {
+  const set = new Set<OrgPosition>();
+  for (const row of values || []) {
+    const role = normalizeOrgPosition(row);
+    set.add(role);
+  }
+  return Array.from(set.values());
+}
+
+async function resolveNotificationTargetUserIds(input: {
+  targetUserIds?: string[];
+  targetMemberIds?: string[];
+  targetRoles?: OrgPosition[];
+  includeCommittee?: boolean;
+  includeCreator?: boolean;
+  createdByUserId?: string;
+}): Promise<string[]> {
+  const users = await getUsers();
+  const activeUsers = (users || []).filter((row) => row?.isActive !== false);
+  const activeIds = new Set(activeUsers.map((row) => String(row.id || "")).filter(Boolean));
+  const target = new Set<string>();
+
+  if (input.includeCommittee) {
+    const committeeRoleSet = new Set(COMMITTEE_NOTIFICATION_ROLES);
+    activeUsers.forEach((row: any) => {
+      const role = normalizeOrgPosition(row?.orgPosition || "member");
+      if (committeeRoleSet.has(role)) target.add(String(row?.id || ""));
+    });
+  }
+
+  const roleSet = new Set(normalizeOrgPositionList((input.targetRoles || []) as unknown[]));
+  if (roleSet.size > 0) {
+    activeUsers.forEach((row: any) => {
+      const role = normalizeOrgPosition(row?.orgPosition || "member");
+      if (roleSet.has(role)) target.add(String(row?.id || ""));
+    });
+  }
+
+  const memberSet = new Set((input.targetMemberIds || []).map((v) => String(v || "").trim()).filter(Boolean));
+  if (memberSet.size > 0) {
+    activeUsers.forEach((row: any) => {
+      const memberId = String(row?.memberId || "").trim();
+      if (memberId && memberSet.has(memberId)) target.add(String(row?.id || ""));
+    });
+  }
+
+  (input.targetUserIds || []).forEach((id) => {
+    const userId = String(id || "").trim();
+    if (userId && activeIds.has(userId)) target.add(userId);
+  });
+
+  if (input.includeCreator && input.createdByUserId) {
+    const creatorId = String(input.createdByUserId || "").trim();
+    if (creatorId && activeIds.has(creatorId)) target.add(creatorId);
+  }
+
+  return Array.from(target.values()).filter(Boolean);
+}
+
+export async function getNotifications(): Promise<AppNotification[]> {
+  const rows = await safeGet<AppNotification[]>(KEYS.NOTIFICATIONS, []);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item: any) => ({
+      id: String(item?.id || ""),
+      title: String(item?.title || ""),
+      description: String(item?.description || ""),
+      category: (item?.category || "system") as AppNotification["category"],
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+      createdByUserId: item?.createdByUserId ? String(item.createdByUserId) : undefined,
+      createdByMemberId: item?.createdByMemberId ? String(item.createdByMemberId) : undefined,
+      targetUserIds: Array.isArray(item?.targetUserIds)
+        ? item.targetUserIds.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [],
+      relatedType: item?.relatedType ? String(item.relatedType) : undefined,
+      relatedId: item?.relatedId ? String(item.relatedId) : undefined,
+      readByUserIds: Array.isArray(item?.readByUserIds)
+        ? item.readByUserIds.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [],
+    }))
+    .filter((item) => item.id && item.title && item.createdAt)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+}
+
+async function saveNotifications(rows: AppNotification[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(rows));
+}
+
+export async function markNotificationRead(notificationId: string, userId: string): Promise<void> {
+  const nId = String(notificationId || "").trim();
+  const uId = String(userId || "").trim();
+  if (!nId || !uId) return;
+  const rows = await getNotifications();
+  const idx = rows.findIndex((row) => String(row.id || "") === nId);
+  if (idx === -1) return;
+  const readSet = new Set((rows[idx].readByUserIds || []).map((v) => String(v || "").trim()).filter(Boolean));
+  readSet.add(uId);
+  rows[idx] = {
+    ...rows[idx],
+    readByUserIds: Array.from(readSet.values()),
+  };
+  await saveNotifications(rows);
+}
+
+async function pushSystemNotification(input: {
+  title: string;
+  description: string;
+  category?: AppNotification["category"];
+  createdByUserId?: string;
+  createdByMemberId?: string;
+  targetUserIds?: string[];
+  targetMemberIds?: string[];
+  targetRoles?: OrgPosition[];
+  includeCommittee?: boolean;
+  includeCreator?: boolean;
+  relatedType?: string;
+  relatedId?: string;
+}) {
+  try {
+    const targetUserIds = await resolveNotificationTargetUserIds({
+      targetUserIds: input.targetUserIds,
+      targetMemberIds: input.targetMemberIds,
+      targetRoles: input.targetRoles,
+      includeCommittee: input.includeCommittee !== false,
+      includeCreator: input.includeCreator !== false,
+      createdByUserId: input.createdByUserId,
+    });
+    if (targetUserIds.length === 0) return;
+
+    const rows = await getNotifications();
+    const item: AppNotification = {
+      id: generateId(),
+      title: String(input.title || "").trim(),
+      description: String(input.description || "").trim(),
+      category: (input.category || "system") as AppNotification["category"],
+      createdAt: new Date().toISOString(),
+      createdByUserId: input.createdByUserId,
+      createdByMemberId: input.createdByMemberId,
+      targetUserIds,
+      relatedType: input.relatedType?.trim() || undefined,
+      relatedId: input.relatedId?.trim() || undefined,
+      readByUserIds: [],
+    };
+    if (!item.title) return;
+    await saveNotifications([item, ...rows]);
+  } catch (error) {
+    console.log("pushSystemNotification failed", error);
+  }
+}
+
 async function pushSystemEvent(input: {
   title: string;
   description: string;
   createdByUserId?: string;
   createdByMemberId?: string;
+  category?: AppNotification["category"];
+  targetUserIds?: string[];
+  targetMemberIds?: string[];
+  targetRoles?: OrgPosition[];
+  includeCommittee?: boolean;
+  includeCreator?: boolean;
+  relatedType?: string;
+  relatedId?: string;
 }) {
-  try {
-    const events = await getEvents();
-    const now = new Date();
-    const event: OrgEvent = {
-      id: generateId(),
-      title: input.title,
-      description: input.description,
-      date: toYmd(now),
-      time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
-      location: "System",
-      attendeeIds: [],
-      createdAt: now.toISOString(),
-      createdByUserId: input.createdByUserId,
-      createdByMemberId: input.createdByMemberId,
-    };
-    await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify([event, ...events]));
-  } catch (error) {
-    console.log("pushSystemEvent failed", error);
-  }
+  await pushSystemNotification(input);
 }
 
 function defaultStandardRules(): StandardAmountRule[] {
@@ -1671,8 +1888,12 @@ export async function createExpenseClaim(input: Omit<ExpenseClaim, "id" | "claim
   await pushSystemEvent({
     title: `Expense Claim Submitted (${claim.claimNumber})`,
     description: `${claim.claimantName} - ${claim.requestedAmount.toLocaleString()} KS (${claim.expenseCategoryLabel})`,
+    category: "expense_claim",
     createdByUserId: claim.createdByUserId,
     createdByMemberId: claim.createdByMemberId,
+    targetMemberIds: [String(claim.claimantMemberId || claim.relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claim.id,
   });
   return claim;
 }
@@ -1700,7 +1921,11 @@ export async function approveExpenseClaim(input: {
   await pushSystemEvent({
     title: `Expense Claim Approved (${claims[idx].claimNumber})`,
     description: `${claims[idx].approvedAmount?.toLocaleString() || 0} KS approved`,
+    category: "expense_claim",
     createdByUserId: input.approverUserId,
+    targetMemberIds: [String(claims[idx].claimantMemberId || claims[idx].relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claims[idx].id,
   });
 }
 
@@ -1725,7 +1950,11 @@ export async function rejectExpenseClaim(input: {
   await pushSystemEvent({
     title: `Expense Claim Rejected (${claims[idx].claimNumber})`,
     description: claims[idx].approvalNote || "Claim rejected",
+    category: "expense_claim",
     createdByUserId: input.approverUserId,
+    targetMemberIds: [String(claims[idx].claimantMemberId || claims[idx].relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claims[idx].id,
   });
 }
 
@@ -1776,7 +2005,11 @@ export async function disburseExpenseClaim(input: {
   await pushSystemEvent({
     title: `Expense Disbursed (${claim.claimNumber})`,
     description: `${amount.toLocaleString()} KS • ${input.method.toUpperCase()}`,
+    category: "expense_claim",
     createdByUserId: input.disburserUserId,
+    targetMemberIds: [String(claim.claimantMemberId || claim.relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claim.id,
   });
 }
 
@@ -1806,6 +2039,37 @@ export async function createMemberPaymentRequest(input: {
   createdByMemberId?: string;
 }): Promise<MemberPaymentRequest> {
   const requests = await getMemberPaymentRequests();
+  const pendingRequests = requests.filter((row) => String(row?.status || "") === "pending_treasurer_review");
+  const requestedKind = String(input.kind || "").trim();
+  const requestedForMemberId = String(input.forMemberId || "").trim();
+  const requestedRef = String(input.walletReference || "").trim().toLowerCase();
+  const requestedFeeStart = String(input.feePeriodStart || "").trim();
+  const requestedFeeEnd = String(input.feePeriodEnd || "").trim();
+
+  const hasPendingConflict = pendingRequests.some((row: any) => {
+    const sameKind = String(row?.kind || "") === requestedKind;
+    const sameForMember = String(row?.forMemberId || "") === requestedForMemberId;
+    if (requestedRef && String(row?.walletReference || "").trim().toLowerCase() === requestedRef) {
+      return true;
+    }
+    if (!sameKind || !sameForMember) return false;
+    if (requestedKind !== "member_fees") return true;
+    const rowStartRaw = String(row?.feePeriodStart || "").trim();
+    const rowEndRaw = String(row?.feePeriodEnd || "").trim();
+    if (!rowStartRaw || !rowEndRaw || !requestedFeeStart || !requestedFeeEnd) return true;
+    const rowStart = new Date(rowStartRaw);
+    const rowEnd = new Date(rowEndRaw);
+    const reqStart = new Date(requestedFeeStart);
+    const reqEnd = new Date(requestedFeeEnd);
+    if ([rowStart, rowEnd, reqStart, reqEnd].some((d) => Number.isNaN(d.getTime()))) return true;
+    rowStart.setHours(0, 0, 0, 0);
+    rowEnd.setHours(23, 59, 59, 999);
+    reqStart.setHours(0, 0, 0, 0);
+    reqEnd.setHours(23, 59, 59, 999);
+    return reqStart <= rowEnd && reqEnd >= rowStart;
+  });
+  if (hasPendingConflict) throw new Error("request_conflict_in_progress");
+
   const nowDate = new Date();
   const now = nowDate.toISOString();
   const mapping = mapPaymentRequestKindToIncomeCategory(input.kind);
@@ -1841,8 +2105,12 @@ export async function createMemberPaymentRequest(input: {
   await pushSystemEvent({
     title: `Payment Request Submitted (${request.requestNumber})`,
     description: `${request.payerName} • ${request.amount.toLocaleString()} KS • ${request.categoryLabel}`,
+    category: "payment_request",
     createdByUserId: request.createdByUserId,
     createdByMemberId: request.createdByMemberId,
+    targetMemberIds: [String(request.forMemberId || request.payerMemberId || "").trim()].filter(Boolean),
+    relatedType: "member_payment_request",
+    relatedId: request.id,
   });
   return request;
 }
@@ -1893,7 +2161,11 @@ export async function approveMemberPaymentRequest(input: {
   await pushSystemEvent({
     title: `Payment Request Approved (${request.requestNumber})`,
     description: `${request.amount.toLocaleString()} KS ကို ရငွေစာရင်းသို့ ထည့်သွင်းပြီးပါပြီ`,
+    category: "payment_request",
     createdByUserId: input.reviewerUserId,
+    targetMemberIds: [String(request.forMemberId || request.payerMemberId || "").trim()].filter(Boolean),
+    relatedType: "member_payment_request",
+    relatedId: request.id,
   });
 }
 
@@ -1920,7 +2192,11 @@ export async function rejectMemberPaymentRequest(input: {
   await pushSystemEvent({
     title: `Payment Request Rejected (${request.requestNumber})`,
     description: requests[idx].reviewNote || "Rejected by treasurer",
+    category: "payment_request",
     createdByUserId: input.reviewerUserId,
+    targetMemberIds: [String(request.forMemberId || request.payerMemberId || "").trim()].filter(Boolean),
+    relatedType: "member_payment_request",
+    relatedId: request.id,
   });
 }
 

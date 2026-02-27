@@ -57,6 +57,7 @@ export interface OrgEvent {
   createdAt: string;
   createdByUserId?: string;
   createdByMemberId?: string;
+  senderPhone?: string;
 }
 
 export type ChatThreadType = "direct" | "group";
@@ -293,6 +294,8 @@ export interface AuditChangeRequestMessage {
   byMemberId?: string;
   byDisplayName?: string;
   toRole?: OrgPosition;
+  toUserId?: string;
+  tagUserIds?: string[];
   replyToMessageId?: string;
   createdAt: string;
 }
@@ -338,6 +341,27 @@ export interface AuditChangeRequest {
   resolvedTransactionId?: string;
   messages: AuditChangeRequestMessage[];
   revisions: AuditChangeRevision[];
+}
+
+export type AppNotificationCategory =
+  | "audit_change"
+  | "delete_request"
+  | "payment_request"
+  | "expense_claim"
+  | "system";
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  description: string;
+  category: AppNotificationCategory;
+  createdAt: string;
+  createdByUserId?: string;
+  createdByMemberId?: string;
+  targetUserIds: string[];
+  relatedType?: string;
+  relatedId?: string;
+  readByUserIds?: string[];
 }
 
 export type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";

@@ -29,6 +29,7 @@ import type {
   DisbursementMethod,
   ChatThread,
   ChatMessage,
+  AppNotification,
 } from "./types";
 import * as store from "./storage";
 import { computeLoanMetrics } from "./loan-metrics";
@@ -54,6 +55,7 @@ interface DataContextValue {
   standardAmountChangeRequests: StandardAmountChangeRequest[];
   chatThreads: ChatThread[];
   chatMessages: ChatMessage[];
+  notifications: AppNotification[];
   accountSettings: AccountSettings;
   loading: boolean;
   refreshData: (options?: { skipPull?: boolean; markLocalMutation?: boolean }) => Promise<void>;
@@ -108,6 +110,8 @@ interface DataContextValue {
     messageType?: AuditChangeMessageType;
     note: string;
     toRole?: any;
+    toUserId?: string;
+    tagUserIds?: string[];
     replyToMessageId?: string;
     setSuspended?: boolean;
   }) => Promise<void>;
@@ -218,6 +222,7 @@ interface DataContextValue {
     mentionUserIds?: string[];
   }) => Promise<ChatMessage>;
   markChatThreadRead: (threadId: string, userId: string) => Promise<void>;
+  markNotificationRead: (notificationId: string, userId: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -245,6 +250,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [standardAmountChangeRequests, setStandardAmountChangeRequests] = useState<StandardAmountChangeRequest[]>([]);
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [accountSettings, setAccountSettings] = useState<AccountSettings>({
     orgName: "My Organization",
     currency: "MMK",
@@ -306,7 +312,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
       }
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, acr, ec, mpr, sar, sacr, cth, ctm, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, acr, ec, mpr, sar, sacr, cth, ctm, n, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -322,6 +328,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getStandardAmountChangeRequests(),
         store.getChatThreads(),
         store.getChatMessages(),
+        store.getNotifications(),
         store.getAccountSettings(),
       ]);
       setMembers(m);
@@ -339,6 +346,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setStandardAmountChangeRequests(sacr);
       setChatThreads(cth);
       setChatMessages(ctm);
+      setNotifications(n);
       if (s) setAccountSettings(s);
     } catch (error) {
       console.error("Refresh Error:", error);
@@ -389,6 +397,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     standardAmountChangeRequests,
     chatThreads,
     chatMessages,
+    notifications,
     accountSettings,
     pushAllSyncTargets,
     LOCAL_MUTATION_PUSH_WINDOW_MS,
@@ -588,6 +597,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     messageType?: AuditChangeMessageType;
     note: string;
     toRole?: any;
+    toUserId?: string;
+    tagUserIds?: string[];
     replyToMessageId?: string;
     setSuspended?: boolean;
   }) => {
@@ -802,6 +813,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     void pushAllSyncTargets();
   }, [pushAllSyncTargets, refreshData]);
 
+  const markNotificationRead = useCallback(async (notificationId: string, userId: string) => {
+    lastLocalMutationAtRef.current = Date.now();
+    await store.markNotificationRead(notificationId, userId);
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
+  }, [pushAllSyncTargets, refreshData]);
+
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
@@ -840,7 +858,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, auditChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, auditChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, notifications, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -855,7 +873,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
     createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
     createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
-    createDirectChatThread, createGroupChatThread, sendChatMessage, markChatThreadRead,
+    createDirectChatThread, createGroupChatThread, sendChatMessage, markChatThreadRead, markNotificationRead,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

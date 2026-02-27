@@ -344,26 +344,35 @@ export default function FinanceScreen() {
       Alert.alert("လိုအပ်ချက်", "မှားယွင်းမှုအကြောင်းပြချက် Note ကိုဖြည့်ပါ။");
       return;
     }
-    await updateTransaction(auditTxn.id, {
-      auditFlagged: true,
-      auditNote: note,
-      auditFlaggedByUserId: currentUser?.id || "",
-      auditFlaggedAt: new Date().toISOString(),
-    } as Partial<Transaction>);
-    if (currentUser?.id) {
-      await createAuditChangeRequest({
-        transactionId: auditTxn.id,
-        relatedLoanId: String((auditTxn as any)?.loanId || "").trim() || undefined,
+    try {
+      await updateTransaction(auditTxn.id, {
+        auditFlagged: true,
         auditNote: note,
-        createdByUserId: currentUser.id,
-        createdByMemberId: currentUser.memberId,
-        createdByDisplayName: currentUser.displayName,
-      });
+        auditFlaggedByUserId: currentUser?.id || "",
+        auditFlaggedAt: new Date().toISOString(),
+      } as Partial<Transaction>);
+      if (currentUser?.id) {
+        await createAuditChangeRequest({
+          transactionId: auditTxn.id,
+          relatedLoanId: String((auditTxn as any)?.loanId || "").trim() || undefined,
+          auditNote: note,
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+          createdByDisplayName: currentUser.displayName,
+        });
+      }
+      setShowAuditModal(false);
+      setAuditTxn(null);
+      setAuditNote("");
+      Alert.alert("မှတ်သားပြီးပါပြီ", "စာရင်းစစ် မှတ်ချက်ကိုသိမ်းပြီးပါပြီ။");
+    } catch (error: any) {
+      const reason = String(error?.message || "");
+      if (reason.includes("request_conflict_in_progress")) {
+        Alert.alert("မရပါ", "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။");
+        return;
+      }
+      Alert.alert("အမှား", "Audit Request တင်ရာတွင် အဆင်မပြေပါ။");
     }
-    setShowAuditModal(false);
-    setAuditTxn(null);
-    setAuditNote("");
-    Alert.alert("မှတ်သားပြီးပါပြီ", "စာရင်းစစ် မှတ်ချက်ကိုသိမ်းပြီးပါပြီ။");
   };
 
   const handleClearAuditFlag = async () => {
@@ -420,45 +429,54 @@ export default function FinanceScreen() {
       return;
     }
 
-    if (deleteRequestType === "transaction") {
-      if (!deleteRequestTxn) return;
-      await createAuditChangeRequest({
-        requestKind: "delete",
-        targetType: "transaction",
-        targetId: deleteRequestTxn.id,
-        transactionId: deleteRequestTxn.id,
-        relatedLoanId: String((deleteRequestTxn as any)?.loanId || "").trim() || undefined,
-        auditNote: note,
-        createdByUserId: currentUser.id,
-        createdByMemberId: currentUser.memberId,
-        createdByDisplayName: currentUser.displayName,
-      });
-      await updateTransaction(deleteRequestTxn.id, {
-        auditFlagged: true,
-        auditNote: note,
-        auditFlaggedByUserId: currentUser.id,
-        auditFlaggedAt: new Date().toISOString(),
-      } as Partial<Transaction>);
-    } else {
-      if (!deleteRequestLoan) return;
-      await createAuditChangeRequest({
-        requestKind: "delete",
-        targetType: "loan",
-        targetId: deleteRequestLoan.id,
-        transactionId: undefined,
-        relatedLoanId: deleteRequestLoan.id,
-        auditNote: note,
-        createdByUserId: currentUser.id,
-        createdByMemberId: currentUser.memberId,
-        createdByDisplayName: currentUser.displayName,
-      });
-    }
+    try {
+      if (deleteRequestType === "transaction") {
+        if (!deleteRequestTxn) return;
+        await createAuditChangeRequest({
+          requestKind: "delete",
+          targetType: "transaction",
+          targetId: deleteRequestTxn.id,
+          transactionId: deleteRequestTxn.id,
+          relatedLoanId: String((deleteRequestTxn as any)?.loanId || "").trim() || undefined,
+          auditNote: note,
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+          createdByDisplayName: currentUser.displayName,
+        });
+        await updateTransaction(deleteRequestTxn.id, {
+          auditFlagged: true,
+          auditNote: note,
+          auditFlaggedByUserId: currentUser.id,
+          auditFlaggedAt: new Date().toISOString(),
+        } as Partial<Transaction>);
+      } else {
+        if (!deleteRequestLoan) return;
+        await createAuditChangeRequest({
+          requestKind: "delete",
+          targetType: "loan",
+          targetId: deleteRequestLoan.id,
+          transactionId: undefined,
+          relatedLoanId: deleteRequestLoan.id,
+          auditNote: note,
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+          createdByDisplayName: currentUser.displayName,
+        });
+      }
 
-    setShowDeleteRequestModal(false);
-    setDeleteRequestTxn(null);
-    setDeleteRequestLoan(null);
-    setDeleteRequestNote("");
-    Alert.alert("ပို့ပြီးပါပြီ", "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။");
+      setShowDeleteRequestModal(false);
+      setDeleteRequestTxn(null);
+      setDeleteRequestLoan(null);
+      setDeleteRequestNote("");
+      Alert.alert("ပို့ပြီးပါပြီ", "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။");
+    } catch (error: any) {
+      const reason = String(error?.message || "");
+      if (reason.includes("request_conflict_in_progress")) {
+        Alert.alert("မရပါ", "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။");
+        return;
+      }
+      Alert.alert("အမှား", "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
+    }
   };
 
   const getMemberName = (id?: string) => {

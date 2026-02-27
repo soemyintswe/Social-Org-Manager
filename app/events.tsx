@@ -42,6 +42,7 @@ interface OrgEventNotice {
   createdByMemberId?: string;
   senderName?: string;
   senderMemberId?: string;
+  senderPhone?: string;
   senderDate?: string;
   senderTime?: string;
   summary?: string;
@@ -277,6 +278,7 @@ export default function EventsScreen() {
   const [selectedSenderMemberId, setSelectedSenderMemberId] = useState<string>("");
   const [senderNameInput, setSenderNameInput] = useState(currentUser?.displayName || "");
   const [senderMemberIdInput, setSenderMemberIdInput] = useState(currentUser?.memberId || "");
+  const [senderPhoneInput, setSenderPhoneInput] = useState("");
 
   const allTopics = useMemo(() => [...PRESET_TOPICS, ...customTopics], [customTopics]);
   const allRelations = useMemo(() => mergeRelationOptions(customRelations, true), [customRelations]);
@@ -394,6 +396,13 @@ export default function EventsScreen() {
 
   const canEditItem = (item: OrgEventNotice) => canEditAllEvent || (canEditOwnEvent && isOwnNotice(item));
   const canDeleteItem = (item: OrgEventNotice) => canDeleteAllEvent || (canDeleteOwnEvent && isOwnNotice(item));
+  const visibleEvents = useMemo(
+    () =>
+      [...(events || [])].filter(
+        (item: any) => String(item?.location || "").trim().toLowerCase() !== "system"
+      ),
+    [events]
+  );
 
   const resetForm = () => {
     setEditingId(null);
@@ -444,6 +453,7 @@ export default function EventsScreen() {
     setSelectedSenderMemberId(currentUser?.memberId || "");
     setSenderNameInput(currentUser?.displayName || "");
     setSenderMemberIdInput(currentUser?.memberId || "");
+    setSenderPhoneInput(String(currentMemberRecord?.phone || ""));
   };
 
   const pickImages = async () => {
@@ -551,6 +561,7 @@ export default function EventsScreen() {
     setSelectedSenderMemberId(String(selected.id));
     setSenderNameInput(String(selected.name || ""));
     setSenderMemberIdInput(String(selected.id || ""));
+    setSenderPhoneInput(String(selected.phone || ""));
   };
 
   const onChangeSenderName = (value: string) => {
@@ -639,6 +650,7 @@ export default function EventsScreen() {
     setSelectedSenderMemberId(matchedSenderMember ? String(matchedSenderMember.id) : "");
     setSenderNameInput(item.senderName || "");
     setSenderMemberIdInput(item.senderMemberId || "");
+    setSenderPhoneInput(item.senderPhone || String(matchedSenderMember?.phone || ""));
     setImages(item.images && item.images.length ? item.images : item.image ? [item.image] : []);
     setModalVisible(true);
   };
@@ -776,6 +788,7 @@ export default function EventsScreen() {
       funeralMemorialTime: funeralMemorialTime.trim(),
       senderName: senderNameInput.trim(),
       senderMemberId: senderMemberIdInput.trim(),
+      senderPhone: senderPhoneInput.trim(),
       senderDate: formatYmd(now),
       senderTime: formatHm(now),
       createdByUserId: currentUser?.id,
@@ -846,7 +859,7 @@ export default function EventsScreen() {
         title: item.topic || item.title,
         message: `${item.topic || item.title}\n\n${item.summary || ""}\n\n${item.detail || item.description || ""}\n\nပေးပို့သူ: ${
           item.senderName || "-"
-        } (${item.senderMemberId || "-"})`,
+        } (${item.senderMemberId || "-"})\nဖုန်း: ${item.senderPhone || "-"}`,
       });
     } catch {
       Alert.alert("အမှား", "မျှဝေမရပါ။");
@@ -872,7 +885,7 @@ export default function EventsScreen() {
       </View>
 
       <FlatList
-        data={events}
+        data={visibleEvents}
         keyExtractor={(item: any) => String(item.id)}
         contentContainerStyle={styles.list}
         renderItem={({ item }: { item: OrgEventNotice }) => {
@@ -899,6 +912,9 @@ export default function EventsScreen() {
                 <Text style={styles.desc} numberOfLines={3}>{item.detail || item.description}</Text>
                 <Text style={styles.metaLine}>
                   ပေးပို့သူ: {item.senderName || "-"} ({item.senderMemberId || "-"})
+                </Text>
+                <Text style={styles.metaLine}>
+                  ဆက်သွယ်ရန်: {item.senderPhone || "-"}
                 </Text>
                 <Text style={styles.metaLine}>
                   ဖတ်ရှု့ပြီး: {readCount} | 💬 {commentCount} | 👍 {reactionCounts.like} ❤️ {reactionCounts.love} 😢 {reactionCounts.sad}
@@ -1523,8 +1539,12 @@ export default function EventsScreen() {
             <Text style={styles.label}>အဖွဲ့ဝင် ID (Textbox - optional)</Text>
             <TextInput style={styles.input} value={senderMemberIdInput} onChangeText={onChangeSenderMemberId} placeholder="ဥပမာ - ရဆသ-001" />
 
+            <Text style={styles.label}>ဆက်သွယ်ရန်ဖုန်း (member phone auto / manual edit)</Text>
+            <TextInput style={styles.input} value={senderPhoneInput} onChangeText={setSenderPhoneInput} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+
             <View style={styles.senderBox}>
               <Text style={styles.senderText}>ပေးပို့သူ: {senderNameInput || "-"} ({senderMemberIdInput || "-"})</Text>
+              <Text style={styles.senderText}>ဖုန်း: {senderPhoneInput || "-"}</Text>
               <Text style={styles.senderText}>နေ့/အချိန်: {formatYmd(new Date())} {formatHm(new Date())}</Text>
             </View>
 

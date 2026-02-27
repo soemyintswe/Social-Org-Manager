@@ -52,6 +52,12 @@ export default function FloatingTabMenu({
         enabled: true,
       },
       {
+        name: "အသိပေးချက်များ",
+        icon: "notifications-outline",
+        route: "/notifications",
+        enabled: true,
+      },
+      {
         name: "ချေးငွေများ",
         icon: "cash-outline",
         route: "/loans",
