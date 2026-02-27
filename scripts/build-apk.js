@@ -6,12 +6,14 @@ const { execSync } = require('child_process');
 
 function readAppVersion() {
   try {
-    const appJson = require('../app.json');
+    const appJsonRaw = fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8');
+    const appJson = JSON.parse(appJsonRaw);
     const expoVersion = String(appJson?.expo?.version || '').trim();
     if (expoVersion) return expoVersion;
   } catch {}
   try {
-    const packageJson = require('../package.json');
+    const packageJsonRaw = fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8');
+    const packageJson = JSON.parse(packageJsonRaw);
     const packageVersion = String(packageJson?.version || '').trim();
     if (packageVersion) return packageVersion;
   } catch {}
@@ -20,7 +22,8 @@ function readAppVersion() {
 
 function readBuildNumber() {
   try {
-    const appJson = require('../app.json');
+    const appJsonRaw = fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8');
+    const appJson = JSON.parse(appJsonRaw);
     const raw = appJson?.expo?.android?.versionCode;
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return String(n);
@@ -73,6 +76,31 @@ function getDownloadBaseUrl() {
   return `https://media.githubusercontent.com/media/${meta.owner}/${meta.repo}/${branch}/releases`;
 }
 
+function syncAndroidNativeVersion({ version, buildNumber }) {
+  const gradlePath = path.resolve(__dirname, '../android/app/build.gradle');
+  if (!fs.existsSync(gradlePath)) {
+    console.warn('android/app/build.gradle not found (skip native version sync)');
+    return;
+  }
+  const original = fs.readFileSync(gradlePath, 'utf8');
+  let next = original;
+
+  const buildNum = Number(buildNumber);
+  if (Number.isFinite(buildNum) && buildNum > 0) {
+    next = next.replace(/versionCode\s+\d+/, `versionCode ${buildNum}`);
+  }
+  if (String(version || '').trim()) {
+    next = next.replace(/versionName\s+["'][^"']+["']/, `versionName "${String(version).trim()}"`);
+  }
+
+  if (next !== original) {
+    fs.writeFileSync(gradlePath, next, 'utf8');
+    console.log(`Synced native Android version in ${gradlePath}`);
+  } else {
+    console.log('Native Android version already in sync.');
+  }
+}
+
 function updateAppUpdateConfig({ version, buildNumber, filename }) {
   const configPath = path.resolve(__dirname, '../server/config/app-update.json');
   if (!fs.existsSync(configPath)) return;
@@ -100,6 +128,7 @@ function updateAppUpdateConfig({ version, buildNumber, filename }) {
 
 const version = readAppVersion();
 const buildNumber = readBuildNumber();
+syncAndroidNativeVersion({ version, buildNumber });
 
 // Ensure releases directory exists
 const releasesDir = path.resolve(__dirname, '../releases');
