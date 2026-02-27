@@ -2236,6 +2236,32 @@ export async function saveChatMessages(data: ChatMessage[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.CHAT_MESSAGES, JSON.stringify(data));
 }
 
+function getChatMessagePreviewText(message: ChatMessage | undefined): string {
+  if (!message) return "";
+  if (message.isDeleted) return "[Deleted]";
+  const text = String(message.text || "").trim();
+  if (text) return text;
+  if (String(message.image || "").trim()) return "[Image]";
+  return "";
+}
+
+async function refreshChatThreadLastMessage(threadId: string): Promise<void> {
+  const [threads, messages] = await Promise.all([getChatThreads(), getChatMessages()]);
+  const idx = threads.findIndex((row) => String(row.id) === String(threadId));
+  if (idx === -1) return;
+  const sorted = (messages || [])
+    .filter((row) => String(row.threadId || "") === String(threadId))
+    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+  const last = sorted.length > 0 ? sorted[sorted.length - 1] : undefined;
+  threads[idx] = {
+    ...threads[idx],
+    lastMessageAt: last?.createdAt || undefined,
+    lastMessageText: getChatMessagePreviewText(last),
+    updatedAt: new Date().toISOString(),
+  };
+  await saveChatThreads(threads);
+}
+
 function normalizeUserIdList(ids: string[]): string[] {
   return Array.from(
     new Set(
@@ -2341,11 +2367,79 @@ export async function sendChatMessage(input: {
   threads[idx] = {
     ...threads[idx],
     lastMessageAt: now,
-    lastMessageText: message.text || (message.image ? "[Image]" : ""),
+    lastMessageText: getChatMessagePreviewText(message),
     updatedAt: now,
   };
   await saveChatThreads(threads);
   return message;
+}
+
+export async function updateChatMessage(input: {
+  messageId: string;
+  editorUserId: string;
+  text?: string;
+  image?: string;
+}): Promise<ChatMessage> {
+  const messageId = String(input.messageId || "").trim();
+  const editorUserId = String(input.editorUserId || "").trim();
+  if (!messageId || !editorUserId) throw new Error("invalid_input");
+
+  const messages = await getChatMessages();
+  const idx = messages.findIndex((row) => String(row.id || "") === messageId);
+  if (idx === -1) throw new Error("message_not_found");
+
+  const target = messages[idx];
+  if (String(target.senderUserId || "") !== editorUserId) throw new Error("not_message_owner");
+  if (target.isDeleted) throw new Error("message_deleted");
+
+  const text = String(input.text || "").trim();
+  const image = String(input.image || "").trim();
+  if (!text && !image) throw new Error("empty_message");
+
+  const now = new Date().toISOString();
+  const updated: ChatMessage = {
+    ...target,
+    text: text || undefined,
+    image: image || undefined,
+    updatedAt: now,
+    editedAt: now,
+  };
+  messages[idx] = updated;
+  await saveChatMessages(messages);
+  await refreshChatThreadLastMessage(String(target.threadId || ""));
+  return updated;
+}
+
+export async function deleteChatMessage(input: {
+  messageId: string;
+  deleterUserId: string;
+}): Promise<ChatMessage> {
+  const messageId = String(input.messageId || "").trim();
+  const deleterUserId = String(input.deleterUserId || "").trim();
+  if (!messageId || !deleterUserId) throw new Error("invalid_input");
+
+  const messages = await getChatMessages();
+  const idx = messages.findIndex((row) => String(row.id || "") === messageId);
+  if (idx === -1) throw new Error("message_not_found");
+
+  const target = messages[idx];
+  if (String(target.senderUserId || "") !== deleterUserId) throw new Error("not_message_owner");
+  if (target.isDeleted) return target;
+
+  const now = new Date().toISOString();
+  const updated: ChatMessage = {
+    ...target,
+    text: undefined,
+    image: undefined,
+    isDeleted: true,
+    deletedAt: now,
+    deletedByUserId: deleterUserId,
+    updatedAt: now,
+  };
+  messages[idx] = updated;
+  await saveChatMessages(messages);
+  await refreshChatThreadLastMessage(String(target.threadId || ""));
+  return updated;
 }
 
 export async function markChatThreadRead(threadId: string, userId: string): Promise<void> {

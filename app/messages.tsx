@@ -33,6 +33,8 @@ export default function MessagesScreen() {
     createDirectChatThread,
     createGroupChatThread,
     sendChatMessage,
+    updateChatMessage,
+    deleteChatMessage,
     markChatThreadRead,
   } = useData() as any;
 
@@ -41,6 +43,7 @@ export default function MessagesScreen() {
   const [messageText, setMessageText] = useState("");
   const [messageImage, setMessageImage] = useState("");
   const [replyTarget, setReplyTarget] = useState<any>(null);
+  const [editingMessageId, setEditingMessageId] = useState("");
   const [newModal, setNewModal] = useState(false);
   const [newMode, setNewMode] = useState<"direct" | "group">("direct");
   const [targetUserId, setTargetUserId] = useState("");
@@ -118,23 +121,68 @@ export default function MessagesScreen() {
   const handleSend = async () => {
     if (!selectedThreadId || !meUserId) return;
     const text = messageText.trim();
-    if (!text && !messageImage) return;
-    await sendChatMessage({
-      threadId: selectedThreadId,
-      senderUserId: meUserId,
-      senderMemberId: currentUser?.memberId || currentMember?.id,
-      senderDisplayName: currentUser?.displayName || currentMember?.name,
-      text,
-      image: messageImage || undefined,
-      replyToMessageId: replyTarget?.id,
-      replyToUserId: replyTarget?.senderUserId,
-      replyToDisplayName: replyTarget?.senderDisplayName || replyTarget?.senderMemberId || replyTarget?.senderUserId,
-      mentionUserIds: replyTarget?.senderUserId ? [replyTarget.senderUserId] : [],
-    });
+    if (!text && !messageImage) {
+      Alert.alert("လိုအပ်ချက်", "စာသား သို့မဟုတ် ဓာတ်ပုံ တစ်ခုခုထည့်ပါ။");
+      return;
+    }
+
+    if (editingMessageId) {
+      await updateChatMessage({
+        messageId: editingMessageId,
+        editorUserId: meUserId,
+        text,
+        image: messageImage || undefined,
+      });
+    } else {
+      await sendChatMessage({
+        threadId: selectedThreadId,
+        senderUserId: meUserId,
+        senderMemberId: currentUser?.memberId || currentMember?.id,
+        senderDisplayName: currentUser?.displayName || currentMember?.name,
+        text,
+        image: messageImage || undefined,
+        replyToMessageId: replyTarget?.id,
+        replyToUserId: replyTarget?.senderUserId,
+        replyToDisplayName: replyTarget?.senderDisplayName || replyTarget?.senderMemberId || replyTarget?.senderUserId,
+        mentionUserIds: replyTarget?.senderUserId ? [replyTarget.senderUserId] : [],
+      });
+    }
     setMessageText("");
     setMessageImage("");
     setReplyTarget(null);
+    setEditingMessageId("");
     await markChatThreadRead(selectedThreadId, meUserId);
+  };
+
+  const startEditMessage = (msg: any) => {
+    setEditingMessageId(String(msg?.id || ""));
+    setMessageText(String(msg?.text || ""));
+    setMessageImage(String(msg?.image || ""));
+    setReplyTarget(null);
+  };
+
+  const cancelEditMessage = () => {
+    setEditingMessageId("");
+    setMessageText("");
+    setMessageImage("");
+  };
+
+  const handleDeleteMessage = async (msg: any) => {
+    const messageId = String(msg?.id || "");
+    if (!messageId || !meUserId) return;
+    Alert.alert("ဖျက်မည်", "ဤ message ကိုဖျက်မည်လား?", [
+      { text: "မဖျက်တော့ပါ", style: "cancel" },
+      {
+        text: "ဖျက်မည်",
+        style: "destructive",
+        onPress: () => {
+          void deleteChatMessage({ messageId, deleterUserId: meUserId });
+          if (editingMessageId === messageId) {
+            cancelEditMessage();
+          }
+        },
+      },
+    ]);
   };
 
   const handleCreateThread = async () => {
@@ -221,21 +269,41 @@ export default function MessagesScreen() {
               >
                 {selectedMessages.map((msg: any) => {
                   const mine = String(msg.senderUserId) === meUserId;
+                  const deleted = Boolean(msg?.isDeleted);
                   return (
                     <View key={msg.id} style={[styles.msgBox, mine ? styles.msgMine : styles.msgOther]}>
                       <Text style={styles.msgSender}>{msg.senderDisplayName || getMemberNameByUserId(msg.senderUserId)}</Text>
                       {msg.replyToDisplayName ? (
                         <Text style={styles.replyTo}>Reply to: {msg.replyToDisplayName}</Text>
                       ) : null}
-                      {msg.text ? <Text style={styles.msgText}>{msg.text}</Text> : null}
-                      {msg.image ? <Image source={{ uri: msg.image }} style={styles.msgImage} resizeMode="cover" /> : null}
+                      {deleted ? (
+                        <Text style={styles.deletedText}>ဤ message ကို ဖျက်ပြီးပါပြီ။</Text>
+                      ) : (
+                        <>
+                          {msg.text ? <Text style={styles.msgText}>{msg.text}</Text> : null}
+                          {msg.image ? <Image source={{ uri: msg.image }} style={styles.msgImage} resizeMode="cover" /> : null}
+                        </>
+                      )}
                       <View style={styles.msgFooter}>
                         <Text style={styles.msgDate}>{new Date(msg.createdAt).toLocaleString()}</Text>
-                        {!mine && (
-                          <Pressable onPress={() => setReplyTarget(msg)}>
-                            <Text style={styles.replyAction}>Reply</Text>
-                          </Pressable>
-                        )}
+                        {!deleted ? (
+                          <View style={styles.msgActionRow}>
+                            {!mine ? (
+                              <Pressable onPress={() => setReplyTarget(msg)}>
+                                <Text style={styles.replyAction}>Reply</Text>
+                              </Pressable>
+                            ) : (
+                              <>
+                                <Pressable onPress={() => startEditMessage(msg)}>
+                                  <Text style={styles.replyAction}>Edit</Text>
+                                </Pressable>
+                                <Pressable onPress={() => void handleDeleteMessage(msg)}>
+                                  <Text style={styles.deleteAction}>Delete</Text>
+                                </Pressable>
+                              </>
+                            )}
+                          </View>
+                        ) : null}
                       </View>
                     </View>
                   );
@@ -250,6 +318,15 @@ export default function MessagesScreen() {
                   </Pressable>
                 </View>
               )}
+
+              {editingMessageId ? (
+                <View style={styles.editComposer}>
+                  <Text style={styles.replyComposerText}>Editing message...</Text>
+                  <Pressable onPress={cancelEditMessage}>
+                    <Text style={styles.replyCancel}>Cancel Edit</Text>
+                  </Pressable>
+                </View>
+              ) : null}
 
               {messageImage ? (
                 <View style={styles.previewRow}>
@@ -276,10 +353,18 @@ export default function MessagesScreen() {
                   style={styles.input}
                   value={messageText}
                   onChangeText={setMessageText}
-                  placeholder={replyTarget ? "Reply..." : "Type a message..."}
+                  placeholder={
+                    editingMessageId
+                      ? "Edit message / Caption"
+                      : messageImage
+                        ? "Caption (optional)"
+                        : replyTarget
+                          ? "Reply..."
+                          : "Type a message..."
+                  }
                 />
                 <Pressable style={styles.sendBtn} onPress={() => void handleSend()}>
-                  <Ionicons name="send" size={16} color="#fff" />
+                  <Ionicons name={editingMessageId ? "checkmark" : "send"} size={16} color="#fff" />
                 </Pressable>
               </View>
             </>
@@ -367,8 +452,12 @@ const styles = StyleSheet.create({
   msgImage: { width: 160, height: 120, borderRadius: 8, marginTop: 6 },
   msgFooter: { marginTop: 6, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   msgDate: { fontSize: 10, color: Colors.light.textSecondary },
+  msgActionRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   replyAction: { fontSize: 11, color: Colors.light.tint, fontFamily: "Inter_600SemiBold" },
+  deleteAction: { fontSize: 11, color: "#DC2626", fontFamily: "Inter_600SemiBold" },
+  deletedText: { fontSize: 13, color: Colors.light.textSecondary, fontStyle: "italic", marginTop: 4 },
   replyComposer: { paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#EFF6FF", borderTopWidth: 1, borderTopColor: "#BFDBFE" },
+  editComposer: { paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#FEF3C7", borderTopWidth: 1, borderTopColor: "#F59E0B" },
   replyComposerText: { fontSize: 12, color: "#1D4ED8" },
   replyCancel: { fontSize: 12, color: "#DC2626", fontFamily: "Inter_600SemiBold" },
   previewRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 8 },

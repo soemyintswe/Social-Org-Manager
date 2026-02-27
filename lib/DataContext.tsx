@@ -221,6 +221,13 @@ interface DataContextValue {
     replyToDisplayName?: string;
     mentionUserIds?: string[];
   }) => Promise<ChatMessage>;
+  updateChatMessage: (input: {
+    messageId: string;
+    editorUserId: string;
+    text?: string;
+    image?: string;
+  }) => Promise<ChatMessage>;
+  deleteChatMessage: (input: { messageId: string; deleterUserId: string }) => Promise<ChatMessage>;
   markChatThreadRead: (threadId: string, userId: string) => Promise<void>;
   markNotificationRead: (notificationId: string, userId: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
@@ -806,6 +813,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return message;
   };
 
+  const updateChatMessage = async (input: {
+    messageId: string;
+    editorUserId: string;
+    text?: string;
+    image?: string;
+  }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const message = await store.updateChatMessage(input);
+    await refreshData({ skipPull: true });
+    await pushAllSyncTargets();
+    return message;
+  };
+
+  const deleteChatMessage = async (input: { messageId: string; deleterUserId: string }) => {
+    lastLocalMutationAtRef.current = Date.now();
+    const message = await store.deleteChatMessage(input);
+    await refreshData({ skipPull: true });
+    await pushAllSyncTargets();
+    return message;
+  };
+
   const markChatThreadRead = useCallback(async (threadId: string, userId: string) => {
     lastLocalMutationAtRef.current = Date.now();
     await store.markChatThreadRead(threadId, userId);
@@ -873,7 +901,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
     createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
     createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
-    createDirectChatThread, createGroupChatThread, sendChatMessage, markChatThreadRead, markNotificationRead,
+    createDirectChatThread, createGroupChatThread, sendChatMessage, updateChatMessage, deleteChatMessage, markChatThreadRead, markNotificationRead,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

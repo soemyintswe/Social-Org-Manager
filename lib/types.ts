@@ -84,6 +84,11 @@ export interface ChatMessage {
   text?: string;
   image?: string;
   createdAt: string;
+  updatedAt?: string;
+  editedAt?: string;
+  deletedAt?: string;
+  deletedByUserId?: string;
+  isDeleted?: boolean;
   replyToMessageId?: string;
   replyToUserId?: string;
   replyToDisplayName?: string;
