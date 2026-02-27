@@ -295,7 +295,7 @@ export default function LoansScreen() {
               <View style={styles.calcInputRow}><TextInput style={styles.calcInput} placeholder="အတိုးလျှော့နှုန်း (%)" keyboardType="numeric" value={calcDiscountPercent} onChangeText={setCalcDiscountPercent} /><TextInput style={styles.calcInput} placeholder="အတိုးလျှော့ငွေပမာဏ (KS)" keyboardType="numeric" value={calcDiscountAmount} onChangeText={setCalcDiscountAmount} /></View>
               <View style={styles.calcInputRow}><TextInput style={styles.calcInput} placeholder="အတိုးဖြေလျှော့နှုန်း (%)" keyboardType="numeric" value={calcWaivePercent} onChangeText={setCalcWaivePercent} /><TextInput style={styles.calcInput} placeholder="အတိုးဖြေလျှော့ငွေပမာဏ (KS)" keyboardType="numeric" value={calcWaiveAmount} onChangeText={setCalcWaiveAmount} /></View>
 
-              <Text style={styles.helperText}>"အတိုးလျှော့" = တွက်ချက်ရာမှာ လျှော့သတ်မှတ်ခြင်း • "အတိုးဖြေလျှော့" = ကျသင့်ပြီးအတိုးမှ ခွင့်လွှတ်လျော့ချပေးခြင်း</Text>
+              <Text style={styles.helperText}>&quot;အတိုးလျှော့&quot; = တွက်ချက်ရာမှာ လျှော့သတ်မှတ်ခြင်း • &quot;အတိုးဖြေလျှော့&quot; = ကျသင့်ပြီးအတိုးမှ ခွင့်လွှတ်လျော့ချပေးခြင်း</Text>
               <View style={styles.calcResultRow}><Text style={styles.calcResultLabel}>တွက်ချက်ကာလ:</Text><Text style={styles.calcResultValue}>{calculator.calcMonths} လ</Text></View>
               <View style={styles.calcResultRow}><Text style={styles.calcResultLabel}>ဆိုင်းငံ့ကာလ:</Text><Text style={styles.calcResultValue}>{calculator.suspensionMonths} လ</Text></View>
               <View style={styles.calcResultRow}><Text style={styles.calcResultLabel}>ထိရောက်ကာလ:</Text><Text style={styles.calcResultValue}>{calculator.effectiveMonths} လ</Text></View>

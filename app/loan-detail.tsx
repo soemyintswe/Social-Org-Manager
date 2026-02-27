@@ -351,7 +351,7 @@ export default function LoanDetailScreen() {
               <TextInput style={styles.input} placeholder="အတိုးဖြေလျှော့ငွေပမာဏ (MMK)" keyboardType="numeric" value={interestWaivedAmount} onChangeText={setInterestWaivedAmount} />
             </View>
             <Text style={styles.helperText}>
-              "အတိုးလျှော့" = တွက်ချက်ရာမှာ လျှော့သတ်မှတ်ခြင်း • "အတိုးဖြေလျှော့" = ကျသင့်ပြီးအတိုးမှ ခွင့်လွှတ်လျော့ချပေးခြင်း
+              &quot;အတိုးလျှော့&quot; = တွက်ချက်ရာမှာ လျှော့သတ်မှတ်ခြင်း • &quot;အတိုးဖြေလျှော့&quot; = ကျသင့်ပြီးအတိုးမှ ခွင့်လွှတ်လျော့ချပေးခြင်း
             </Text>
             <TextInput
               style={[styles.input, { minHeight: 70 }]}
