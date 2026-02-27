@@ -15,6 +15,14 @@ import {
   UserAccount,
   MemberChangeRequest,
   MemberChangeAction,
+  AuditChangeRequest,
+  AuditChangeRequestMessage,
+  AuditChangeRequestStatus,
+  AuditChangeMessageType,
+  AuditChangeRevision,
+  AuditChangeRequestKind,
+  AuditChangeTargetType,
+  AuditChangeWorkflowStage,
   ExpenseClaim,
   MemberPaymentRequest,
   MemberPaymentRequestKind,
@@ -44,6 +52,7 @@ const KEYS = {
   USERS: "@orghub_users",
   USER_PASSWORDS: "@orghub_user_passwords",
   MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
+  AUDIT_CHANGE_REQUESTS: "@orghub_audit_change_requests",
   EXPENSE_CLAIMS: "@orghub_expense_claims",
   MEMBER_PAYMENT_REQUESTS: "@orghub_member_payment_requests",
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
@@ -817,6 +826,634 @@ function makePaymentRequestNumber(existing: MemberPaymentRequest[]): string {
     if (Number.isFinite(seq) && seq > max) max = seq;
   }
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+
+function makeAuditChangeRequestNumber(existing: AuditChangeRequest[]): string {
+  const today = new Date();
+  const ymd = toYmd(today).replace(/-/g, "");
+  const prefix = `AR-${ymd}-`;
+  let max = 0;
+  for (const item of existing) {
+    const value = String(item.requestNumber || "");
+    if (!value.startsWith(prefix)) continue;
+    const seq = Number(value.slice(prefix.length));
+    if (Number.isFinite(seq) && seq > max) max = seq;
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+
+const AUDIT_PATCH_ALLOWED_FIELDS = [
+  "type",
+  "category",
+  "categoryLabel",
+  "memberId",
+  "payerPayee",
+  "amount",
+  "date",
+  "paymentMethod",
+  "receiptNumber",
+  "notes",
+  "description",
+  "loanId",
+  "feePeriodStart",
+  "feePeriodEnd",
+] as const;
+
+function sanitizeAuditPatch(patch: Record<string, any>): Record<string, any> {
+  const next: Record<string, any> = {};
+  for (const key of AUDIT_PATCH_ALLOWED_FIELDS) {
+    if (!(key in patch)) continue;
+    const value = patch[key];
+    if (key === "amount") {
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) next[key] = n;
+      continue;
+    }
+    if (
+      key === "type" ||
+      key === "category" ||
+      key === "categoryLabel" ||
+      key === "memberId" ||
+      key === "payerPayee" ||
+      key === "date" ||
+      key === "paymentMethod" ||
+      key === "receiptNumber" ||
+      key === "notes" ||
+      key === "description" ||
+      key === "loanId" ||
+      key === "feePeriodStart" ||
+      key === "feePeriodEnd"
+    ) {
+      const text = value == null ? "" : String(value).trim();
+      next[key] = text;
+    }
+  }
+  return next;
+}
+
+function pickTransactionAuditSnapshot(txn: Record<string, any>): Record<string, any> {
+  const snapshot: Record<string, any> = {
+    id: String(txn?.id || ""),
+    auditFlagged: Boolean(txn?.auditFlagged),
+    auditNote: String(txn?.auditNote || ""),
+  };
+  for (const key of AUDIT_PATCH_ALLOWED_FIELDS) {
+    snapshot[key] = (txn as any)?.[key];
+  }
+  return snapshot;
+}
+
+function normalizeAuditRequestKind(value: unknown): AuditChangeRequestKind {
+  return String(value || "").toLowerCase() === "delete" ? "delete" : "update";
+}
+
+function normalizeAuditTargetType(value: unknown, fallbackTargetId: string, fallbackTransactionId: string): AuditChangeTargetType {
+  const v = String(value || "").toLowerCase();
+  if (v === "loan") return "loan";
+  if (v === "transaction") return "transaction";
+  if (fallbackTargetId && !fallbackTransactionId) return "loan";
+  return "transaction";
+}
+
+function normalizeAuditWorkflowStage(value: unknown, kind: AuditChangeRequestKind, status: AuditChangeRequestStatus): AuditChangeWorkflowStage {
+  const v = String(value || "");
+  if (v === "auditor_review" || v === "chair_approval" || v === "treasurer_execution" || v === "completed") {
+    return v;
+  }
+  if (kind === "delete") {
+    if (status === "rejected" || status === "cancelled") return "completed";
+    if (status === "approved") return "treasurer_execution";
+    if (status === "suspended") return "chair_approval";
+    return "auditor_review";
+  }
+  if (status === "approved" || status === "rejected" || status === "cancelled") return "completed";
+  return "treasurer_execution";
+}
+
+export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
+  const rows = await safeGet<AuditChangeRequest[]>(KEYS.AUDIT_CHANGE_REQUESTS, []);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item: any) => ({
+      ...item,
+      requestKind: normalizeAuditRequestKind(item?.requestKind),
+      status: (item?.status || "pending") as AuditChangeRequestStatus,
+      targetType: normalizeAuditTargetType(item?.targetType, String(item?.targetId || ""), String(item?.transactionId || "")),
+      targetId: String(item?.targetId || item?.transactionId || item?.relatedLoanId || ""),
+      auditNote: String(item?.auditNote || "").trim(),
+      assignedRole: (item?.assignedRole || (normalizeAuditRequestKind(item?.requestKind) === "delete" ? "auditor" : "treasurer")) as any,
+      messages: Array.isArray(item?.messages) ? item.messages : [],
+      revisions: Array.isArray(item?.revisions) ? item.revisions : [],
+      createdAt: item?.createdAt || new Date().toISOString(),
+      updatedAt: item?.updatedAt || item?.createdAt || new Date().toISOString(),
+      requestNumber: String(item?.requestNumber || ""),
+      workflowStage: normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus),
+    }))
+    .filter((item: any) => String(item?.targetId || "").trim().length > 0)
+    .sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+}
+
+async function saveAuditChangeRequests(rows: AuditChangeRequest[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(rows));
+}
+
+export async function createAuditChangeRequest(input: {
+  requestKind?: AuditChangeRequestKind;
+  targetType?: AuditChangeTargetType;
+  targetId?: string;
+  transactionId?: string;
+  relatedLoanId?: string;
+  auditNote: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdByDisplayName?: string;
+}): Promise<AuditChangeRequest> {
+  const [requests, transactions, loans] = await Promise.all([getAuditChangeRequests(), getTransactions(), getLoans()]);
+  const requestKind: AuditChangeRequestKind = normalizeAuditRequestKind(input.requestKind);
+  const resolvedTargetType: AuditChangeTargetType = requestKind === "delete"
+    ? normalizeAuditTargetType(input.targetType, String(input.targetId || ""), String(input.transactionId || ""))
+    : "transaction";
+
+  const transactionId = String(input.transactionId || (resolvedTargetType === "transaction" ? input.targetId : "") || "").trim();
+  const targetId = String(input.targetId || transactionId || (resolvedTargetType === "loan" ? input.relatedLoanId : "") || "").trim();
+  if (!targetId) throw new Error("target_id_required");
+
+  const txn = transactions.find((row: any) => String(row?.id || "") === transactionId);
+  const loan = loans.find((row: any) => String(row?.id || "") === targetId);
+  if (resolvedTargetType === "transaction" && !txn) throw new Error("transaction_not_found");
+  if (resolvedTargetType === "loan" && !loan) throw new Error("loan_not_found");
+
+  const activeExisting = requests.find(
+    (row: any) =>
+      row?.requestKind === requestKind &&
+      row?.targetType === resolvedTargetType &&
+      String(row?.targetId || "") === targetId &&
+      (row?.status === "pending" || row?.status === "suspended" || (row?.status === "approved" && row?.workflowStage === "treasurer_execution"))
+  );
+  if (activeExisting) {
+    return activeExisting;
+  }
+
+  const now = new Date().toISOString();
+  const requestId = generateId();
+  const noteText = String(input.auditNote || "").trim();
+  const message: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId,
+    messageType: "note",
+    note: noteText || (requestKind === "delete" ? "Delete request" : "Audit flag မှတ်ချက်"),
+    byUserId: input.createdByUserId,
+    byMemberId: input.createdByMemberId,
+    byDisplayName: input.createdByDisplayName?.trim() || undefined,
+    toRole: requestKind === "delete" ? "auditor" : "treasurer",
+    createdAt: now,
+  };
+
+  const request: AuditChangeRequest = {
+    id: requestId,
+    requestNumber: makeAuditChangeRequestNumber(requests),
+    requestKind,
+    targetType: resolvedTargetType,
+    targetId,
+    transactionId: transactionId || undefined,
+    relatedLoanId:
+      String(input.relatedLoanId || (resolvedTargetType === "transaction" ? (txn as any)?.loanId : targetId) || "").trim() || undefined,
+    status: "pending",
+    workflowStage: requestKind === "delete" ? "auditor_review" : "treasurer_execution",
+    auditNote: noteText || "Audit flag မှတ်ချက်",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: now,
+    updatedAt: now,
+    assignedRole: requestKind === "delete" ? "auditor" : "treasurer",
+    messages: [message],
+    revisions: [],
+  };
+
+  await saveAuditChangeRequests([request, ...requests]);
+  await pushSystemEvent({
+    title: requestKind === "delete"
+      ? `Delete Request Submitted (${request.requestNumber})`
+      : `Audit Change Request Submitted (${request.requestNumber})`,
+    description: requestKind === "delete"
+      ? `${resolvedTargetType === "loan" ? "Loan" : "Transaction"} ${targetId} ကို ပယ်ဖျက်ရန် တင်သွင်းထားပါသည်`
+      : `Transaction ${transactionId} ကို စိစစ်ပြင်ဆင်ရန် တင်သွင်းထားပါသည်`,
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+  });
+  return request;
+}
+
+export async function addAuditChangeRequestMessage(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  messageType?: AuditChangeMessageType;
+  note: string;
+  toRole?: "treasurer" | "auditor" | "chairperson" | "vice_chairperson" | "secretary" | "joint_secretary" | "committee_member" | "member" | "patron" | "applicant";
+  replyToMessageId?: string;
+  setSuspended?: boolean;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+
+  const now = new Date().toISOString();
+  const message: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: input.messageType || "reply",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: input.toRole,
+    replyToMessageId: input.replyToMessageId,
+    createdAt: now,
+  };
+
+  const next = {
+    ...req,
+    updatedAt: now,
+    messages: [...(req.messages || []), message],
+  } as AuditChangeRequest;
+
+  if (input.setSuspended) {
+    next.status = "suspended";
+    next.workflowStage = "chair_approval";
+    next.assignedRole = "chairperson";
+    next.escalatedToChairAt = now;
+    next.escalatedByUserId = input.byUserId;
+  }
+  requests[idx] = next;
+  await saveAuditChangeRequests(requests);
+  await pushSystemEvent({
+    title: `Audit Change Request Updated (${req.requestNumber})`,
+    description: `${note.slice(0, 80)}${note.length > 80 ? "..." : ""}`,
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+  });
+}
+
+export async function changeAuditChangeRequestStatus(input: {
+  requestId: string;
+  status: AuditChangeRequestStatus;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note?: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  const now = new Date().toISOString();
+
+  const status = input.status;
+  if (!["pending", "approved", "rejected", "cancelled", "suspended"].includes(String(status))) {
+    throw new Error("invalid_status");
+  }
+
+  const decisionNote = String(input.note || "").trim();
+  const message: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note: decisionNote || `Status changed to ${status}`,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: status === "suspended" ? "chairperson" : undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status,
+    workflowStage:
+      req.requestKind === "delete"
+        ? status === "approved"
+          ? "treasurer_execution"
+          : status === "suspended"
+            ? "chair_approval"
+            : status === "pending"
+              ? "auditor_review"
+              : "completed"
+        : status === "pending"
+          ? "treasurer_execution"
+          : "completed",
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: decisionNote || undefined,
+    updatedAt: now,
+    escalatedToChairAt: status === "suspended" ? now : req.escalatedToChairAt,
+    escalatedByUserId: status === "suspended" ? input.byUserId : req.escalatedByUserId,
+    messages: [...(req.messages || []), message],
+  };
+  await saveAuditChangeRequests(requests);
+  await pushSystemEvent({
+    title: `Audit Change Request ${status.toUpperCase()} (${req.requestNumber})`,
+    description: decisionNote || `Status: ${status}`,
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+  });
+}
+
+export async function forwardDeleteAuditRequestToChair(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.requestKind !== "delete") throw new Error("not_delete_request");
+  if (req.workflowStage && req.workflowStage !== "auditor_review") throw new Error("invalid_stage");
+
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "forward",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: "chairperson",
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "suspended",
+    workflowStage: "chair_approval",
+    assignedRole: "chairperson",
+    escalatedToChairAt: now,
+    escalatedByUserId: input.byUserId,
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  await pushSystemEvent({
+    title: `Delete Request Forwarded to Chair (${req.requestNumber})`,
+    description: `${req.targetType} ${req.targetId} - chair approval requested`,
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+  });
+}
+
+export async function chairReviewDeleteAuditRequest(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  approved: boolean;
+  note: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.requestKind !== "delete") throw new Error("not_delete_request");
+  if (req.workflowStage !== "chair_approval") throw new Error("invalid_stage");
+
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+  const approved = Boolean(input.approved);
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: approved ? "treasurer" : "auditor",
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: approved ? "approved" : "rejected",
+    workflowStage: approved ? "treasurer_execution" : "completed",
+    assignedRole: approved ? "treasurer" : "auditor",
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: note,
+    chairApprovedByUserId: approved ? input.byUserId : req.chairApprovedByUserId,
+    chairApprovedAt: approved ? now : req.chairApprovedAt,
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  await pushSystemEvent({
+    title: approved
+      ? `Delete Request Approved by Chair (${req.requestNumber})`
+      : `Delete Request Rejected by Chair (${req.requestNumber})`,
+    description: note,
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+  });
+}
+
+export async function confirmDeleteAuditRequestExecution(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note?: string;
+}): Promise<void> {
+  const [requests, txns, loans] = await Promise.all([getAuditChangeRequests(), getTransactions(), getLoans()]);
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.requestKind !== "delete") throw new Error("not_delete_request");
+  if (req.workflowStage !== "treasurer_execution" || req.status !== "approved") throw new Error("request_not_ready_for_execution");
+
+  const now = new Date().toISOString();
+  let snapshotBefore: Record<string, any> = {};
+  let removedLinkedTransactionIds: string[] = [];
+  if (req.targetType === "loan") {
+    const loanIdx = loans.findIndex((row: any) => String(row?.id || "") === String(req.targetId || ""));
+    if (loanIdx === -1) throw new Error("loan_not_found");
+    const loanSnapshot = { ...(loans[loanIdx] as any) };
+    const linkedTransactions = txns.filter((row: any) => String(row?.loanId || "") === String(req.targetId || ""));
+    removedLinkedTransactionIds = linkedTransactions.map((row: any) => String(row?.id || "")).filter(Boolean);
+    snapshotBefore = {
+      ...loanSnapshot,
+      __linkedTransactions: linkedTransactions,
+    };
+    loans.splice(loanIdx, 1);
+    if (removedLinkedTransactionIds.length > 0) {
+      for (let i = txns.length - 1; i >= 0; i--) {
+        const row = txns[i] as any;
+        if (String(row?.loanId || "") === String(req.targetId || "")) {
+          txns.splice(i, 1);
+        }
+      }
+    }
+  } else {
+    const txnIdx = txns.findIndex((row: any) => String(row?.id || "") === String(req.targetId || req.transactionId || ""));
+    if (txnIdx === -1) throw new Error("transaction_not_found");
+    snapshotBefore = { ...(txns[txnIdx] as any) };
+    txns.splice(txnIdx, 1);
+  }
+
+  const revision: AuditChangeRevision = {
+    id: generateId(),
+    requestId: req.id,
+    transactionId: String(req.transactionId || req.targetId || ""),
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    note: String(input.note || "").trim() || "Delete confirmed by treasurer",
+    before: snapshotBefore,
+    patch: {
+      __action: "delete",
+      __removedLinkedTransactionIds: removedLinkedTransactionIds,
+    },
+    after: {
+      deleted: true,
+      deletedAt: now,
+      removedLinkedTransactionCount: removedLinkedTransactionIds.length,
+    },
+    createdAt: now,
+  };
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note: String(input.note || "").trim() || "စာရင်းကို ပယ်ဖျက်ပြီး အတည်ပြုပြီးပါပြီ။",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "approved",
+    workflowStage: "completed",
+    assignedRole: undefined,
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: String(input.note || "").trim() || req.reviewNote,
+    treasurerConfirmedByUserId: input.byUserId,
+    treasurerConfirmedAt: now,
+    updatedAt: now,
+    revisions: [...(req.revisions || []), revision],
+    messages: [...(req.messages || []), msg],
+  };
+
+  await AsyncStorage.multiSet([
+    [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
+    [KEYS.TRANSACTIONS, JSON.stringify(txns)],
+    [KEYS.LOANS, JSON.stringify(loans)],
+  ]);
+  await pushSystemEvent({
+    title: `Delete Executed (${req.requestNumber})`,
+    description:
+      req.targetType === "loan" && removedLinkedTransactionIds.length > 0
+        ? `${req.targetType} ${req.targetId} ကို ပယ်ဖျက်ပြီး linked transactions ${removedLinkedTransactionIds.length} ခု ဖယ်ရှားပြီးပါပြီ`
+        : `${req.targetType} ${req.targetId} ကို ပယ်ဖျက်ပြီးပါပြီ`,
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+  });
+}
+
+export async function applyAuditChangeRequestPatch(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  patch: Record<string, any>;
+  note?: string;
+}): Promise<void> {
+  const [requests, txns] = await Promise.all([getAuditChangeRequests(), getTransactions()]);
+  const reqIdx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (reqIdx === -1) throw new Error("request_not_found");
+  const req = requests[reqIdx];
+  if (req.requestKind === "delete") throw new Error("invalid_request_kind");
+
+  const txnIdx = txns.findIndex((row: any) => String(row?.id || "") === String(req.transactionId || ""));
+  if (txnIdx === -1) throw new Error("transaction_not_found");
+  const currentTxn = txns[txnIdx] as any;
+
+  const sanitizedPatch = sanitizeAuditPatch(input.patch || {});
+  if (Object.keys(sanitizedPatch).length === 0) throw new Error("empty_patch");
+
+  const before = pickTransactionAuditSnapshot(currentTxn);
+  const afterTxn = {
+    ...currentTxn,
+    ...sanitizedPatch,
+    auditFlagged: false,
+    auditNote: "",
+    auditFlaggedByUserId: "",
+    auditFlaggedAt: "",
+  };
+  txns[txnIdx] = afterTxn;
+  const after = pickTransactionAuditSnapshot(afterTxn);
+
+  const now = new Date().toISOString();
+  const revision: AuditChangeRevision = {
+    id: generateId(),
+    requestId: req.id,
+    transactionId: String(req.transactionId || ""),
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    note: String(input.note || "").trim() || undefined,
+    before,
+    patch: sanitizedPatch,
+    after,
+    createdAt: now,
+  };
+
+  const decisionMessage: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note: String(input.note || "").trim() || "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    createdAt: now,
+  };
+
+  requests[reqIdx] = {
+    ...req,
+    status: "approved",
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: String(input.note || "").trim() || undefined,
+    updatedAt: now,
+    resolvedTransactionId: String(req.transactionId || ""),
+    revisions: [...(req.revisions || []), revision],
+    messages: [...(req.messages || []), decisionMessage],
+  };
+
+  await AsyncStorage.multiSet([
+    [KEYS.TRANSACTIONS, JSON.stringify(txns)],
+    [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
+  ]);
+  await pushSystemEvent({
+    title: `Audit Change Applied (${req.requestNumber})`,
+    description: `Transaction ${req.transactionId} ကို ပြင်ဆင်ပြီး အတည်ပြုခဲ့ပါသည်`,
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+  });
 }
 
 function mapPaymentRequestKindToIncomeCategory(

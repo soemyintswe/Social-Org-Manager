@@ -12,11 +12,11 @@ import {
   Modal,
   TextInput,
   InteractionManager,
+  KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -62,7 +62,17 @@ function MiniMetricCard({ title, value, color }: { title: string; value: number;
   );
 }
 
-function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete = false, canAuditFlag = false, onAuditPress }: {
+function TransactionRow({
+  txn,
+  memberName,
+  onDelete: _onDelete,
+  canEdit = false,
+  canDelete: _canDelete = false,
+  canAuditFlag = false,
+  onAuditPress,
+  canRequestDelete = false,
+  onDeleteRequestPress,
+}: {
   txn: Transaction;
   memberName?: string;
   onDelete: (id: string) => void;
@@ -70,6 +80,8 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
   canDelete?: boolean;
   canAuditFlag?: boolean;
   onAuditPress?: (txn: Transaction) => void;
+  canRequestDelete?: boolean;
+  onDeleteRequestPress?: (txn: Transaction) => void;
 }) {
   const isIncome = txn.type === "income";
   const isTransfer = (txn.type as string) === "transfer";
@@ -89,17 +101,6 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
     <Pressable
       style={styles.txnRow}
       onPress={canEdit ? () => router.push({ pathname: "/add-transaction", params: { editId: txn.id } }) : undefined}
-      onLongPress={
-        canDelete
-          ? () => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              Alert.alert("ဖျက်ရန်", "ဤငွေစာရင်းကို ဖျက်လိုပါသလား?", [
-                { text: "မဖျက်တော့ပါ", style: "cancel" },
-                { text: "ဖျက်မည်", style: "destructive", onPress: () => onDelete(txn.id) },
-              ]);
-            }
-          : undefined
-      }
     >
       <View style={[styles.txnIcon, { backgroundColor: (isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")) + "15" }]}>
         <Ionicons
@@ -135,6 +136,12 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
             <Ionicons name={txn.auditFlagged ? "flag" : "flag-outline"} size={16} color={txn.auditFlagged ? "#B91C1C" : Colors.light.textSecondary} />
           </Pressable>
         ) : null}
+        {canRequestDelete && onDeleteRequestPress ? (
+          <Pressable style={styles.deleteRequestBtn} onPress={() => onDeleteRequestPress(txn)}>
+            <Ionicons name="trash-outline" size={13} color="#92400E" />
+            <Text style={styles.deleteRequestBtnText}>Delete Request</Text>
+          </Pressable>
+        ) : null}
         <Text style={[styles.txnAmount, { color: isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E") }]}>
           {isTransfer ? "" : (isIncome ? "+" : "-")}{txn.amount.toLocaleString()}
         </Text>
@@ -143,11 +150,20 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
   );
 }
 
-function LoanRow({ loan, memberName, outstanding, metrics }: {
+function LoanRow({
+  loan,
+  memberName,
+  outstanding,
+  metrics,
+  canRequestDelete = false,
+  onDeleteRequestPress,
+}: {
   loan: Loan;
   memberName?: string;
   outstanding: number;
   metrics: LoanComputedMetrics;
+  canRequestDelete?: boolean;
+  onDeleteRequestPress?: (loan: Loan) => void;
 }) {
   const isPaid = loan.status === "paid";
   const principalAmount = getLoanPrincipal(loan as any);
@@ -187,6 +203,12 @@ function LoanRow({ loan, memberName, outstanding, metrics }: {
         </View>
       </View>
       <View style={styles.loanRight}>
+        {canRequestDelete && onDeleteRequestPress ? (
+          <Pressable style={styles.deleteRequestBtn} onPress={() => onDeleteRequestPress(loan)}>
+            <Ionicons name="trash-outline" size={13} color="#92400E" />
+            <Text style={styles.deleteRequestBtnText}>Delete Request</Text>
+          </Pressable>
+        ) : null}
         <Text style={styles.loanOutstanding}>{formatKs(outstanding)}</Text>
         <View style={[styles.loanStatusBadge, isPaid ? styles.loanPaid : styles.loanActive]}>
           <Text style={[styles.loanStatusText, { color: isPaid ? Colors.light.success : "#3B82F6" }]}>
@@ -203,9 +225,12 @@ export default function FinanceScreen() {
   const {
     transactions,
     loans,
+    auditChangeRequests,
     members,
     removeTransaction,
     updateTransaction,
+    createAuditChangeRequest,
+    changeAuditChangeRequestStatus,
     getLoanOutstanding,
     loading,
     accountSettings,
@@ -226,12 +251,18 @@ export default function FinanceScreen() {
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [auditTxn, setAuditTxn] = useState<Transaction | null>(null);
   const [auditNote, setAuditNote] = useState("");
+  const [showDeleteRequestModal, setShowDeleteRequestModal] = useState(false);
+  const [deleteRequestType, setDeleteRequestType] = useState<"transaction" | "loan">("transaction");
+  const [deleteRequestTxn, setDeleteRequestTxn] = useState<Transaction | null>(null);
+  const [deleteRequestLoan, setDeleteRequestLoan] = useState<Loan | null>(null);
+  const [deleteRequestNote, setDeleteRequestNote] = useState("");
   const [viewScope, setViewScope] = useState<FinanceViewScope>("all");
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [computeReady, setComputeReady] = useState(false);
   const [visibleListCount, setVisibleListCount] = useState(FINANCE_PAGE_SIZE);
+  const [visibleLoanTxnCount, setVisibleLoanTxnCount] = useState(FINANCE_PAGE_SIZE);
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -241,6 +272,7 @@ export default function FinanceScreen() {
   const canEditFinance = can("finance.edit") || can("finance.manage");
   const canDeleteFinance = can("finance.delete") || can("finance.manage");
   const canAuditFlagFinance = can("finance.audit_flag");
+  const canRequestDeleteFinance = canDeleteFinance || canEditFinance || canAuditFlagFinance;
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
   const effectiveScope: FinanceViewScope = canViewFinanceDetail ? viewScope : "self";
   const startDateMs = startDate.getTime();
@@ -318,6 +350,16 @@ export default function FinanceScreen() {
       auditFlaggedByUserId: currentUser?.id || "",
       auditFlaggedAt: new Date().toISOString(),
     } as Partial<Transaction>);
+    if (currentUser?.id) {
+      await createAuditChangeRequest({
+        transactionId: auditTxn.id,
+        relatedLoanId: String((auditTxn as any)?.loanId || "").trim() || undefined,
+        auditNote: note,
+        createdByUserId: currentUser.id,
+        createdByMemberId: currentUser.memberId,
+        createdByDisplayName: currentUser.displayName,
+      });
+    }
     setShowAuditModal(false);
     setAuditTxn(null);
     setAuditNote("");
@@ -332,10 +374,91 @@ export default function FinanceScreen() {
       auditFlaggedByUserId: "",
       auditFlaggedAt: "",
     } as Partial<Transaction>);
+    const openRequests = (Array.isArray(auditChangeRequests) ? auditChangeRequests : []).filter(
+      (row: any) =>
+        String(row?.transactionId || "") === String(auditTxn.id || "") &&
+        (row?.status === "pending" || row?.status === "suspended")
+    );
+    for (const req of openRequests) {
+      if (!currentUser?.id) break;
+      await changeAuditChangeRequestStatus({
+        requestId: req.id,
+        status: "cancelled",
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note: "Audit flag ဖြုတ်သိမ်းထားသောကြောင့် request ကိုပိတ်သိမ်းပါသည်။",
+      });
+    }
     setShowAuditModal(false);
     setAuditTxn(null);
     setAuditNote("");
     Alert.alert("ဖြုတ်ပြီးပါပြီ", "Audit Flag ကိုဖြုတ်ပြီးပါပြီ။");
+  };
+
+  const openDeleteRequestForTxn = (txn: Transaction) => {
+    setDeleteRequestType("transaction");
+    setDeleteRequestTxn(txn);
+    setDeleteRequestLoan(null);
+    setDeleteRequestNote("");
+    setShowDeleteRequestModal(true);
+  };
+
+  const openDeleteRequestForLoan = (loan: Loan) => {
+    setDeleteRequestType("loan");
+    setDeleteRequestTxn(null);
+    setDeleteRequestLoan(loan);
+    setDeleteRequestNote("");
+    setShowDeleteRequestModal(true);
+  };
+
+  const submitDeleteRequest = async () => {
+    if (!currentUser?.id) return;
+    const note = deleteRequestNote.trim();
+    if (!note) {
+      Alert.alert("လိုအပ်ချက်", "Delete Request အကြောင်းပြချက် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
+      return;
+    }
+
+    if (deleteRequestType === "transaction") {
+      if (!deleteRequestTxn) return;
+      await createAuditChangeRequest({
+        requestKind: "delete",
+        targetType: "transaction",
+        targetId: deleteRequestTxn.id,
+        transactionId: deleteRequestTxn.id,
+        relatedLoanId: String((deleteRequestTxn as any)?.loanId || "").trim() || undefined,
+        auditNote: note,
+        createdByUserId: currentUser.id,
+        createdByMemberId: currentUser.memberId,
+        createdByDisplayName: currentUser.displayName,
+      });
+      await updateTransaction(deleteRequestTxn.id, {
+        auditFlagged: true,
+        auditNote: note,
+        auditFlaggedByUserId: currentUser.id,
+        auditFlaggedAt: new Date().toISOString(),
+      } as Partial<Transaction>);
+    } else {
+      if (!deleteRequestLoan) return;
+      await createAuditChangeRequest({
+        requestKind: "delete",
+        targetType: "loan",
+        targetId: deleteRequestLoan.id,
+        transactionId: undefined,
+        relatedLoanId: deleteRequestLoan.id,
+        auditNote: note,
+        createdByUserId: currentUser.id,
+        createdByMemberId: currentUser.memberId,
+        createdByDisplayName: currentUser.displayName,
+      });
+    }
+
+    setShowDeleteRequestModal(false);
+    setDeleteRequestTxn(null);
+    setDeleteRequestLoan(null);
+    setDeleteRequestNote("");
+    Alert.alert("ပို့ပြီးပါပြီ", "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။");
   };
 
   const getMemberName = (id?: string) => {
@@ -490,6 +613,24 @@ export default function FinanceScreen() {
     return { base, relief, payable, paid, outstanding };
   }, [loanMetricRows]);
 
+  const loanRelatedTransactions = useMemo(() => {
+    return visibleTxns.filter((t: any) => {
+      const category = String(t?.category || "");
+      return category === "loan_disbursement" || category === "loan_repayment" || Boolean(t?.loanId);
+    });
+  }, [visibleTxns]);
+
+  const pagedLoanRelatedTransactions = useMemo(
+    () => loanRelatedTransactions.slice(0, visibleLoanTxnCount),
+    [loanRelatedTransactions, visibleLoanTxnCount]
+  );
+  const hasMoreLoanRelatedTransactions = pagedLoanRelatedTransactions.length < loanRelatedTransactions.length;
+
+  const pendingAuditChangeRequestCount = useMemo(() => {
+    const rows = Array.isArray(auditChangeRequests) ? auditChangeRequests : [];
+    return rows.filter((row: any) => row.status === "pending" || row.status === "suspended").length;
+  }, [auditChangeRequests]);
+
   const isAllScope = effectiveScope === "all";
   const activeListData = useMemo<any[]>(() => {
     if (activeTab === "loans") return (visibleLoans as any[]) || [];
@@ -509,10 +650,15 @@ export default function FinanceScreen() {
 
   useEffect(() => {
     setVisibleListCount(FINANCE_PAGE_SIZE);
+    setVisibleLoanTxnCount(FINANCE_PAGE_SIZE);
   }, [activeTab, effectiveScope, scopedMemberId, startDateMs, endDateMs, activeListData.length]);
 
   const pagedActiveListData = useMemo(() => activeListData.slice(0, visibleListCount), [activeListData, visibleListCount]);
   const hasMoreActiveListData = pagedActiveListData.length < activeListData.length;
+  const isActiveListEmpty =
+    activeTab === "loans"
+      ? activeListData.length === 0 && loanRelatedTransactions.length === 0
+      : activeListData.length === 0;
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -573,6 +719,18 @@ export default function FinanceScreen() {
           )}
         </View>
         <View style={styles.headerClaimRow}>
+          {(canAuditFlagFinance || canEditFinance || canManageFinance) && (
+            <Pressable
+              style={styles.auditRequestBtn}
+              onPress={() => router.push("/audit-change-requests" as any)}
+            >
+              <Ionicons name="flag-outline" size={16} color="#fff" />
+              <Text style={styles.auditRequestBtnText}>
+                Audit Requests
+                {pendingAuditChangeRequestCount > 0 ? ` (${pendingAuditChangeRequestCount})` : ""}
+              </Text>
+            </Pressable>
+          )}
           <Pressable
             style={styles.claimButton}
             onPress={() => router.push("/expense-claims" as any)}
@@ -803,10 +961,52 @@ export default function FinanceScreen() {
                 <MiniMetricCard title="အတိုးဆပ်ရန်ကျန်ငွေ" value={loanInterestSummary.outstanding} color="#DC2626" />
               </ScrollView>
 
-              <Text style={styles.loanSummaryTitle}>ချေးငွေအသေးစိတ်စာရင်း</Text>
+              <Text style={styles.loanSummaryTitle}>ချေးငွေဆိုင်ရာ အနှစ်ချုပ်</Text>
             </View>
           ) : null}
-          {activeListData.length === 0 ? (
+          {activeTab === "loans" ? (
+            <>
+              <Text style={styles.loanSummaryTitle}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</Text>
+              {loanRelatedTransactions.length === 0 ? (
+                <View style={styles.emptyContainerCompact}>
+                  <Ionicons name="receipt-outline" size={40} color={Colors.light.textSecondary} />
+                  <Text style={styles.emptyText}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ မရှိသေးပါ</Text>
+                </View>
+              ) : (
+                <>
+                  {pagedLoanRelatedTransactions.map((txn: any) => {
+                    const memberName = getMemberName(txn.memberId);
+                    const displayName = memberName || (txn as any).payerPayee;
+                    return (
+                      <TransactionRow
+                        key={`loan-txn-${txn.id}`}
+                        txn={txn}
+                        memberName={displayName}
+                        onDelete={removeTransaction}
+                        canEdit={canEditFinance}
+                        canDelete={canDeleteFinance}
+                        canAuditFlag={canAuditFlagFinance}
+                        onAuditPress={openAuditModal}
+                        canRequestDelete={canRequestDeleteFinance}
+                        onDeleteRequestPress={openDeleteRequestForTxn}
+                      />
+                    );
+                  })}
+                  {hasMoreLoanRelatedTransactions ? (
+                    <View style={styles.loadMoreWrap}>
+                      <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleLoanTxnCount((prev) => prev + FINANCE_PAGE_SIZE)}>
+                        <Text style={styles.loadMoreBtnText}>
+                          နောက်ထပ် {Math.min(FINANCE_PAGE_SIZE, loanRelatedTransactions.length - pagedLoanRelatedTransactions.length).toLocaleString()} ခု ပြရန်
+                        </Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </>
+              )}
+              <Text style={styles.loanSummaryTitle}>ချေးငွေအသေးစိတ်စာရင်း</Text>
+            </>
+          ) : null}
+          {isActiveListEmpty ? (
             <View style={styles.emptyContainerCompact}>
               <Ionicons name="receipt-outline" size={40} color={Colors.light.textSecondary} />
               <Text style={styles.emptyText}>မှတ်တမ်းများ မရှိသေးပါ</Text>
@@ -827,6 +1027,8 @@ export default function FinanceScreen() {
                     canDelete={canDeleteFinance}
                     canAuditFlag={canAuditFlagFinance}
                     onAuditPress={openAuditModal}
+                    canRequestDelete={canRequestDeleteFinance}
+                    onDeleteRequestPress={openDeleteRequestForTxn}
                   />
                 );
               }
@@ -841,6 +1043,8 @@ export default function FinanceScreen() {
                   memberName={member?.name}
                   outstanding={getLoanOutstanding(loan.id)}
                   metrics={metrics}
+                  canRequestDelete={canRequestDeleteFinance}
+                  onDeleteRequestPress={openDeleteRequestForLoan}
                 />
               );
             })
@@ -889,12 +1093,63 @@ export default function FinanceScreen() {
       <Modal
         animationType="slide"
         transparent={true}
+        visible={showDeleteRequestModal}
+        onRequestClose={() => setShowDeleteRequestModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          style={styles.modalContainer}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestModal(false)} />
+          <ScrollView
+            style={styles.auditModalContent}
+            contentContainerStyle={[styles.auditModalContentBody, { paddingBottom: insets.bottom + 12 }]}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.modalTitle}>Delete Request</Text>
+            <Text style={styles.label}>အမျိုးအစား</Text>
+            <Text style={styles.requestMetaText}>{deleteRequestType === "loan" ? "ချေးငွေမှတ်တမ်း" : "ငွေစာရင်းမှတ်တမ်း"}</Text>
+            <Text style={styles.label}>Target ID</Text>
+            <Text style={styles.requestMetaText}>
+              {deleteRequestType === "loan" ? String(deleteRequestLoan?.id || "-") : String(deleteRequestTxn?.id || "-")}
+            </Text>
+            <Text style={styles.label}>ဖျက်လိုသော အကြောင်းပြချက် (Audit ထံပေးပို့မည်)</Text>
+            <TextInput
+              style={[styles.input, styles.auditNoteInput]}
+              value={deleteRequestNote}
+              onChangeText={setDeleteRequestNote}
+              multiline
+              numberOfLines={4}
+              placeholder="ဥပမာ - ပြေစာမှားတင်ထားမိသည် / duplicate entry"
+            />
+            <Pressable style={[styles.saveBtn, { backgroundColor: "#D97706" }]} onPress={submitDeleteRequest}>
+              <Text style={styles.saveBtnText}>Delete Request ပေးပို့မည်</Text>
+            </Pressable>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestModal(false)}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </Pressable>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
         visible={showAuditModal}
         onRequestClose={() => setShowAuditModal(false)}
       >
-        <View style={styles.modalContainer}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          style={styles.modalContainer}
+        >
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowAuditModal(false)} />
-          <View style={styles.modalContent}>
+          <ScrollView
+            style={styles.auditModalContent}
+            contentContainerStyle={[styles.auditModalContentBody, { paddingBottom: insets.bottom + 12 }]}
+            keyboardShouldPersistTaps="handled"
+          >
             <Text style={styles.modalTitle}>Audit Flag (စာရင်းစစ် မှတ်ချက်)</Text>
             <Text style={styles.label}>မှတ်ချက်</Text>
             <TextInput
@@ -916,8 +1171,8 @@ export default function FinanceScreen() {
             <Pressable style={styles.cancelBtn} onPress={() => setShowAuditModal(false)}>
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </Pressable>
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1002,7 +1257,17 @@ const styles = StyleSheet.create({
   },
   title: { flex: 1, fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
-  headerClaimRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center" },
+  headerClaimRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  auditRequestBtn: {
+    height: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: "#0EA5E9",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  auditRequestBtnText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
   claimButton: {
     height: 38,
     borderRadius: 12,
@@ -1231,6 +1496,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  deleteRequestBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: "#FEF3C7",
+    borderWidth: 1,
+    borderColor: "#F59E0B",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  deleteRequestBtnText: {
+    fontSize: 10.5,
+    fontFamily: "Inter_700Bold",
+    color: "#92400E",
+  },
   txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
   txnDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary },
   loanRow: {
@@ -1307,8 +1588,11 @@ const styles = StyleSheet.create({
   dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
   modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
+  auditModalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "85%" },
+  auditModalContentBody: { padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 6, marginTop: 10 },
+  requestMetaText: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_600SemiBold", marginBottom: 2 },
   input: { backgroundColor: "#F8FAFC", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: Colors.light.border },
   auditNoteInput: { minHeight: 96, textAlignVertical: "top" },
   saveBtn: { backgroundColor: Colors.light.tint, paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 20 },

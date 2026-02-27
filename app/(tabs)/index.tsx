@@ -142,7 +142,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, chatThreads, chatMessages, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
@@ -579,6 +579,22 @@ export default function DashboardScreen() {
     };
   }, [memberChangeRequests, canApproveMemberChanges, currentUser?.id, memberChangeLastSeenAt]);
 
+  const auditRequestInbox = useMemo(() => {
+    const all = Array.isArray(auditChangeRequests) ? auditChangeRequests : [];
+    const canViewAllAudit =
+      can("finance.view_detail") ||
+      can("finance.view_all") ||
+      can("finance.audit_flag") ||
+      currentUser?.systemRole === "admin";
+    const visible = canViewAllAudit ? all : all.filter((item: any) => item.createdByUserId === currentUser?.id);
+    const pending = visible.filter((item: any) => item.status === "pending").length;
+    const suspended = visible.filter((item: any) => item.status === "suspended").length;
+    const approved = visible.filter((item: any) => item.status === "approved").length;
+    const rejected = visible.filter((item: any) => item.status === "rejected").length;
+    const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
+    return { visibleCount: visible.length, pending, suspended, approved, rejected, cancelled };
+  }, [auditChangeRequests, currentUser?.id, currentUser?.systemRole, can]);
+
   // Schedule Birthday Notification
   useEffect(() => {
     const scheduleBirthdayNotification = async () => {
@@ -929,6 +945,28 @@ export default function DashboardScreen() {
             <Text style={styles.requestStatText}>Approved: {requestInbox.approved}</Text>
             <Text style={styles.requestStatText}>Rejected: {requestInbox.rejected}</Text>
             <Text style={styles.requestStatText}>Cancelled: {requestInbox.cancelled}</Text>
+          </View>
+        </Pressable>
+      )}
+
+      {(can("finance.view_summary") || can("finance.view_detail") || can("finance.view_all") || can("finance.audit_flag")) && (
+        <Pressable style={styles.requestInboxCard} onPress={() => router.push("/audit-change-requests" as any)}>
+          <View style={styles.requestInboxHeader}>
+            <View style={styles.requestInboxIconWrap}>
+              <Ionicons name="flag-outline" size={18} color={Colors.light.tint} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.requestInboxTitle}>Audit Change Requests</Text>
+              <Text style={styles.requestInboxSubtitle}>Total: {auditRequestInbox.visibleCount}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
+          </View>
+          <View style={styles.requestInboxStats}>
+            <Text style={styles.requestStatText}>Pending: {auditRequestInbox.pending}</Text>
+            <Text style={styles.requestStatText}>Suspended: {auditRequestInbox.suspended}</Text>
+            <Text style={styles.requestStatText}>Approved: {auditRequestInbox.approved}</Text>
+            <Text style={styles.requestStatText}>Rejected: {auditRequestInbox.rejected}</Text>
+            <Text style={styles.requestStatText}>Cancelled: {auditRequestInbox.cancelled}</Text>
           </View>
         </Pressable>
       )}

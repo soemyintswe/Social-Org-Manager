@@ -278,6 +278,68 @@ export interface MemberChangeRequest {
   reviewNote?: string;
 }
 
+export type AuditChangeRequestStatus = "pending" | "approved" | "rejected" | "cancelled" | "suspended";
+export type AuditChangeMessageType = "note" | "reply" | "forward" | "decision" | "system";
+export type AuditChangeRequestKind = "update" | "delete";
+export type AuditChangeTargetType = "transaction" | "loan";
+export type AuditChangeWorkflowStage = "auditor_review" | "chair_approval" | "treasurer_execution" | "completed";
+
+export interface AuditChangeRequestMessage {
+  id: string;
+  requestId: string;
+  messageType: AuditChangeMessageType;
+  note: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  toRole?: OrgPosition;
+  replyToMessageId?: string;
+  createdAt: string;
+}
+
+export interface AuditChangeRevision {
+  id: string;
+  requestId: string;
+  transactionId: string;
+  byUserId: string;
+  byMemberId?: string;
+  note?: string;
+  before: Record<string, any>;
+  patch: Record<string, any>;
+  after: Record<string, any>;
+  createdAt: string;
+}
+
+export interface AuditChangeRequest {
+  id: string;
+  requestNumber: string;
+  requestKind: AuditChangeRequestKind;
+  targetType: AuditChangeTargetType;
+  targetId: string;
+  transactionId?: string;
+  relatedLoanId?: string;
+  status: AuditChangeRequestStatus;
+  workflowStage?: AuditChangeWorkflowStage;
+  auditNote: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  updatedAt: string;
+  assignedRole?: OrgPosition;
+  reviewedByUserId?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+  escalatedToChairAt?: string;
+  escalatedByUserId?: string;
+  chairApprovedByUserId?: string;
+  chairApprovedAt?: string;
+  treasurerConfirmedByUserId?: string;
+  treasurerConfirmedAt?: string;
+  resolvedTransactionId?: string;
+  messages: AuditChangeRequestMessage[];
+  revisions: AuditChangeRevision[];
+}
+
 export type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";
 export type ExpenseClaimStatus = "pending_approval" | "approved" | "rejected" | "disbursed";
 export type DisbursementMethod = "cash" | "bank";

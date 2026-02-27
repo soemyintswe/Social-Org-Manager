@@ -477,6 +477,7 @@ function RootLayoutNav() {
             <Stack.Screen name="import-members" options={{ headerShown: false }} />
             <Stack.Screen name="settings" options={{ headerShown: false }} />
             <Stack.Screen name="member-payment-requests" options={{ headerShown: false }} />
+            <Stack.Screen name="audit-change-requests" options={{ headerShown: false }} />
             <Stack.Screen name="members" options={{ headerShown: false }} />
             <Stack.Screen name="events" options={{ headerShown: false }} />
             <Stack.Screen name="messages" options={{ headerShown: false }} />

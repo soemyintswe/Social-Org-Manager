@@ -17,6 +17,9 @@ import type {
   AccountSettings,
   UserAccount,
   MemberChangeRequest,
+  AuditChangeRequest,
+  AuditChangeRequestStatus,
+  AuditChangeMessageType,
   ExpenseClaim,
   MemberPaymentRequest,
   MemberPaymentRequestKind,
@@ -44,6 +47,7 @@ interface DataContextValue {
   loans: Loan[];
   users: UserAccount[];
   memberChangeRequests: MemberChangeRequest[];
+  auditChangeRequests: AuditChangeRequest[];
   expenseClaims: ExpenseClaim[];
   memberPaymentRequests: MemberPaymentRequest[];
   standardAmountRules: StandardAmountRule[];
@@ -85,6 +89,66 @@ interface DataContextValue {
   rejectMemberChangeRequest: (requestId: string, reviewerUserId: string, reviewNote?: string) => Promise<void>;
   withdrawMemberChangeRequest: (requestId: string, requesterUserId: string, note?: string) => Promise<void>;
   assignMemberChangeRequest: (requestId: string, assignedReviewerUserId: string | undefined, assignerUserId: string) => Promise<void>;
+  createAuditChangeRequest: (input: {
+    requestKind?: "update" | "delete";
+    targetType?: "transaction" | "loan";
+    targetId?: string;
+    transactionId?: string;
+    relatedLoanId?: string;
+    auditNote: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+    createdByDisplayName?: string;
+  }) => Promise<AuditChangeRequest>;
+  addAuditChangeRequestMessage: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    messageType?: AuditChangeMessageType;
+    note: string;
+    toRole?: any;
+    replyToMessageId?: string;
+    setSuspended?: boolean;
+  }) => Promise<void>;
+  changeAuditChangeRequestStatus: (input: {
+    requestId: string;
+    status: AuditChangeRequestStatus;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note?: string;
+  }) => Promise<void>;
+  applyAuditChangeRequestPatch: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    patch: Record<string, any>;
+    note?: string;
+  }) => Promise<void>;
+  forwardDeleteAuditRequestToChair: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => Promise<void>;
+  chairReviewDeleteAuditRequest: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    approved: boolean;
+    note: string;
+  }) => Promise<void>;
+  confirmDeleteAuditRequestExecution: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note?: string;
+  }) => Promise<void>;
   createExpenseClaim: (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => Promise<ExpenseClaim>;
   approveExpenseClaim: (input: { claimId: string; approverUserId: string; approvedAmount: number; approvalNote?: string }) => Promise<void>;
   rejectExpenseClaim: (input: { claimId: string; approverUserId: string; approvalNote: string }) => Promise<void>;
@@ -174,6 +238,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [memberChangeRequests, setMemberChangeRequests] = useState<MemberChangeRequest[]>([]);
+  const [auditChangeRequests, setAuditChangeRequests] = useState<AuditChangeRequest[]>([]);
   const [expenseClaims, setExpenseClaims] = useState<ExpenseClaim[]>([]);
   const [memberPaymentRequests, setMemberPaymentRequests] = useState<MemberPaymentRequest[]>([]);
   const [standardAmountRules, setStandardAmountRules] = useState<StandardAmountRule[]>([]);
@@ -241,7 +306,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
       }
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, ec, mpr, sar, sacr, cth, ctm, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, acr, ec, mpr, sar, sacr, cth, ctm, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -250,6 +315,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getLoans(),
         store.getUsers(),
         store.getMemberChangeRequests(),
+        store.getAuditChangeRequests(),
         store.getExpenseClaims(),
         store.getMemberPaymentRequests(),
         store.getStandardAmountRules(),
@@ -266,6 +332,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setLoans(l);
       setUsers(u);
       setMemberChangeRequests(r);
+      setAuditChangeRequests(acr);
       setExpenseClaims(ec);
       setMemberPaymentRequests(mpr);
       setStandardAmountRules(sar);
@@ -315,6 +382,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     loans,
     users,
     memberChangeRequests,
+    auditChangeRequests,
     expenseClaims,
     memberPaymentRequests,
     standardAmountRules,
@@ -493,6 +561,95 @@ export function DataProvider({ children }: { children: ReactNode }) {
     assignerUserId: string
   ) => {
     await store.assignMemberChangeRequest(requestId, assignedReviewerUserId, assignerUserId);
+    await refreshData({ skipPull: true });
+  };
+
+  const createAuditChangeRequest = async (input: {
+    requestKind?: "update" | "delete";
+    targetType?: "transaction" | "loan";
+    targetId?: string;
+    transactionId?: string;
+    relatedLoanId?: string;
+    auditNote: string;
+    createdByUserId: string;
+    createdByMemberId?: string;
+    createdByDisplayName?: string;
+  }) => {
+    const req = await store.createAuditChangeRequest(input);
+    await refreshData({ skipPull: true });
+    return req;
+  };
+
+  const addAuditChangeRequestMessage = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    messageType?: AuditChangeMessageType;
+    note: string;
+    toRole?: any;
+    replyToMessageId?: string;
+    setSuspended?: boolean;
+  }) => {
+    await store.addAuditChangeRequestMessage(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const changeAuditChangeRequestStatus = async (input: {
+    requestId: string;
+    status: AuditChangeRequestStatus;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note?: string;
+  }) => {
+    await store.changeAuditChangeRequestStatus(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const applyAuditChangeRequestPatch = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    patch: Record<string, any>;
+    note?: string;
+  }) => {
+    await store.applyAuditChangeRequestPatch(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const forwardDeleteAuditRequestToChair = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => {
+    await store.forwardDeleteAuditRequestToChair(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const chairReviewDeleteAuditRequest = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    approved: boolean;
+    note: string;
+  }) => {
+    await store.chairReviewDeleteAuditRequest(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const confirmDeleteAuditRequestExecution = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note?: string;
+  }) => {
+    await store.confirmDeleteAuditRequestExecution(input);
     await refreshData({ skipPull: true });
   };
 
@@ -683,7 +840,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, auditChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,
@@ -693,6 +850,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     updateAccountSettings,
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
+    createAuditChangeRequest, addAuditChangeRequestMessage, changeAuditChangeRequestStatus, applyAuditChangeRequestPatch,
+    forwardDeleteAuditRequestToChair, chairReviewDeleteAuditRequest, confirmDeleteAuditRequestExecution,
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
     createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
     createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,

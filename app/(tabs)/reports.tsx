@@ -94,18 +94,21 @@ function normalizeMemberText(value: unknown): string {
     .trim();
 }
 
+function escapeRegExp(value: string): string {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function transactionBelongsToMember(tx: any, memberId: string, memberName: string): boolean {
   const directId = String(tx?.memberId || "").trim();
   if (directId && directId === memberId) return true;
 
   const notes = String(tx?.notes || "");
-  if (notes.includes(`(${memberId})`) || notes.includes(`linked_member=`) && notes.includes(memberId)) return true;
+  if (notes.includes(`(${memberId})`)) return true;
+  const memberIdRegex = new RegExp(`(?:linked_member|linked_member_id|beneficiary_member_id)\\s*=\\s*${escapeRegExp(memberId)}(?:\\b|\\s|$)`, "i");
+  if (memberIdRegex.test(notes)) return true;
 
   const nameNorm = normalizeMemberText(memberName);
   if (nameNorm.length >= 2) {
-    const notesNorm = normalizeMemberText(notes);
-    if (notesNorm.includes(nameNorm)) return true;
-
     const payerNorm = normalizeMemberText(tx?.payerPayee);
     if (payerNorm && (payerNorm.includes(nameNorm) || nameNorm.includes(payerNorm))) return true;
   }
@@ -273,7 +276,7 @@ export default function ReportsScreen() {
     const maxDetectedYear = availableYears.length > 0 ? Math.max(...availableYears) : currentYear;
     const maxYear = Math.max(currentYear + 10, maxDetectedYear + 2);
     const years: number[] = [];
-    for (let year = maxYear; year >= minYear; year -= 1) {
+    for (let year = minYear; year <= maxYear; year += 1) {
       years.push(year);
     }
     return years;
@@ -286,7 +289,7 @@ export default function ReportsScreen() {
   }, [activeFilterTag]);
 
   const selectedYearLabel = useMemo(
-    () => (selectedYearValue ? String(selectedYearValue) : "ခုနှစ်ရွေးရန်"),
+    () => (selectedYearValue ? String(selectedYearValue) : String(new Date().getFullYear())),
     [selectedYearValue]
   );
 
@@ -1291,22 +1294,22 @@ export default function ReportsScreen() {
 
       {reportTab === "income_expense" && (
         <View style={styles.scrollContent}>
-            <View style={styles.summaryGrid}>
-              <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
-                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအဝင်" : "ပေးသွင်းငွေ"}</Text>
-                <Text style={[styles.statValue, { color: "#10B981" }]}>
+            <View style={styles.incomeSummaryRow}>
+              <View style={[styles.incomeSummaryBox, { borderLeftColor: "#10B981" }]}>
+                <Text style={styles.incomeSummaryLabel}>{isAllScope ? "စုစုပေါင်းအဝင်" : "ပေးသွင်းငွေ"}</Text>
+                <Text style={[styles.incomeSummaryValue, { color: "#10B981" }]}>
                   {incomeExpenseStats.income.toLocaleString()} KS
                 </Text>
               </View>
-              <View style={[styles.statBox, { borderLeftColor: "#F43F5E" }]}>
-                <Text style={styles.statLabel}>{isAllScope ? "စုစုပေါင်းအထွက်" : "ထုတ်ယူငွေ"}</Text>
-                <Text style={[styles.statValue, { color: "#F43F5E" }]}>
+              <View style={[styles.incomeSummaryBox, { borderLeftColor: "#F43F5E" }]}>
+                <Text style={styles.incomeSummaryLabel}>{isAllScope ? "စုစုပေါင်းအထွက်" : "ထုတ်ယူငွေ"}</Text>
+                <Text style={[styles.incomeSummaryValue, { color: "#F43F5E" }]}>
                   {incomeExpenseStats.expense.toLocaleString()} KS
                 </Text>
               </View>
-              <View style={[styles.statBox, { borderLeftColor: "#8B5CF6" }]}>
-                <Text style={styles.statLabel}>ခြားနားချက်</Text>
-                <Text style={[styles.statValue, { color: "#8B5CF6" }]}>
+              <View style={[styles.incomeSummaryBox, styles.incomeSummaryBoxWide, { borderLeftColor: "#8B5CF6" }]}>
+                <Text style={styles.incomeSummaryLabel}>ခြားနားချက်</Text>
+                <Text style={[styles.incomeSummaryValue, { color: "#8B5CF6" }]}>
                   {incomeExpenseStats.net.toLocaleString()} KS
                 </Text>
               </View>
@@ -2100,6 +2103,24 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 13.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   activeTabText: { color: Colors.light.tint },
   scrollContent: { paddingBottom: 24 },
+  incomeSummaryRow: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 16, gap: 10, marginBottom: 14 },
+  incomeSummaryBox: {
+    width: "48%",
+    backgroundColor: "white",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+    gap: 6,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+  },
+  incomeSummaryBoxWide: { width: "100%" },
+  incomeSummaryLabel: { fontSize: 12.5, lineHeight: 18, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
+  incomeSummaryValue: { fontSize: 22, lineHeight: 28, fontFamily: "Inter_700Bold" },
   summaryGrid: { flexDirection: "row", paddingHorizontal: 16, gap: 10, marginBottom: 14 },
   statBox: {
     flex: 1,

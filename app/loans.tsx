@@ -343,7 +343,7 @@ export default function LoansScreen() {
             <View style={styles.primaryRow}>
               <View style={styles.primaryBox}><Text style={styles.primaryLabel}>ထုတ်ချေးငွေ</Text><Text style={[styles.primaryValue, { color: "#F59E0B" }]}>{formatKs(principalSummary.issued)}</Text></View>
               <View style={styles.primaryBox}><Text style={styles.primaryLabel}>ပြန်ဆပ်ငွေ</Text><Text style={[styles.primaryValue, { color: "#10B981" }]}>{formatKs(principalSummary.repaid)}</Text></View>
-              <View style={styles.primaryBox}><Text style={styles.primaryLabel}>ပြန်ဆပ်ရန်ကျန်ငွေ</Text><Text style={[styles.primaryValue, { color: "#EF4444" }]}>{formatKs(principalSummary.outstanding)}</Text></View>
+              <View style={[styles.primaryBox, styles.primaryBoxWide]}><Text style={styles.primaryLabel}>ပြန်ဆပ်ရန်ကျန်ငွေ</Text><Text style={[styles.primaryValue, { color: "#EF4444" }]}>{formatKs(principalSummary.outstanding)}</Text></View>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.metricsRow}>
               <View style={styles.metricCard}><Text style={styles.metricTitle}>မူလအတိုးကျသင့်ငွေ</Text><Text style={styles.metricValue}>{formatKs(interestSummary.base)}</Text></View>
@@ -484,10 +484,20 @@ const styles = StyleSheet.create({
   dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   dateField: { flex: 1, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, backgroundColor: "#F8FAFC" },
   content: { padding: 14, paddingBottom: 30 },
-  primaryRow: { flexDirection: "row", justifyContent: "space-between", gap: 8, marginBottom: 8 },
-  primaryBox: { flex: 1, backgroundColor: "#fff", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 9, borderWidth: 1, borderColor: Colors.light.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
-  primaryLabel: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", flex: 1 },
-  primaryValue: { fontSize: 12.5, fontFamily: "Inter_700Bold" },
+  primaryRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
+  primaryBox: {
+    width: "48%",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    gap: 6,
+  },
+  primaryBoxWide: { width: "100%" },
+  primaryLabel: { fontSize: 12.5, lineHeight: 18, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  primaryValue: { fontSize: 22, lineHeight: 28, fontFamily: "Inter_700Bold" },
   metricsRow: { paddingRight: 10, paddingBottom: 2 },
   metricCard: { width: 220, borderLeftWidth: 4, backgroundColor: "#fff", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 9, borderWidth: 1, borderColor: Colors.light.border, marginRight: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   metricTitle: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", flex: 1 },
