@@ -21,11 +21,19 @@ export interface Member {
   color: string;
   role: string;
   orgPosition?: OrgPosition;
+  orgPositionHistory?: MemberOrgPositionHistoryEntry[];
   resignDate?: string;
   statusDate?: string;
   statusNote?: string;
   profileImage?: string;
   familyMembers?: MemberFamilyMember[];
+}
+
+export interface MemberOrgPositionHistoryEntry {
+  id: string;
+  position: OrgPosition;
+  effectiveDate: string;
+  note?: string;
 }
 
 export type MemberGender = "male" | "female" | "other";
@@ -131,10 +139,13 @@ export interface AccountSettings {
   receivingBankAccountName?: string;
   receivingKbzPayPhone?: string;
   receivingKbzPayAccountName?: string;
+  receivingKbzPayMmqr?: string;
   receivingWavePayPhone?: string;
   receivingWavePayAccountName?: string;
+  receivingWavePayMmqr?: string;
   receivingAyaPayPhone?: string;
   receivingAyaPayAccountName?: string;
+  receivingAyaPayMmqr?: string;
 }
 
 export type TransactionType = "income" | "expense";

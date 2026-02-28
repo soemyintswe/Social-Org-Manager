@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet, Modal, type StyleProp, type ViewStyle } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, ScrollView, useWindowDimensions, type StyleProp, type ViewStyle } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,8 +21,13 @@ export default function FloatingTabMenu({
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const { can, signOut, isAuthenticated } = useAuth();
   const isTopBar = mode === "topbar";
+  const isPhoneNarrow = windowWidth <= 430;
+  const gridColumnCount = isPhoneNarrow ? 2 : 1;
+  const estimatedTopOffset = menuTopOffset ?? insets.top + 52;
+  const menuMaxHeight = Math.max(280, windowHeight - estimatedTopOffset - insets.bottom - 18);
 
   const menuItems = useMemo(() => {
     return [
@@ -115,20 +120,36 @@ export default function FloatingTabMenu({
   if (!isAuthenticated) return null;
 
   const menuContent = (
-    <View style={styles.menuContainer}>
-      {menuItems.map((item) => {
-        const isActive = pathname === item.route || (item.route !== "/" && pathname.startsWith(item.route));
-        return (
-          <Pressable
-            key={item.route}
-            style={[styles.menuItem, isActive && styles.menuItemActive]}
-            onPress={() => handleNavigate(item.route)}
-          >
-            <Ionicons name={item.icon as any} size={20} color={isActive ? Colors.light.tint : Colors.light.text} />
-            <Text style={[styles.menuText, isActive && styles.menuTextActive]}>{item.name}</Text>
-          </Pressable>
-        );
-      })}
+    <View style={[styles.menuContainer, { maxHeight: menuMaxHeight }]}>
+      <ScrollView
+        style={styles.menuScroll}
+        contentContainerStyle={[
+          styles.menuScrollContent,
+          gridColumnCount === 2 && styles.menuScrollContentTwoCol,
+        ]}
+        showsVerticalScrollIndicator
+        keyboardShouldPersistTaps="handled"
+      >
+        {menuItems.map((item) => {
+          const isActive = pathname === item.route || (item.route !== "/" && pathname.startsWith(item.route));
+          return (
+            <Pressable
+              key={item.route}
+              style={[
+                styles.menuItem,
+                gridColumnCount === 2 && styles.menuItemTwoCol,
+                isActive && styles.menuItemActive,
+              ]}
+              onPress={() => handleNavigate(item.route)}
+            >
+              <Ionicons name={item.icon as any} size={20} color={isActive ? Colors.light.tint : Colors.light.text} />
+              <Text style={[styles.menuText, isActive && styles.menuTextActive]} numberOfLines={2}>
+                {item.name}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
       <Pressable style={styles.signOutItem} onPress={() => void handleSignOut()}>
         <Ionicons name="log-out-outline" size={20} color="#EF4444" />
         <Text style={styles.signOutText}>Sign Out</Text>
@@ -252,14 +273,30 @@ const styles = StyleSheet.create({
   menuContainer: {
     backgroundColor: 'white',
     borderRadius: 16,
-    padding: 8,
-    minWidth: 180,
+    paddingTop: 8,
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    minWidth: 250,
+    maxWidth: 470,
     marginTop: 10,
     elevation: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
+  },
+  menuScroll: {
+    flexGrow: 0,
+  },
+  menuScrollContent: {
+    gap: 2,
+    paddingBottom: 6,
+  },
+  menuScrollContentTwoCol: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: 8,
   },
   menuItem: {
     flexDirection: 'row',
@@ -268,11 +305,19 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 12,
   },
+  menuItemTwoCol: {
+    width: "48%",
+    minHeight: 56,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 8,
+  },
   menuItemActive: {
     backgroundColor: Colors.light.tint + "15",
   },
   menuText: {
-    fontSize: 15,
+    flexShrink: 1,
+    fontSize: 14,
     fontWeight: '600',
     color: Colors.light.text,
   },
@@ -287,7 +332,8 @@ const styles = StyleSheet.create({
     gap: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.light.border,
-    marginTop: 4,
+    marginTop: 2,
+    backgroundColor: "white",
   },
   signOutText: {
     fontSize: 15,

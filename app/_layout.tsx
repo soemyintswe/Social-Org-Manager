@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  InteractionManager,
   Linking,
   Modal,
   Platform,
@@ -44,6 +45,7 @@ const APP_UPDATE_LAST_CHECKED_KEY = "@app_update_last_checked_at";
 const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
 const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
+const UPDATE_INITIAL_CHECK_DELAY_MS = 4500;
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 const FLAG_GRANT_WRITE_URI_PERMISSION = 2;
 const FLAG_ACTIVITY_NEW_TASK = 268435456;
@@ -193,7 +195,11 @@ function RootLayoutNav() {
   }, [isAuthenticated, loading, inLogin, router]);
 
   useEffect(() => {
-    if (loading || Platform.OS === "web") return;
+    if (loading || Platform.OS === "web" || !isAuthenticated || inLogin) return;
+    let disposed = false;
+    let intervalTimer: ReturnType<typeof setInterval> | null = null;
+    let initialTimer: ReturnType<typeof setTimeout> | null = null;
+    let interactionTask: { cancel?: () => void } | null = null;
 
     const checkForUpdateNow = async (force = false) => {
       if (updateCheckInFlightRef.current) return;
@@ -218,12 +224,19 @@ function RootLayoutNav() {
         updateCheckInFlightRef.current = false;
       }
     };
-
-    void checkForUpdateNow(true);
-
-    const timer = setInterval(() => {
-      void checkForUpdateNow(false);
-    }, UPDATE_BACKGROUND_RECHECK_MS);
+    const startBackgroundRecheck = () => {
+      if (intervalTimer) return;
+      intervalTimer = setInterval(() => {
+        void checkForUpdateNow(false);
+      }, UPDATE_BACKGROUND_RECHECK_MS);
+    };
+    interactionTask = InteractionManager.runAfterInteractions(() => {
+      initialTimer = setTimeout(() => {
+        if (disposed) return;
+        void checkForUpdateNow(true);
+        startBackgroundRecheck();
+      }, UPDATE_INITIAL_CHECK_DELAY_MS);
+    });
 
     const sub = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
@@ -235,12 +248,18 @@ function RootLayoutNav() {
 
     
     return () => {
-      clearInterval(timer);
+      disposed = true;
+      if (initialTimer) clearTimeout(initialTimer);
+      if (intervalTimer) clearInterval(intervalTimer);
+      if (interactionTask?.cancel) interactionTask.cancel();
       sub.remove();
     };
-  }, [loading]);
+  }, [loading, isAuthenticated, inLogin]);
 
   useEffect(() => {
+    let disposed = false;
+    let initTimer: ReturnType<typeof setTimeout> | null = null;
+    let interactionTask: { cancel?: () => void } | null = null;
     const initRemoteConfig = async () => {
       const result = await initializeRemoteConfig(__DEV__ ? 0 : 3600000);
       if (!result.ok) {
@@ -251,8 +270,17 @@ function RootLayoutNav() {
       }
       console.log(result.fetched ? "Firebase Remote Config fetched and activated" : "Firebase Remote Config already activated");
     };
-
-    void initRemoteConfig();
+    interactionTask = InteractionManager.runAfterInteractions(() => {
+      initTimer = setTimeout(() => {
+        if (disposed) return;
+        void initRemoteConfig();
+      }, 3000);
+    });
+    return () => {
+      disposed = true;
+      if (initTimer) clearTimeout(initTimer);
+      if (interactionTask?.cancel) interactionTask.cancel();
+    };
   }, []);
 
   useEffect(() => {

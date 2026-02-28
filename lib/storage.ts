@@ -6,6 +6,7 @@ import * as Crypto from "expo-crypto";
 import {
   Member,
   MemberFamilyMember,
+  MemberOrgPositionHistoryEntry,
   OrgEvent,
   Group,
   AttendanceRecord,
@@ -35,6 +36,7 @@ import {
   ChatMessage,
   AppNotification,
   OrgPosition,
+  normalizeMemberStatus,
   normalizeOrgPosition,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
@@ -187,6 +189,174 @@ function normalizeFamilyMembers(input: unknown): MemberFamilyMember[] | undefine
   return rows.length > 0 ? rows : [];
 }
 
+function parseFlexibleDateMs(value: unknown): number {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+
+  const ymd = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (ymd) {
+    const year = Number(ymd[1]);
+    const month = Number(ymd[2]);
+    const day = Number(ymd[3]);
+    const parsed = new Date(year, month - 1, day).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const dmy = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3]);
+    const parsed = new Date(year, month - 1, day).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const parsed = new Date(raw).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toYmdString(value: unknown, fallback?: string): string {
+  const ms = parseFlexibleDateMs(value);
+  if (ms > 0) {
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  if (fallback) return fallback;
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function hasMemberExitStatus(status: unknown): boolean {
+  const normalized = normalizeMemberStatus(status);
+  return normalized === "resigned" || normalized === "deceased" || normalized === "expelled" || normalized === "suspended";
+}
+
+function getMemberDefaultPosition(member: any): OrgPosition {
+  const status = String(member?.status || "").toLowerCase();
+  return normalizeOrgPosition(member?.orgPosition || (status.includes("applicant") ? "applicant" : "member"));
+}
+
+function normalizeOrgPositionHistory(input: unknown): MemberOrgPositionHistoryEntry[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const rows = input
+    .map((row) => {
+      const obj = (row || {}) as any;
+      const position = normalizeOrgPosition(obj.position || "member");
+      const effectiveDate = toYmdString(obj.effectiveDate || obj.assignedAt || obj.date, "");
+      if (!effectiveDate) return null;
+      return {
+        id: obj.id ? String(obj.id) : generateId(),
+        position,
+        effectiveDate,
+        note: obj.note ? String(obj.note).trim() : undefined,
+      } as MemberOrgPositionHistoryEntry;
+    })
+    .filter(Boolean) as MemberOrgPositionHistoryEntry[];
+  return rows.length > 0 ? rows : [];
+}
+
+function collapseOrgPositionHistory(entries: MemberOrgPositionHistoryEntry[]): MemberOrgPositionHistoryEntry[] {
+  const sorted = [...entries].sort((a, b) => {
+    const aMs = parseFlexibleDateMs(a.effectiveDate);
+    const bMs = parseFlexibleDateMs(b.effectiveDate);
+    if (aMs !== bMs) return aMs - bMs;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+  const collapsed: MemberOrgPositionHistoryEntry[] = [];
+  for (const row of sorted) {
+    const last = collapsed[collapsed.length - 1];
+    if (!last) {
+      collapsed.push(row);
+      continue;
+    }
+    if (last.effectiveDate === row.effectiveDate) {
+      collapsed[collapsed.length - 1] = row;
+      continue;
+    }
+    if (last.position === row.position) continue;
+    collapsed.push(row);
+  }
+  return collapsed;
+}
+
+function addPositionHistoryEvent(
+  history: MemberOrgPositionHistoryEntry[],
+  position: OrgPosition,
+  effectiveDate: string,
+  note?: string
+): MemberOrgPositionHistoryEntry[] {
+  const next = [...history];
+  next.push({
+    id: generateId(),
+    position,
+    effectiveDate: toYmdString(effectiveDate),
+    note: note?.trim() || undefined,
+  });
+  return collapseOrgPositionHistory(next);
+}
+
+function ensureMemberPositionHistoryShape(member: any, previousMember?: Member, patch?: any): MemberOrgPositionHistoryEntry[] {
+  const joinDate = toYmdString(member?.joinDate || member?.createdAt);
+  const basePosition = getMemberDefaultPosition(member);
+
+  const fromMember = normalizeOrgPositionHistory(member?.orgPositionHistory);
+  const fromPrevious = normalizeOrgPositionHistory(previousMember?.orgPositionHistory);
+  let history = collapseOrgPositionHistory((fromMember && fromMember.length > 0 ? fromMember : fromPrevious) || []);
+
+  if (history.length === 0) {
+    history = [
+      {
+        id: generateId(),
+        position: previousMember ? getMemberDefaultPosition(previousMember) : basePosition,
+        effectiveDate: joinDate,
+      },
+    ];
+  }
+
+  const previousPosition = previousMember ? getMemberDefaultPosition(previousMember) : undefined;
+  const hasExplicitPositionChange =
+    !!patch && Object.prototype.hasOwnProperty.call(patch, "orgPosition") && previousPosition !== undefined && previousPosition !== basePosition;
+
+  if (hasExplicitPositionChange) {
+    const effectiveDate = toYmdString(
+      patch?.orgPositionEffectiveDate || patch?.positionEffectiveDate || patch?.statusDate || member?.statusDate || new Date()
+    );
+    history = addPositionHistoryEvent(history, basePosition, effectiveDate, patch?.orgPositionNote);
+  } else {
+    const last = history[history.length - 1];
+    if (!last || normalizeOrgPosition(last.position) !== basePosition) {
+      const fallbackDate = toYmdString(member?.statusDate || member?.updatedAt || new Date());
+      history = addPositionHistoryEvent(history, basePosition, fallbackDate);
+    }
+  }
+
+  const exitDate = hasMemberExitStatus(member?.status) ? toYmdString(member?.statusDate || member?.resignDate || member?.updatedAt || new Date()) : "";
+  if (exitDate) {
+    const last = history[history.length - 1];
+    if (last && parseFlexibleDateMs(last.effectiveDate) > parseFlexibleDateMs(exitDate)) {
+      history = addPositionHistoryEvent(history, last.position, exitDate);
+    }
+  }
+
+  return collapseOrgPositionHistory(history);
+}
+
+function normalizeMemberRecord(member: any, previousMember?: Member, patch?: any): Member {
+  const normalized = normalizeMemberPatch(member) as any;
+  normalized.orgPosition = getMemberDefaultPosition(normalized);
+  normalized.orgPositionHistory = ensureMemberPositionHistoryShape(normalized, previousMember, patch);
+  delete normalized.orgPositionEffectiveDate;
+  delete normalized.positionEffectiveDate;
+  delete normalized.orgPositionNote;
+  return normalized as Member;
+}
+
 function normalizeMemberPatch(updates: any): Partial<Member> {
   const next: any = { ...(updates || {}) };
   if ("occupation" in next) {
@@ -197,6 +367,9 @@ function normalizeMemberPatch(updates: any): Partial<Member> {
   }
   if ("familyMembers" in next) {
     next.familyMembers = normalizeFamilyMembers(next.familyMembers);
+  }
+  if ("orgPositionHistory" in next) {
+    next.orgPositionHistory = normalizeOrgPositionHistory(next.orgPositionHistory);
   }
   return next;
 }
@@ -390,7 +563,28 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
 }
 
 // --- Members ---
-export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
+export const getMembers = async (): Promise<Member[]> => {
+  const rows = await safeGet<Member[]>(KEYS.MEMBERS, []);
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  let changed = false;
+  const normalized = rows.map((row: any) => {
+    const next = normalizeMemberRecord(row);
+    if (!changed) {
+      try {
+        changed = JSON.stringify(next) !== JSON.stringify(row);
+      } catch {
+        changed = true;
+      }
+    }
+    return next;
+  });
+
+  if (changed) {
+    await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
+  }
+  return normalized;
+};
 
 export async function syncUsersWithMembers(members: Member[]) {
   try {
@@ -416,8 +610,9 @@ export async function syncUsersWithMembers(members: Member[]) {
 }
 
 export const saveMembers = async (data: Member[]) => {
-  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data));
-  await syncUsersWithMembers(data);
+  const normalized = (Array.isArray(data) ? data : []).map((row: any) => normalizeMemberRecord(row));
+  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
+  await syncUsersWithMembers(normalized);
 };
 
 export const getMemberChangeRequests = () => safeGet<MemberChangeRequest[]>(KEYS.MEMBER_CHANGE_REQUESTS, []);
@@ -492,7 +687,7 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
       occupation: incoming.occupation,
       familyMembers: normalizeFamilyMembers(incoming.familyMembers),
     };
-    nextMembers = [...nextMembers, member];
+    nextMembers = [...nextMembers, normalizeMemberRecord(member, undefined, incoming)];
   } else if (request.action === "update") {
     const targetId = String(request.targetMemberId || "").trim();
     if (!targetId) throw new Error("target_missing");
@@ -500,22 +695,25 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
     if (memberIndex === -1) throw new Error("target_not_found");
 
     const updatePayload = normalizeMemberPatch(request.payload.member || {}) as any;
+    const previousMember = { ...nextMembers[memberIndex] } as Member;
     const requestedId = String(updatePayload.id || "").trim();
     if (requestedId && requestedId !== targetId) {
       const exists = nextMembers.some((item, idx) => idx !== memberIndex && item.id === requestedId);
       if (exists) throw new Error("member_exists");
       await remapMemberIdReferences(targetId, requestedId);
-      nextMembers[memberIndex] = {
+      const merged = {
         ...nextMembers[memberIndex],
         ...updatePayload,
         id: requestedId,
       };
+      nextMembers[memberIndex] = normalizeMemberRecord(merged, previousMember, updatePayload);
     } else {
       delete (updatePayload as any).id;
-      nextMembers[memberIndex] = {
+      const merged = {
         ...nextMembers[memberIndex],
         ...updatePayload,
       };
+      nextMembers[memberIndex] = normalizeMemberRecord(merged, previousMember, updatePayload);
     }
   } else if (request.action === "delete") {
     const targetId = String(request.targetMemberId || "").trim();
@@ -743,12 +941,12 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
   const normalized = normalizeMemberPatch(member) as any;
-  const newMember = {
+  const newMember = normalizeMemberRecord({
     ...normalized,
     id: normalized.id || generateId(),
     avatarColor: normalized.avatarColor || randomColor(),
     createdAt: new Date().toISOString()
-  };
+  }, undefined, normalized);
 
     await saveMembers([...members, newMember]);
 
@@ -766,13 +964,15 @@ export async function updateMember(id: string, updates: any) {
   const idx = members.findIndex(m => m.id === id);
   if (idx !== -1) {
     const normalized = normalizeMemberPatch(updates) as any;
+    const previousMember = { ...members[idx] } as Member;
     const nextId = String(normalized.id || id).trim() || id;
     if (nextId !== id) {
       const exists = members.some((m, i) => i !== idx && String(m.id || "") === nextId);
       if (exists) throw new Error("member_exists");
       await remapMemberIdReferences(id, nextId);
     }
-    members[idx] = { ...members[idx], ...normalized, id: nextId };
+    const merged = { ...members[idx], ...normalized, id: nextId };
+    members[idx] = normalizeMemberRecord(merged, previousMember, normalized);
     await saveMembers(members);
   }
 }
@@ -2579,10 +2779,13 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     receivingBankAccountName: "",
     receivingKbzPayPhone: "",
     receivingKbzPayAccountName: "",
+    receivingKbzPayMmqr: "hQZLQlpQYXlhQE8C8FACEFECMTFXFgl3MnOIbSYDEBAfnwgEAQGfJAEwF419ca5a14952",
     receivingWavePayPhone: "",
     receivingWavePayAccountName: "",
+    receivingWavePayMmqr: "",
     receivingAyaPayPhone: "",
     receivingAyaPayAccountName: "",
+    receivingAyaPayMmqr: "",
   };
   const stored = await safeGet<Partial<AccountSettings> | null>(KEYS.ACCOUNT_SETTINGS, null);
   if (!stored || typeof stored !== "object") return defaults;

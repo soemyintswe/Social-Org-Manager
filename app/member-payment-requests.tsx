@@ -1,7 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  Linking,
   KeyboardAvoidingView,
   Modal,
   Pressable,
@@ -19,7 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
-import * as IntentLauncher from "expo-intent-launcher";
+import QRCode from "react-native-qrcode-svg";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -47,29 +46,9 @@ const REQUEST_KIND_OPTIONS: MemberPaymentRequestKind[] = [
 ];
 
 const WALLET_OPTIONS: MobileWalletProvider[] = ["kbz_pay", "wave_pay", "aya_pay"];
-const WALLET_APP_URLS: Record<MobileWalletProvider, string[]> = {
-  kbz_pay: [
-    "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.kbzbank.kpaycustomer;end",
-    "intent://#Intent;package=com.kbzbank.kpaycustomer;scheme=kbzpay;end",
-    "kbzpay://",
-    "kpay://",
-  ],
-  wave_pay: [
-    "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=mm.com.wavemoney.wavepay;end",
-    "intent://#Intent;package=mm.com.wavemoney.wavepay;scheme=wavepay;end",
-    "wavepay://",
-  ],
-  aya_pay: [
-    "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.ayapay.wallet;end",
-    "intent://#Intent;package=com.ayapay.wallet;scheme=ayapay;end",
-    "ayapay://",
-  ],
-};
-const WALLET_APP_PACKAGE: Record<MobileWalletProvider, string> = {
-  kbz_pay: "com.kbzbank.kpaycustomer",
-  wave_pay: "mm.com.wavemoney.wavepay",
-  aya_pay: "com.ayapay.wallet",
-};
+const DEFAULT_RECEIVING_WALLET_NUMBER = "09773273886";
+const DEFAULT_KBZ_PAY_RAW_QR = "hQZLQlpQYXlhQE8C8FACEFECMTFXFgl3MnOIbSYDEBAfnwgEAQGfJAEwF419ca5a14952";
+type TlvNode = { tag: string; value: string };
 
 const formatDateYmd = (date: Date) => {
   const y = date.getFullYear();
@@ -88,6 +67,137 @@ const parseHm = (raw: string) => {
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
   if (h < 0 || h > 23 || m < 0 || m > 59) return null;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+const parseRootTlv = (raw: string): TlvNode[] | null => {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  let cursor = 0;
+  const nodes: TlvNode[] = [];
+  while (cursor < text.length) {
+    if (cursor + 4 > text.length) return null;
+    const tag = text.slice(cursor, cursor + 2);
+    const lenRaw = text.slice(cursor + 2, cursor + 4);
+    if (!/^\d{2}$/.test(tag) || !/^\d{2}$/.test(lenRaw)) return null;
+    const len = Number(lenRaw);
+    const valueStart = cursor + 4;
+    const valueEnd = valueStart + len;
+    if (valueEnd > text.length) return null;
+    nodes.push({ tag, value: text.slice(valueStart, valueEnd) });
+    cursor = valueEnd;
+  }
+  return nodes;
+};
+
+const buildRootTlv = (nodes: TlvNode[]): string =>
+  nodes.map((node) => `${node.tag}${String(node.value.length).padStart(2, "0")}${node.value}`).join("");
+
+const crc16CcittFalse = (data: string): string => {
+  let crc = 0xffff;
+  for (let i = 0; i < data.length; i += 1) {
+    crc ^= data.charCodeAt(i) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 0x8000) !== 0 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+};
+
+const buildMmqrPayloadWithAmount = (rawPayload: string, amountKs: number): { payload: string; error: string } => {
+  const compact = String(rawPayload || "").replace(/\s+/g, "").trim().toUpperCase();
+  if (!compact) return { payload: "", error: "MMQR payload မရှိသေးပါ။" };
+  const parsed = parseRootTlv(compact);
+  if (!parsed || parsed.length === 0) return { payload: "", error: "MMQR payload format မမှန်ပါ။" };
+  const rootIndicator = parsed.find((node) => node.tag === "00");
+  if (!rootIndicator?.value?.startsWith("01")) {
+    return { payload: "", error: "MMQR payload မမှန်ပါ (Tag 00 မကိုက်ညီ)။" };
+  }
+
+  const items = parsed.filter((node) => node.tag !== "63" && node.tag !== "54");
+  const amountValue = Number(amountKs).toFixed(2);
+  const insertBefore = items.findIndex((node) => ["58", "59", "60", "62"].includes(node.tag));
+  const nextItems = [...items];
+  const modeIndex = nextItems.findIndex((node) => node.tag === "01");
+  if (modeIndex >= 0) {
+    nextItems[modeIndex] = { tag: "01", value: "12" };
+  } else {
+    const rootIndex = nextItems.findIndex((node) => node.tag === "00");
+    if (rootIndex >= 0) nextItems.splice(rootIndex + 1, 0, { tag: "01", value: "12" });
+  }
+  if (insertBefore >= 0) {
+    nextItems.splice(insertBefore, 0, { tag: "54", value: amountValue });
+  } else {
+    nextItems.push({ tag: "54", value: amountValue });
+  }
+
+  const withoutCrc = `${buildRootTlv(nextItems)}6304`;
+  const crc = crc16CcittFalse(withoutCrc);
+  return { payload: `${withoutCrc}${crc}`, error: "" };
+};
+
+const applyRawAmountTemplate = (
+  rawPayload: string,
+  amountKs: number
+): { payload: string; usedTemplate: boolean } => {
+  const raw = String(rawPayload || "").trim();
+  if (!raw) return { payload: "", usedTemplate: false };
+  const amountInt = String(Math.round(Number(amountKs) || 0));
+  const amount2dp = Number(amountKs).toFixed(2);
+  const amountCents = String(Math.round((Number(amountKs) || 0) * 100));
+  const replacements: [string, string][] = [
+    ["{AMOUNT}", amountInt],
+    ["{{AMOUNT}}", amountInt],
+    ["{AMOUNT_INT}", amountInt],
+    ["{AMOUNT_2DP}", amount2dp],
+    ["{AMOUNT_CENTS}", amountCents],
+  ];
+
+  let next = raw;
+  let usedTemplate = false;
+  for (const [token, value] of replacements) {
+    if (!next.includes(token)) continue;
+    next = next.split(token).join(value);
+    usedTemplate = true;
+  }
+  return { payload: next, usedTemplate };
+};
+
+const sanitizeMerchantName = (name: string): string => {
+  const raw = String(name || "").trim().toUpperCase();
+  const cleaned = raw.replace(/[^A-Z0-9 .,\-_/]/g, "").replace(/\s+/g, " ").trim();
+  return (cleaned || "ORGHUB").slice(0, 25);
+};
+
+const buildGenericMmqrFromPhone = (
+  phoneNumber: string,
+  amountKs: number,
+  merchantName?: string
+): { payload: string; error: string; isFallback: boolean } => {
+  const digits = String(phoneNumber || "").replace(/\D/g, "");
+  if (!digits) return { payload: "", error: "လက်ခံမည့်ဖုန်းနံပါတ် မရှိသေးပါ။", isFallback: true };
+  const local = digits.startsWith("0") ? digits.slice(1) : digits.startsWith("95") ? digits.slice(2) : digits;
+  if (!local) return { payload: "", error: "လက်ခံမည့်ဖုန်းနံပါတ် မမှန်ပါ။", isFallback: true };
+  const mmMobile = `0095${local}`;
+  const gui = "A000000677010111";
+  const merchantAccount = buildRootTlv([
+    { tag: "00", value: gui },
+    { tag: "01", value: mmMobile },
+  ]);
+  const amountValue = Number(amountKs).toFixed(2);
+  const payloadNoCrc = buildRootTlv([
+    { tag: "00", value: "01" },
+    { tag: "01", value: "12" },
+    { tag: "26", value: merchantAccount },
+    { tag: "52", value: "0000" },
+    { tag: "53", value: "104" },
+    { tag: "54", value: amountValue },
+    { tag: "58", value: "MM" },
+    { tag: "59", value: sanitizeMerchantName(merchantName || "") },
+    { tag: "60", value: "YANGON" },
+    { tag: "62", value: buildRootTlv([{ tag: "01", value: "ORGHUB" }]) },
+  ]) + "6304";
+  const crc = crc16CcittFalse(payloadNoCrc);
+  return { payload: `${payloadNoCrc}${crc}`, error: "", isFallback: true };
 };
 
 const toDisplayDateTime = (date?: string, time?: string, fallbackIso?: string) => {
@@ -109,7 +219,7 @@ const toDisplayDateTime = (date?: string, time?: string, fallbackIso?: string) =
 export default function MemberPaymentRequestsScreen() {
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
-  const { kind } = useLocalSearchParams<{ kind?: string }>();
+  const { kind, openCreate: openCreateParam } = useLocalSearchParams<{ kind?: string; openCreate?: string }>();
   const {
     memberPaymentRequests = [],
     members = [],
@@ -148,6 +258,8 @@ export default function MemberPaymentRequestsScreen() {
   const [note, setNote] = useState("");
   const [proofImage, setProofImage] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [amountTouched, setAmountTouched] = useState(false);
+  const amountInputRef = useRef<TextInput | null>(null);
 
   const [reviewModalId, setReviewModalId] = useState<string | null>(null);
   const [reviewDecision, setReviewDecision] = useState<"approved" | "rejected">("approved");
@@ -158,6 +270,21 @@ export default function MemberPaymentRequestsScreen() {
 
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
   const canReview = currentUser?.systemRole === "admin" || role === "treasurer";
+  const shouldOpenCreateFromParam = useMemo(() => {
+    const value = String(openCreateParam || "").trim().toLowerCase();
+    return value === "1" || value === "true" || value === "yes" || value === "open";
+  }, [openCreateParam]);
+
+  useEffect(() => {
+    const normalizedKind = String(kind || "").trim() as MemberPaymentRequestKind;
+    if (!REQUEST_KIND_OPTIONS.includes(normalizedKind)) return;
+    setRequestKind(normalizedKind);
+  }, [kind]);
+
+  useEffect(() => {
+    if (!shouldOpenCreateFromParam) return;
+    setOpenCreate(true);
+  }, [shouldOpenCreateFromParam]);
 
   const visibleRequests = useMemo(() => {
     const sorted = [...memberPaymentRequests].sort(
@@ -194,29 +321,88 @@ export default function MemberPaymentRequestsScreen() {
     });
   }, [transactions, requestKind, selectedForMemberId, feeStartDate, feeEndDate]);
 
-  const openWalletApp = async (provider: MobileWalletProvider) => {
-    if (Platform.OS === "android") {
-      try {
-        await IntentLauncher.startActivityAsync("android.intent.action.MAIN", {
-          packageName: WALLET_APP_PACKAGE[provider],
-          category: "android.intent.category.LAUNCHER",
-        });
-        return;
-      } catch {}
-    }
+  const numericAmount = useMemo(() => {
+    const cleaned = String(amount || "").replace(/[^\d.]/g, "");
+    const parsed = Number(cleaned);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.round(parsed);
+  }, [amount]);
 
-    const urls = WALLET_APP_URLS[provider];
-    for (const url of urls) {
-      try {
-        await Linking.openURL(url);
-        return;
-      } catch {}
+  const selectedReceivingWallet = useMemo(() => {
+    if (walletProvider === "kbz_pay") {
+      return {
+        number: String(accountSettings?.receivingKbzPayPhone || "").trim(),
+        name: String(accountSettings?.receivingKbzPayAccountName || "").trim(),
+        mmqr: String(accountSettings?.receivingKbzPayMmqr || DEFAULT_KBZ_PAY_RAW_QR).trim(),
+      };
     }
-    Alert.alert(
-      "Wallet App မဖွင့်နိုင်ပါ",
-      `Package: ${WALLET_APP_PACKAGE[provider]}\nသက်ဆိုင်ရာ Wallet App ကို ဖုန်းတွင် install လုပ်ထားသလား စစ်ပါ။`
-    );
-  };
+    if (walletProvider === "wave_pay") {
+      return {
+        number: String(accountSettings?.receivingWavePayPhone || "").trim(),
+        name: String(accountSettings?.receivingWavePayAccountName || "").trim(),
+        mmqr: String(accountSettings?.receivingWavePayMmqr || "").trim(),
+      };
+    }
+    return {
+      number: String(accountSettings?.receivingAyaPayPhone || "").trim(),
+      name: String(accountSettings?.receivingAyaPayAccountName || "").trim(),
+      mmqr: String(accountSettings?.receivingAyaPayMmqr || "").trim(),
+    };
+  }, [
+    walletProvider,
+    accountSettings?.receivingKbzPayPhone,
+    accountSettings?.receivingKbzPayAccountName,
+    accountSettings?.receivingKbzPayMmqr,
+    accountSettings?.receivingWavePayPhone,
+    accountSettings?.receivingWavePayAccountName,
+    accountSettings?.receivingWavePayMmqr,
+    accountSettings?.receivingAyaPayPhone,
+    accountSettings?.receivingAyaPayAccountName,
+    accountSettings?.receivingAyaPayMmqr,
+  ]);
+
+  const receivingWalletNumber = selectedReceivingWallet.number || DEFAULT_RECEIVING_WALLET_NUMBER;
+  const receivingWalletName = selectedReceivingWallet.name;
+  const hasValidAmount = numericAmount > 0;
+  const mmqrBuild = useMemo(() => {
+    if (!hasValidAmount) return { payload: "", error: "", isFallback: false, mode: "none" as const, amountInQr: false };
+    const rawPayload = String(selectedReceivingWallet.mmqr || "").trim();
+    const rawTemplate = applyRawAmountTemplate(rawPayload, numericAmount);
+    const preparedRawPayload = rawTemplate.payload;
+    if (rawPayload) {
+      const emvResult = buildMmqrPayloadWithAmount(preparedRawPayload, numericAmount);
+      if (emvResult.payload) {
+        return { payload: emvResult.payload, error: "", isFallback: false, mode: "emv" as const, amountInQr: true };
+      }
+      if (rawTemplate.usedTemplate) {
+        return {
+          payload: preparedRawPayload,
+          error: "",
+          isFallback: false,
+          mode: "raw_template" as const,
+          amountInQr: true,
+        };
+      }
+      // Non-EMV raw payload:
+      // - KBZ: keep static raw because user provided proprietary payload that scans reliably.
+      // - Wave/AYA: prefer generic MMQR-with-amount so wallets can receive amount in QR.
+      if (walletProvider === "kbz_pay") {
+        return { payload: rawPayload, error: "", isFallback: false, mode: "raw" as const, amountInQr: false };
+      }
+      const genericFromPhone = buildGenericMmqrFromPhone(receivingWalletNumber, numericAmount, receivingWalletName);
+      if (genericFromPhone.payload) {
+        return {
+          ...genericFromPhone,
+          mode: "generic_from_phone" as const,
+          amountInQr: true,
+        };
+      }
+      return { payload: rawPayload, error: "", isFallback: false, mode: "raw" as const, amountInQr: false };
+    }
+    const generic = buildGenericMmqrFromPhone(receivingWalletNumber, numericAmount, receivingWalletName);
+    if (generic.payload) return { ...generic, mode: "generic" as const, amountInQr: true };
+    return { payload: "", error: generic.error || "MMQR မပြနိုင်ပါ။", isFallback: false, mode: "none" as const, amountInQr: false };
+  }, [hasValidAmount, selectedReceivingWallet.mmqr, numericAmount, receivingWalletNumber, receivingWalletName, walletProvider]);
 
   const selectSelf = () => {
     setPayForType("self");
@@ -403,6 +589,7 @@ export default function MemberPaymentRequestsScreen() {
         </View>
         <Pressable onPress={() => setOpenCreate(true)} style={styles.addBtn}>
           <Ionicons name="add" size={18} color="#fff" />
+          <Text style={styles.addBtnText}>အသစ်ထည့်ရန်</Text>
         </Pressable>
       </View>
 
@@ -571,7 +758,18 @@ export default function MemberPaymentRequestsScreen() {
             )}
 
             <Text style={styles.label}>ငွေပမာဏ (KS)</Text>
-            <TextInput style={styles.input} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" />
+            <TextInput
+              ref={amountInputRef}
+              style={[styles.input, amountTouched && !hasValidAmount && styles.inputRequired]}
+              value={amount}
+              onChangeText={setAmount}
+              onBlur={() => setAmountTouched(true)}
+              keyboardType="numeric"
+              placeholder="0"
+            />
+            {amountTouched && !hasValidAmount ? (
+              <Text style={styles.requiredHint}>QR ထုတ်ရန် ငွေပမာဏ (KS) ကို အရင်ဖြည့်ပါ။</Text>
+            ) : null}
 
             <Text style={styles.label}>ငွေပေးသွင်းသူ (လက်ရှိ account)</Text>
             <TextInput style={styles.input} value={payerName} onChangeText={setPayerName} placeholder="အမည်" />
@@ -686,16 +884,62 @@ export default function MemberPaymentRequestsScreen() {
                 </Pressable>
               ))}
             </View>
-            <View style={styles.walletOpenRow}>
-              <Pressable style={styles.walletOpenBtn} onPress={() => void openWalletApp("kbz_pay")}>
-                <Text style={styles.walletOpenText}>Open KBZ Pay</Text>
-              </Pressable>
-              <Pressable style={styles.walletOpenBtn} onPress={() => void openWalletApp("wave_pay")}>
-                <Text style={styles.walletOpenText}>Open Wave Pay</Text>
-              </Pressable>
-              <Pressable style={styles.walletOpenBtn} onPress={() => void openWalletApp("aya_pay")}>
-                <Text style={styles.walletOpenText}>Open AYA Pay</Text>
-              </Pressable>
+            <View style={styles.walletQrCard}>
+              <Text style={styles.walletQrTitle}>MMQR Scan ဖြင့် ငွေပေးချေရန်</Text>
+              {hasValidAmount && mmqrBuild.payload ? (
+                <View style={styles.walletQrBox}>
+                  <QRCode value={mmqrBuild.payload} size={170} />
+                </View>
+              ) : (
+                <Pressable
+                  style={styles.walletQrBlocked}
+                  onPress={() => {
+                    if (!hasValidAmount) {
+                      setAmountTouched(true);
+                      amountInputRef.current?.focus();
+                    }
+                  }}
+                >
+                  <Ionicons name="alert-circle-outline" size={18} color="#B45309" />
+                  <Text style={styles.walletQrBlockedText}>
+                    {!hasValidAmount
+                      ? "Amount ဖြည့်ပြီးမှ QR ထွက်ပါမည်"
+                      : `MMQR မပြနိုင်ပါ: ${mmqrBuild.error || "Settings တွင် MMQR payload ထည့်ပါ"}`}
+                  </Text>
+                </Pressable>
+              )}
+              <Text style={styles.walletQrMeta}>
+                Wallet: {MOBILE_WALLET_PROVIDER_LABELS[walletProvider]}
+              </Text>
+              <Text style={styles.walletQrMeta}>
+                Account: {receivingWalletNumber}
+                {receivingWalletName ? ` / ${receivingWalletName}` : ""}
+              </Text>
+              <Text style={styles.walletQrMeta}>Amount: {hasValidAmount ? `${numericAmount.toLocaleString()} KS` : "-"}</Text>
+              <Text style={styles.walletQrHint}>
+                Mobile Wallet App ၏ MMQR Scan ဖြင့်ဖတ်ပြီး ငွေပေးချေပါ။
+              </Text>
+              {mmqrBuild.mode === "raw" ? (
+                <Text style={styles.walletQrWarn}>
+                  Note: KBZ static raw QR ဖြစ်သောကြောင့် Amount auto-fill မဝင်နိုင်ပါ။ Scan ပြီး Wallet app ထဲတွင် Amount ကိုထည့်ပါ၊ သို့မဟုတ်
+                  Settings မှာ MMQR payload template (`{"{AMOUNT}"}` / `{"{AMOUNT_2DP}"}` / `{"{AMOUNT_CENTS}"}`) အသုံးပြုပါ။
+                </Text>
+              ) : null}
+              {mmqrBuild.mode === "raw_template" ? (
+                <Text style={styles.walletQrHint}>
+                  Template payload ဖြင့် Amount ထည့်သွင်းထားပါသည်။
+                </Text>
+              ) : null}
+              {mmqrBuild.mode === "generic_from_phone" ? (
+                <Text style={styles.walletQrHint}>
+                  Wallet raw QR သည် amount field မပါတာကြောင့် phone-based MMQR ဖြင့် amount ကို ထည့်ပြထားပါသည်။
+                </Text>
+              ) : null}
+              {mmqrBuild.isFallback ? (
+                <Text style={styles.walletQrWarn}>
+                  Note: Settings တွင် raw MMQR payload မသတ်မှတ်ရသေးသောကြောင့် generic MMQR ဖြင့်ပြထားပါသည်။
+                </Text>
+              ) : null}
             </View>
             <View style={styles.recvCard}>
               <Text style={styles.recvTitle}>ဘဏ္ဍာရေးမှူး လက်ခံမည့်အကောင့်များ</Text>
@@ -709,21 +953,29 @@ export default function MemberPaymentRequestsScreen() {
                   KBZ Pay: {accountSettings?.receivingKbzPayPhone || "-"} / {accountSettings?.receivingKbzPayAccountName || "-"}
                 </Text>
               ) : null}
+              {accountSettings?.receivingKbzPayMmqr ? <Text style={styles.recvLine}>KBZ Pay MMQR: configured</Text> : null}
               {(accountSettings?.receivingWavePayPhone || accountSettings?.receivingWavePayAccountName) ? (
                 <Text style={styles.recvLine}>
                   Wave Pay: {accountSettings?.receivingWavePayPhone || "-"} / {accountSettings?.receivingWavePayAccountName || "-"}
                 </Text>
               ) : null}
+              {accountSettings?.receivingWavePayMmqr ? <Text style={styles.recvLine}>Wave Pay MMQR: configured</Text> : null}
               {(accountSettings?.receivingAyaPayPhone || accountSettings?.receivingAyaPayAccountName) ? (
                 <Text style={styles.recvLine}>
                   AYA Pay: {accountSettings?.receivingAyaPayPhone || "-"} / {accountSettings?.receivingAyaPayAccountName || "-"}
                 </Text>
               ) : null}
+              {accountSettings?.receivingAyaPayMmqr ? <Text style={styles.recvLine}>AYA Pay MMQR: configured</Text> : null}
               {!accountSettings?.receivingBankAccountNumber &&
                 !accountSettings?.receivingKbzPayPhone &&
                 !accountSettings?.receivingWavePayPhone &&
-                !accountSettings?.receivingAyaPayPhone ? (
-                <Text style={styles.recvHint}>Account Settings တွင် receiving account များကို အရင်သတ်မှတ်ပေးပါ။</Text>
+                !accountSettings?.receivingAyaPayPhone &&
+                !accountSettings?.receivingKbzPayMmqr &&
+                !accountSettings?.receivingWavePayMmqr &&
+                !accountSettings?.receivingAyaPayMmqr ? (
+                <Text style={styles.recvHint}>
+                  Account Settings တွင် receiving account နှင့် MMQR payload ကို သတ်မှတ်ပေးပါ။
+                </Text>
               ) : null}
             </View>
 
@@ -899,13 +1151,16 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerSub: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   addBtn: {
-    width: 34,
-    height: 34,
+    minHeight: 34,
     borderRadius: 17,
     backgroundColor: Colors.light.tint,
+    paddingHorizontal: 11,
     alignItems: "center",
     justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
   },
+  addBtnText: { color: "#fff", fontSize: 12, fontFamily: "Inter_700Bold" },
   card: {
     backgroundColor: Colors.light.surface,
     borderWidth: 1,
@@ -946,6 +1201,15 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: Colors.light.text,
   },
+  inputRequired: {
+    borderColor: "#DC2626",
+  },
+  requiredHint: {
+    marginTop: 4,
+    color: "#DC2626",
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   pill: {
     borderWidth: 1,
@@ -972,16 +1236,65 @@ const styles = StyleSheet.create({
   walletBtnActive: { borderColor: Colors.light.tint, backgroundColor: Colors.light.tint + "20" },
   walletText: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   walletTextActive: { color: Colors.light.tint },
-  walletOpenRow: { marginTop: 8, flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  walletOpenBtn: {
-    borderRadius: 8,
+  walletQrCard: {
+    marginTop: 10,
     borderWidth: 1,
-    borderColor: Colors.light.tint,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: Colors.light.tint + "14",
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    backgroundColor: Colors.light.surface,
+    padding: 12,
+    alignItems: "center",
   },
-  walletOpenText: { color: Colors.light.tint, fontSize: 12, fontFamily: "Inter_700Bold" },
+  walletQrTitle: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  walletQrBox: {
+    marginTop: 10,
+    marginBottom: 8,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    padding: 10,
+  },
+  walletQrBlocked: {
+    marginTop: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#F59E0B",
+    borderStyle: "dashed",
+    borderRadius: 10,
+    backgroundColor: "#FFFBEB",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  walletQrBlockedText: {
+    color: "#92400E",
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+  },
+  walletQrMeta: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+    marginTop: 2,
+    textAlign: "center",
+  },
+  walletQrHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    textAlign: "center",
+  },
+  walletQrWarn: {
+    marginTop: 6,
+    fontSize: 11.5,
+    color: "#B45309",
+    fontFamily: "Inter_600SemiBold",
+    textAlign: "center",
+  },
   memberPreview: {
     marginTop: 8,
     borderWidth: 1,

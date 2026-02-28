@@ -1,7 +1,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -96,6 +96,7 @@ function eventRequiredForCategory(categoryId: string): boolean {
 }
 
 export default function ExpenseClaimsScreen() {
+  const { openCreate: openCreateParam } = useLocalSearchParams<{ openCreate?: string }>();
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
   const {
@@ -118,6 +119,10 @@ export default function ExpenseClaimsScreen() {
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
   const canApprove = currentUser?.systemRole === "admin" || role === "patron" || role === "chairperson" || role === "vice_chairperson";
   const canDisburse = currentUser?.systemRole === "admin" || role === "treasurer";
+  const shouldOpenCreateFromParam = useMemo(() => {
+    const value = String(openCreateParam || "").trim().toLowerCase();
+    return value === "1" || value === "true" || value === "yes" || value === "open";
+  }, [openCreateParam]);
 
   const [tab, setTab] = useState<Tab>("claims");
   const [customExpenseCategories, setCustomExpenseCategories] = useState<{ id: string; label: string }[]>([]);
@@ -369,7 +374,7 @@ export default function ExpenseClaimsScreen() {
     return ruleKey;
   };
 
-  const resetClaimForm = () => {
+  const resetClaimForm = useCallback(() => {
     setClaimDate(todayYmd());
     setClaimTime(nowHm());
     setCategoryId("health_support");
@@ -390,12 +395,17 @@ export default function ExpenseClaimsScreen() {
     setReason("");
     setRequestedAmount("");
     setSelectedEventId("");
-  };
+  }, [currentMember?.id]);
 
-  const openClaimModal = () => {
+  const openClaimModal = useCallback(() => {
     resetClaimForm();
     setShowClaimModal(true);
-  };
+  }, [resetClaimForm]);
+
+  useEffect(() => {
+    if (!shouldOpenCreateFromParam) return;
+    openClaimModal();
+  }, [shouldOpenCreateFromParam, openClaimModal]);
 
   const navigateToAddEvent = async () => {
     await saveClaimDraft();

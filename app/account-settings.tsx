@@ -64,10 +64,13 @@ export default function AccountSettingsScreen() {
   const [receivingBankAccountName, setReceivingBankAccountName] = useState(accountSettings.receivingBankAccountName || "");
   const [receivingKbzPayPhone, setReceivingKbzPayPhone] = useState(accountSettings.receivingKbzPayPhone || "");
   const [receivingKbzPayAccountName, setReceivingKbzPayAccountName] = useState(accountSettings.receivingKbzPayAccountName || "");
+  const [receivingKbzPayMmqr, setReceivingKbzPayMmqr] = useState(accountSettings.receivingKbzPayMmqr || "");
   const [receivingWavePayPhone, setReceivingWavePayPhone] = useState(accountSettings.receivingWavePayPhone || "");
   const [receivingWavePayAccountName, setReceivingWavePayAccountName] = useState(accountSettings.receivingWavePayAccountName || "");
+  const [receivingWavePayMmqr, setReceivingWavePayMmqr] = useState(accountSettings.receivingWavePayMmqr || "");
   const [receivingAyaPayPhone, setReceivingAyaPayPhone] = useState(accountSettings.receivingAyaPayPhone || "");
   const [receivingAyaPayAccountName, setReceivingAyaPayAccountName] = useState(accountSettings.receivingAyaPayAccountName || "");
+  const [receivingAyaPayMmqr, setReceivingAyaPayMmqr] = useState(accountSettings.receivingAyaPayMmqr || "");
   const [syncing, setSyncing] = useState(false);
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
@@ -102,10 +105,13 @@ export default function AccountSettingsScreen() {
     setReceivingBankAccountName(accountSettings.receivingBankAccountName || "");
     setReceivingKbzPayPhone(accountSettings.receivingKbzPayPhone || "");
     setReceivingKbzPayAccountName(accountSettings.receivingKbzPayAccountName || "");
+    setReceivingKbzPayMmqr(accountSettings.receivingKbzPayMmqr || "");
     setReceivingWavePayPhone(accountSettings.receivingWavePayPhone || "");
     setReceivingWavePayAccountName(accountSettings.receivingWavePayAccountName || "");
+    setReceivingWavePayMmqr(accountSettings.receivingWavePayMmqr || "");
     setReceivingAyaPayPhone(accountSettings.receivingAyaPayPhone || "");
     setReceivingAyaPayAccountName(accountSettings.receivingAyaPayAccountName || "");
+    setReceivingAyaPayMmqr(accountSettings.receivingAyaPayMmqr || "");
   }, [
     accountSettings.syncServerUrl,
     accountSettings.syncEnabled,
@@ -119,10 +125,13 @@ export default function AccountSettingsScreen() {
     accountSettings.receivingBankAccountName,
     accountSettings.receivingKbzPayPhone,
     accountSettings.receivingKbzPayAccountName,
+    accountSettings.receivingKbzPayMmqr,
     accountSettings.receivingWavePayPhone,
     accountSettings.receivingWavePayAccountName,
+    accountSettings.receivingWavePayMmqr,
     accountSettings.receivingAyaPayPhone,
     accountSettings.receivingAyaPayAccountName,
+    accountSettings.receivingAyaPayMmqr,
   ]);
 
   const getReceivingValuesForSave = () => {
@@ -133,10 +142,13 @@ export default function AccountSettingsScreen() {
         receivingBankAccountName: receivingBankAccountName.trim(),
         receivingKbzPayPhone: receivingKbzPayPhone.trim(),
         receivingKbzPayAccountName: receivingKbzPayAccountName.trim(),
+        receivingKbzPayMmqr: receivingKbzPayMmqr.trim(),
         receivingWavePayPhone: receivingWavePayPhone.trim(),
         receivingWavePayAccountName: receivingWavePayAccountName.trim(),
+        receivingWavePayMmqr: receivingWavePayMmqr.trim(),
         receivingAyaPayPhone: receivingAyaPayPhone.trim(),
         receivingAyaPayAccountName: receivingAyaPayAccountName.trim(),
+        receivingAyaPayMmqr: receivingAyaPayMmqr.trim(),
       };
     }
     return {
@@ -145,10 +157,13 @@ export default function AccountSettingsScreen() {
       receivingBankAccountName: accountSettings.receivingBankAccountName || "",
       receivingKbzPayPhone: accountSettings.receivingKbzPayPhone || "",
       receivingKbzPayAccountName: accountSettings.receivingKbzPayAccountName || "",
+      receivingKbzPayMmqr: accountSettings.receivingKbzPayMmqr || "",
       receivingWavePayPhone: accountSettings.receivingWavePayPhone || "",
       receivingWavePayAccountName: accountSettings.receivingWavePayAccountName || "",
+      receivingWavePayMmqr: accountSettings.receivingWavePayMmqr || "",
       receivingAyaPayPhone: accountSettings.receivingAyaPayPhone || "",
       receivingAyaPayAccountName: accountSettings.receivingAyaPayAccountName || "",
+      receivingAyaPayMmqr: accountSettings.receivingAyaPayMmqr || "",
     };
   };
 
@@ -472,7 +487,7 @@ export default function AccountSettingsScreen() {
           <View style={styles.securityCard}>
             <Text style={styles.sectionTitle}>Payment Receiving Accounts</Text>
             <Text style={styles.sectionDesc}>
-              ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank နှင့် Mobile Wallet အကောင့်များကို သတ်မှတ်ပါ။
+              ဘဏ္ဍာရေးမှူး လက်ခံမည့် Bank/Mobile Wallet အကောင့်များကို သတ်မှတ်ပြီး Wallet app မှ static MMQR payload ကိုပါ ထည့်ပေးပါ။
             </Text>
 
             <Text style={styles.label}>Bank Name</Text>
@@ -486,16 +501,43 @@ export default function AccountSettingsScreen() {
             <TextInput style={styles.input} value={receivingKbzPayPhone} onChangeText={setReceivingKbzPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
             <Text style={styles.label}>KBZ Pay Account Name</Text>
             <TextInput style={styles.input} value={receivingKbzPayAccountName} onChangeText={setReceivingKbzPayAccountName} placeholder="Account Name" />
+            <Text style={styles.label}>KBZ Pay MMQR Payload (Raw)</Text>
+            <TextInput
+              style={[styles.input, { minHeight: 72, textAlignVertical: "top" }]}
+              value={receivingKbzPayMmqr}
+              onChangeText={setReceivingKbzPayMmqr}
+              placeholder="static MMQR payload သို့မဟုတ် template ({AMOUNT}/{AMOUNT_2DP}/{AMOUNT_CENTS})"
+              multiline
+            />
+            <Text style={styles.sectionDesc}>
+              KBZ proprietary static QR အတွက် amount auto-fill မရနိုင်ပါ။ Template token ပါသည့် payload (ဥပမာ {"{AMOUNT_2DP}"}) ရှိမှ amount ကို QR ထဲထည့်နိုင်ပါသည်။
+            </Text>
 
             <Text style={styles.label}>Wave Pay Phone</Text>
             <TextInput style={styles.input} value={receivingWavePayPhone} onChangeText={setReceivingWavePayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
             <Text style={styles.label}>Wave Pay Account Name</Text>
             <TextInput style={styles.input} value={receivingWavePayAccountName} onChangeText={setReceivingWavePayAccountName} placeholder="Account Name" />
+            <Text style={styles.label}>Wave Pay MMQR Payload (Raw)</Text>
+            <TextInput
+              style={[styles.input, { minHeight: 72, textAlignVertical: "top" }]}
+              value={receivingWavePayMmqr}
+              onChangeText={setReceivingWavePayMmqr}
+              placeholder="Wallet app မှ ထုတ်ယူထားသော static MMQR string ကို paste လုပ်ပါ"
+              multiline
+            />
 
             <Text style={styles.label}>AYA Pay Phone</Text>
             <TextInput style={styles.input} value={receivingAyaPayPhone} onChangeText={setReceivingAyaPayPhone} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
             <Text style={styles.label}>AYA Pay Account Name</Text>
             <TextInput style={styles.input} value={receivingAyaPayAccountName} onChangeText={setReceivingAyaPayAccountName} placeholder="Account Name" />
+            <Text style={styles.label}>AYA Pay MMQR Payload (Raw)</Text>
+            <TextInput
+              style={[styles.input, { minHeight: 72, textAlignVertical: "top" }]}
+              value={receivingAyaPayMmqr}
+              onChangeText={setReceivingAyaPayMmqr}
+              placeholder="Wallet app မှ ထုတ်ယူထားသော static MMQR string ကို paste လုပ်ပါ"
+              multiline
+            />
           </View>
         )}
 

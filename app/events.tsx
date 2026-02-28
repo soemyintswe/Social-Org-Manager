@@ -195,7 +195,7 @@ function mapClaimCategoryToTopic(categoryId?: string): string {
 }
 
 export default function EventsScreen() {
-  const params = useLocalSearchParams<{ source?: string; claimCategory?: string }>();
+  const params = useLocalSearchParams<{ source?: string; claimCategory?: string; openCreate?: string }>();
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
   const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
@@ -211,6 +211,7 @@ export default function EventsScreen() {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [claimPrefillApplied, setClaimPrefillApplied] = useState(false);
+  const [quickCreateApplied, setQuickCreateApplied] = useState(false);
   const [topicPickerVisible, setTopicPickerVisible] = useState(false);
   const [relationPickerVisible, setRelationPickerVisible] = useState(false);
   const [conditionPickerVisible, setConditionPickerVisible] = useState(false);
@@ -298,6 +299,10 @@ export default function EventsScreen() {
   const isHealthNotice = topic.includes("ကျန်းမာရေး");
   const isFuneralNotice = topic.includes("နာရေး");
   const launchedFromClaim = String(params?.source || "") === "expense_claim";
+  const launchedFromQuickAction =
+    !launchedFromClaim &&
+    (String(params?.source || "") === "quick_action" ||
+      ["1", "true", "yes", "open"].includes(String(params?.openCreate || "").trim().toLowerCase()));
   const claimPrefillTopic = mapClaimCategoryToTopic(String(params?.claimCategory || ""));
 
   useEffect(() => {
@@ -312,6 +317,18 @@ export default function EventsScreen() {
     setModalVisible(true);
     setClaimPrefillApplied(true);
   }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic]);
+
+  useEffect(() => {
+    if (!launchedFromQuickAction || quickCreateApplied) return;
+    if (!canCreateEvent) {
+      Alert.alert("ခွင့်မပြုပါ", "သတင်းအသစ်တင်ခွင့် မရှိပါ။");
+      setQuickCreateApplied(true);
+      return;
+    }
+    resetForm();
+    setModalVisible(true);
+    setQuickCreateApplied(true);
+  }, [launchedFromQuickAction, quickCreateApplied, canCreateEvent]);
 
   useEffect(() => {
     let mounted = true;
@@ -877,7 +894,7 @@ export default function EventsScreen() {
         {canCreateEvent ? (
           <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={styles.headerActionBtn}>
             <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
-            <Text style={styles.headerActionText}>အသစ်</Text>
+            <Text style={styles.headerActionText}>အသစ်ထည့်ရန်</Text>
           </Pressable>
         ) : (
           <View style={{ width: 24 }} />

@@ -164,7 +164,7 @@ export default function DashboardScreen() {
     isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
   const hasPersonalFinanceProfile = Boolean(currentUser?.memberId);
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
-    router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
+    router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);
   };
   const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
   const [syncingNow, setSyncingNow] = useState(false);
@@ -1110,12 +1110,20 @@ export default function DashboardScreen() {
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
         {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
-        <QuickAction icon="megaphone-outline" label="သတင်းပို့ရန်" onPress={() => router.push("/events" as any)} />
+        <QuickAction
+          icon="megaphone-outline"
+          label="သတင်းပို့ရန်"
+          onPress={() => router.push({ pathname: "/events", params: { source: "quick_action", openCreate: "1" } } as any)}
+        />
         <QuickAction icon="card-outline" label="လစဉ်ကြေးပေးသွင်းရန်" onPress={() => openPaymentRequest("member_fees")} />
         <QuickAction icon="gift-outline" label="လှူဒါန်းရန်" onPress={() => openPaymentRequest("donations")} />
         <QuickAction icon="cash-outline" label="ချေးငွေဆပ်ရန်" onPress={() => openPaymentRequest("loan_repayment")} />
         <QuickAction icon="trending-up-outline" label="အတိုးဆပ်ရန်" onPress={() => openPaymentRequest("interest_income")} />
-        <QuickAction icon="document-text-outline" label="ငွေတောင်းခံရန်" onPress={() => router.push("/expense-claims" as any)} />
+        <QuickAction
+          icon="document-text-outline"
+          label="ငွေတောင်းခံရန်"
+          onPress={() => router.push({ pathname: "/expense-claims", params: { openCreate: "1" } } as any)}
+        />
       </View>
 
       {recentEvents.length > 0 && (

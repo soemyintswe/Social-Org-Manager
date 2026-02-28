@@ -282,7 +282,7 @@ export default function LoansScreen() {
         {canCreateFinance ? (
           <Pressable onPress={() => router.push("/add-loan" as any)} style={styles.headerActionBtn}>
             <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
-            <Text style={styles.headerActionText}>အသစ်</Text>
+            <Text style={styles.headerActionText}>အသစ်ထည့်ရန်</Text>
           </Pressable>
         ) : <View style={{ width: 24 }} />}
       </View>

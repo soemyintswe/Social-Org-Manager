@@ -20,7 +20,16 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { MEMBER_STATUS_LABELS, MemberStatus } from "@/lib/types";
+import {
+  MEMBER_GENDER_LABELS,
+  MEMBER_STATUS_LABELS,
+  MEMBER_STATUS_VALUES,
+  ORG_POSITION_LABELS,
+  MemberStatus,
+  type OrgPosition,
+  normalizeMemberStatus,
+  normalizeOrgPosition,
+} from "@/lib/types";
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from "expo-file-system/legacy";
@@ -34,15 +43,52 @@ const PERIOD_OPTIONS = [
   { label: "၁ နှစ်", months: 12 },
 ];
 
-type ReportTab = "income_expense" | "loans" | "funds" | "registers" | "cash_book" | "fees" | "audit_flags";
+type ReportTab = "income_expense" | "loans" | "funds" | "registers" | "cash_book" | "fees" | "members" | "audit_flags";
 type ReportViewScope = "all" | "self" | "member";
 type RegisterView = "received" | "expenditure" | "loan_out" | "loan_in";
 type DetailSortOrder = "newest" | "oldest";
+type MemberDateBasis = "join" | "status" | "created";
+type MemberGenderFilter = "all" | "male" | "female" | "other";
+type MemberAgeFilter = "all" | "under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown";
+type MemberPositionFilter =
+  | "all"
+  | "executive"
+  | "patron"
+  | "chairperson"
+  | "vice_chairperson"
+  | "secretary"
+  | "joint_secretary"
+  | "treasurer"
+  | "auditor"
+  | "committee_member"
+  | "member";
+type PrintReportKind =
+  | "current"
+  | "members_filtered"
+  | "executive_committee"
+  | "monthly_summary"
+  | "four_month_summary"
+  | "yearly_summary";
+
 const REPORT_TXN_PAGE_SIZE = 60;
 const REPORT_REGISTER_PAGE_SIZE = 50;
 const REPORT_CASHBOOK_PAGE_SIZE = 80;
 const REPORT_AUDIT_PAGE_SIZE = 50;
 const REPORT_MEMBER_PAGE_SIZE = 40;
+const EXECUTIVE_POSITIONS = [
+  "patron",
+  "chairperson",
+  "vice_chairperson",
+  "secretary",
+  "joint_secretary",
+  "treasurer",
+  "auditor",
+  "committee_member",
+] as const;
+
+function isExecutivePosition(position: unknown): boolean {
+  return EXECUTIVE_POSITIONS.includes(normalizeOrgPosition(position) as any);
+}
 
 function csvEscape(value: unknown): string {
   const text = String(value ?? "");
@@ -116,11 +162,158 @@ function transactionBelongsToMember(tx: any, memberId: string, memberName: strin
   return false;
 }
 
+function inferGenderFromName(rawName: string): "male" | "female" | "other" {
+  const name = String(rawName || "").trim();
+  if (!name) return "other";
+  const n = name.toLowerCase();
+  if (
+    name.startsWith("ဆရာတော်") ||
+    name.startsWith("ဦး") ||
+    name.startsWith("ကို") ||
+    name.startsWith("မောင်") ||
+    name.startsWith("ကိုရင်") ||
+    name.startsWith("ဦးဇင်း") ||
+    n.startsWith("u ") ||
+    n.startsWith("ko ") ||
+    n.startsWith("mg ")
+  ) {
+    return "male";
+  }
+  if (
+    name.startsWith("ဒေါ်") ||
+    name.startsWith("မ") ||
+    name.startsWith("မိ") ||
+    name.startsWith("သီလရှင်") ||
+    name.startsWith("ဆရာလေး") ||
+    n.startsWith("daw ") ||
+    n.startsWith("ma ")
+  ) {
+    return "female";
+  }
+  return "other";
+}
+
+function calculateAge(dob?: string, refDate: Date = new Date()): number | null {
+  const birthMs = parseDateMs(dob);
+  if (!Number.isFinite(birthMs) || birthMs <= 0) return null;
+  const birthDate = new Date(birthMs);
+  let age = refDate.getFullYear() - birthDate.getFullYear();
+  const monthDiff = refDate.getMonth() - birthDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
+    age -= 1;
+  }
+  return age >= 0 ? age : null;
+}
+
+function getAgeBucket(age: number | null): "under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown" {
+  if (age === null) return "unknown";
+  if (age < 18) return "under18";
+  if (age <= 35) return "18_35";
+  if (age <= 60) return "36_60";
+  if (age <= 75) return "61_75";
+  return "over75";
+}
+
+function resolveMemberGender(member: any): "male" | "female" | "other" {
+  const explicit = String(member?.gender || "").toLowerCase();
+  if (explicit === "male" || explicit === "female" || explicit === "other") return explicit;
+  return inferGenderFromName(String(member?.name || ""));
+}
+
+function normalizeMemberPositionTimeline(
+  member: any,
+  fallbackPosition: OrgPosition
+): { position: OrgPosition; dateMs: number; dateText: string }[] {
+  const rawHistory = Array.isArray(member?.orgPositionHistory) ? member.orgPositionHistory : [];
+  const timeline = rawHistory
+    .map((row: any) => {
+      const position = normalizeOrgPosition(row?.position || fallbackPosition);
+      const dateText = String(row?.effectiveDate || row?.assignedAt || row?.date || "").trim();
+      const dateMs = parseDateMs(dateText);
+      if (!Number.isFinite(dateMs) || dateMs <= 0) return null;
+      return { position, dateMs, dateText };
+    })
+    .filter(Boolean) as { position: OrgPosition; dateMs: number; dateText: string }[];
+
+  const fallbackDateText = String(member?.joinDate || member?.createdAt || "").trim();
+  const fallbackDateMs = parseDateMs(fallbackDateText) || Date.now();
+  if (timeline.length === 0) {
+    timeline.push({
+      position: fallbackPosition,
+      dateMs: fallbackDateMs,
+      dateText: fallbackDateText || new Date(fallbackDateMs).toISOString().slice(0, 10),
+    });
+  }
+
+  timeline.sort((a, b) => a.dateMs - b.dateMs);
+  const collapsed: { position: OrgPosition; dateMs: number; dateText: string }[] = [];
+  timeline.forEach((row) => {
+    const last = collapsed[collapsed.length - 1];
+    if (!last) {
+      collapsed.push(row);
+      return;
+    }
+    if (last.dateMs === row.dateMs) {
+      collapsed[collapsed.length - 1] = row;
+      return;
+    }
+    if (last.position === row.position) return;
+    collapsed.push(row);
+  });
+
+  const last = collapsed[collapsed.length - 1];
+  if (!last || last.position !== fallbackPosition) {
+    collapsed.push({
+      position: fallbackPosition,
+      dateMs: Math.max(fallbackDateMs, last?.dateMs || 0),
+      dateText: fallbackDateText || new Date(Math.max(fallbackDateMs, last?.dateMs || 0)).toISOString().slice(0, 10),
+    });
+  }
+
+  return collapsed;
+}
+
+function getMemberPositionsInRange(
+  member: any,
+  startMs: number,
+  endMs: number
+): { positions: OrgPosition[]; primaryPosition: OrgPosition } {
+  const fallbackPosition = normalizeOrgPosition(member?.orgPosition || member?.status || "member");
+  const timeline = normalizeMemberPositionTimeline(member, fallbackPosition);
+  const set = new Set<OrgPosition>();
+  let primaryPosition: OrgPosition = fallbackPosition;
+
+  timeline.forEach((row, index) => {
+    const next = timeline[index + 1];
+    const intervalStart = row.dateMs;
+    const intervalEnd = (next?.dateMs || Number.POSITIVE_INFINITY) - 1;
+    const overlaps = intervalStart <= endMs && intervalEnd >= startMs;
+    if (!overlaps) return;
+    set.add(row.position);
+    if (intervalStart <= endMs) primaryPosition = row.position;
+  });
+
+  if (set.size === 0) {
+    set.add(primaryPosition);
+  }
+
+  return { positions: Array.from(set.values()), primaryPosition };
+}
+
+function escapeHtml(text: unknown): string {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const { transactions, members, loading, accountSettings, loans, getLoanInterestDue } = useData() as any;
-  const { can, currentUser, profile } = useAuth();
+  const { can, currentUser } = useAuth();
   const canViewAllReports = can("reports.view_all");
   const canViewReports = can("reports.view_summary") || canViewAllReports;
   const canViewAllFinanceRecords = can("finance.view_detail") || can("finance.view_all");
@@ -144,8 +337,15 @@ export default function ReportsScreen() {
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [showYearPicker, setShowYearPicker] = useState(false);
+  const [showPrintPicker, setShowPrintPicker] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [auditSearch, setAuditSearch] = useState("");
   const [auditOnlyFlagged, setAuditOnlyFlagged] = useState(true);
+  const [memberStatusFilter, setMemberStatusFilter] = useState<"all" | MemberStatus>("all");
+  const [memberGenderFilter, setMemberGenderFilter] = useState<MemberGenderFilter>("all");
+  const [memberAgeFilter, setMemberAgeFilter] = useState<MemberAgeFilter>("all");
+  const [memberPositionFilter, setMemberPositionFilter] = useState<MemberPositionFilter>("all");
+  const [memberDateBasis, setMemberDateBasis] = useState<MemberDateBasis>("join");
   const [detailSortOrder, setDetailSortOrder] = useState<DetailSortOrder>("newest");
   const [activeFilterTag, setActiveFilterTag] = useState("all");
   const [computeReady, setComputeReady] = useState(false);
@@ -243,6 +443,191 @@ export default function ReportsScreen() {
     if (scopedMemberId === null) return members;
     return members.filter((member: any) => member.id === scopedMemberId);
   }, [members, scopedMemberId]);
+
+  const getMemberReferenceDateMs = useCallback(
+    (member: any): number => {
+      if (memberDateBasis === "status") {
+        return parseDateMs(member?.statusDate || member?.resignDate || member?.joinDate || member?.createdAt);
+      }
+      if (memberDateBasis === "created") {
+        return parseDateMs(member?.createdAt || member?.joinDate);
+      }
+      return parseDateMs(member?.joinDate || member?.createdAt || member?.statusDate || member?.resignDate);
+    },
+    [memberDateBasis]
+  );
+
+  const memberRowsWithMetrics = useMemo(() => {
+    const refDate = endDate;
+    return (reportMembers || []).map((member: any) => {
+      const status = normalizeMemberStatus(member?.status);
+      const defaultPosition = normalizeOrgPosition(member?.orgPosition || status);
+      const gender = resolveMemberGender(member);
+      const age = calculateAge(member?.dob, refDate);
+      const joinDateMs = parseDateMs(member?.joinDate || member?.createdAt);
+      const rawExitDateMs = parseDateMs(member?.statusDate || member?.resignDate);
+      const hasExitStatus = ["resigned", "deceased", "expelled", "suspended"].includes(status);
+      const exitDateMs = hasExitStatus && Number.isFinite(rawExitDateMs) ? rawExitDateMs : 0;
+      return {
+        ...member,
+        __status: status,
+        __defaultPosition: defaultPosition,
+        __gender: gender,
+        __age: age,
+        __ageBucket: getAgeBucket(age),
+        __joinDateMs: joinDateMs,
+        __exitDateMs: exitDateMs,
+        __refDateMs: getMemberReferenceDateMs(member),
+      };
+    });
+  }, [reportMembers, endDate, getMemberReferenceDateMs]);
+
+  const memberFlowStats = useMemo(() => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+
+    let opening = 0;
+    let joined = 0;
+    let exited = 0;
+    let closing = 0;
+
+    memberRowsWithMetrics.forEach((member: any) => {
+      const joinMs = Number(member?.__joinDateMs || 0);
+      const exitMs = Number(member?.__exitDateMs || 0);
+      if (!Number.isFinite(joinMs) || joinMs <= 0) return;
+
+      const activeAtStart = joinMs < startMs && (exitMs <= 0 || exitMs >= startMs);
+      const joinedInRange = joinMs >= startMs && joinMs <= endMs;
+      const exitedInRange = exitMs > 0 && exitMs >= startMs && exitMs <= endMs;
+      const activeAtEnd = joinMs <= endMs && (exitMs <= 0 || exitMs > endMs);
+
+      if (activeAtStart) opening += 1;
+      if (joinedInRange) joined += 1;
+      if (exitedInRange) exited += 1;
+      if (activeAtEnd) closing += 1;
+    });
+
+    return { opening, joined, exited, closing };
+  }, [memberRowsWithMetrics, startDate, endDate]);
+
+  const filteredMemberRows = useMemo(() => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+
+    return memberRowsWithMetrics
+      .map((member: any) => {
+        const positionSnapshot = getMemberPositionsInRange(member, startMs, endMs);
+        return {
+          ...member,
+          __positionsInRange: positionSnapshot.positions,
+          __positionPrimary: positionSnapshot.primaryPosition,
+        };
+      })
+      .filter((member: any) => {
+        const joinMs = Number(member?.__joinDateMs || 0);
+        const exitMs = Number(member?.__exitDateMs || 0);
+        if (!Number.isFinite(joinMs) || joinMs <= 0) return false;
+        const existsInRange = joinMs <= endMs && (exitMs <= 0 || exitMs >= startMs);
+        if (!existsInRange) return false;
+
+        if (memberStatusFilter !== "all" && member.__status !== memberStatusFilter) return false;
+        if (memberGenderFilter !== "all" && member.__gender !== memberGenderFilter) return false;
+        if (memberAgeFilter !== "all" && member.__ageBucket !== memberAgeFilter) return false;
+        const positionsInRange: OrgPosition[] = Array.isArray(member.__positionsInRange) ? member.__positionsInRange : [];
+        if (memberPositionFilter === "executive" && !positionsInRange.some((position) => isExecutivePosition(position))) return false;
+        if (
+          memberPositionFilter !== "all" &&
+          memberPositionFilter !== "executive" &&
+          !positionsInRange.includes(memberPositionFilter as OrgPosition)
+        ) return false;
+        return true;
+      })
+      .sort((a: any, b: any) => {
+        if (a.__refDateMs !== b.__refDateMs) return b.__refDateMs - a.__refDateMs;
+        return String(a?.id || "").localeCompare(String(b?.id || ""));
+      });
+  }, [
+    memberRowsWithMetrics,
+    memberStatusFilter,
+    memberGenderFilter,
+    memberAgeFilter,
+    memberPositionFilter,
+    startDate,
+    endDate,
+  ]);
+
+  const executiveMembers = useMemo(
+    () =>
+      filteredMemberRows
+        .filter((member: any) => {
+          const positionsInRange: OrgPosition[] = Array.isArray(member?.__positionsInRange) ? member.__positionsInRange : [];
+          return positionsInRange.some((position) => isExecutivePosition(position));
+        })
+        .sort((a: any, b: any) => {
+          const rank = (pos: string): number => {
+            const idx = EXECUTIVE_POSITIONS.indexOf(pos as any);
+            return idx >= 0 ? idx : 999;
+          };
+          const ra = rank(a.__positionPrimary || a.__defaultPosition || "member");
+          const rb = rank(b.__positionPrimary || b.__defaultPosition || "member");
+          if (ra !== rb) return ra - rb;
+          return String(a?.id || "").localeCompare(String(b?.id || ""));
+        }),
+    [filteredMemberRows]
+  );
+
+  const memberSummaryStats = useMemo(() => {
+    const statusCounts: Record<MemberStatus, number> = {
+      active: 0,
+      resigned: 0,
+      deceased: 0,
+      expelled: 0,
+      suspended: 0,
+      applicant: 0,
+    };
+    const genderCounts: Record<"male" | "female" | "other", number> = { male: 0, female: 0, other: 0 };
+    const ageCounts: Record<"under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown", number> = {
+      under18: 0,
+      "18_35": 0,
+      "36_60": 0,
+      "61_75": 0,
+      over75: 0,
+      unknown: 0,
+    };
+    const positionCounts = new Map<string, number>();
+
+    filteredMemberRows.forEach((member: any) => {
+      const statusKey = member.__status as MemberStatus;
+      const genderKey = member.__gender as "male" | "female" | "other";
+      const ageKey = member.__ageBucket as "under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown";
+      if (statusCounts[statusKey] !== undefined) statusCounts[statusKey] += 1;
+      if (genderCounts[genderKey] !== undefined) genderCounts[genderKey] += 1;
+      if (ageCounts[ageKey] !== undefined) ageCounts[ageKey] += 1;
+      const key = String(member.__positionPrimary || member.__defaultPosition || "member");
+      positionCounts.set(key, (positionCounts.get(key) || 0) + 1);
+    });
+
+    const topPositions = Array.from(positionCounts.entries())
+      .map(([position, count]) => ({ position, count }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      total: filteredMemberRows.length,
+      statusCounts,
+      genderCounts,
+      ageCounts,
+      topPositions,
+      executiveCount: executiveMembers.length,
+    };
+  }, [filteredMemberRows, executiveMembers.length]);
 
   const reportTransactions = useMemo(() => {
     if (scopedMemberId === null) return transactions;
@@ -411,7 +796,7 @@ export default function ReportsScreen() {
       return String(a?.receiptNumber || a?.id || "").localeCompare(String(b?.receiptNumber || b?.id || ""));
     });
 
-    const rows: Array<{
+    const rows: {
       rowType: "opening" | "entry" | "daily_total";
       id: string;
       date: string;
@@ -424,7 +809,7 @@ export default function ReportsScreen() {
       cashBalance: number;
       bankBalance: number;
       totalBalance: number;
-    }> = [];
+    }[] = [];
 
     let runningCash = Number(opening.cash || 0);
     let runningBank = Number(opening.bank || 0);
@@ -830,6 +1215,8 @@ export default function ReportsScreen() {
   const pagedCashBookRows = useMemo(() => cashBookRows.slice(0, visibleCashBookCount), [cashBookRows, visibleCashBookCount]);
   const pagedAuditRows = useMemo(() => scopedAuditRows.slice(0, visibleAuditCount), [scopedAuditRows, visibleAuditCount]);
   const pagedReportMembers = useMemo(() => reportMembers.slice(0, visibleMemberCount), [reportMembers, visibleMemberCount]);
+  const pagedFilteredMemberRows = useMemo(() => filteredMemberRows.slice(0, visibleMemberCount), [filteredMemberRows, visibleMemberCount]);
+  const pagedExecutiveMembers = useMemo(() => executiveMembers.slice(0, visibleMemberCount), [executiveMembers, visibleMemberCount]);
 
   const hasMoreNonTransferRows = pagedNonTransferRows.length < sortedNonTransferRows.length;
   const hasMoreLoanTxnRows = pagedLoanTxnRows.length < sortedLoanTxnRows.length;
@@ -837,6 +1224,8 @@ export default function ReportsScreen() {
   const hasMoreCashBookRows = pagedCashBookRows.length < cashBookRows.length;
   const hasMoreAuditRows = pagedAuditRows.length < scopedAuditRows.length;
   const hasMoreReportMembers = pagedReportMembers.length < reportMembers.length;
+  const hasMoreFilteredMemberRows = pagedFilteredMemberRows.length < filteredMemberRows.length;
+  const hasMoreExecutiveMembers = pagedExecutiveMembers.length < executiveMembers.length;
 
   const renderTransactionDetailCard = useCallback(
     (t: any, index: number, keyPrefix: string) => {
@@ -906,7 +1295,19 @@ export default function ReportsScreen() {
     setVisibleCashBookCount(REPORT_CASHBOOK_PAGE_SIZE);
     setVisibleAuditCount(REPORT_AUDIT_PAGE_SIZE);
     setVisibleMemberCount(REPORT_MEMBER_PAGE_SIZE);
-  }, [reportTab, registerView, startDateMs, endDateMs, scopedMemberId, computeReady]);
+  }, [
+    reportTab,
+    registerView,
+    startDateMs,
+    endDateMs,
+    scopedMemberId,
+    computeReady,
+    memberStatusFilter,
+    memberGenderFilter,
+    memberAgeFilter,
+    memberPositionFilter,
+    memberDateBasis,
+  ]);
 
   const exportAuditJson = async () => {
     const payload = {
@@ -1001,72 +1402,406 @@ export default function ReportsScreen() {
     }
   };
 
-  const generatePdf = async () => {
-    if (!canViewAllReports) {
-      Alert.alert("ခွင့်မပြုပါ", "အကျဉ်းချုပ်ကြည့်ခွင့်သာ ရှိသောကြောင့် အသင်းဝင်အသေးစိတ်အစီရင်ခံစာ PDF မထုတ်နိုင်ပါ။");
+  const shareHtmlAsPdf = useCallback(async (html: string) => {
+    if (Platform.OS === "web") {
+      const popup = typeof window !== "undefined" ? window.open("", "_blank", "noopener,noreferrer") : null;
+      if (!popup) {
+        await Print.printAsync({ html });
+        return;
+      }
+      popup.document.open();
+      popup.document.write(html);
+      popup.document.close();
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          popup.focus();
+          popup.print();
+          popup.close();
+          resolve();
+        }, 260);
+      });
       return;
     }
+    const { uri } = await Print.printToFileAsync({ html });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, { UTI: ".pdf", mimeType: "application/pdf" });
+      return;
+    }
+    await Print.printAsync({ html });
+  }, []);
 
-    const html = `
+  const formatMemberDateByBasis = useCallback(
+    (member: any) => {
+      if (memberDateBasis === "status") return member?.statusDate || member?.resignDate || "-";
+      if (memberDateBasis === "created") return member?.createdAt || "-";
+      return member?.joinDate || "-";
+    },
+    [memberDateBasis]
+  );
+
+  const renderMemberReportTableHtml = useCallback(
+    (rows: any[], title: string) => `
+      <h2>${escapeHtml(title)}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:36px;">No.</th>
+            <th>အမည်</th>
+            <th>အသင်းဝင်အမှတ်</th>
+            <th>အဖွဲ့တာဝန်</th>
+            <th>ကျား/မ</th>
+            <th>အသက်</th>
+            <th>အခြေအနေ</th>
+            <th>ဖုန်း</th>
+            <th>${memberDateBasis === "status" ? "Status Date" : memberDateBasis === "created" ? "Created Date" : "Join Date"}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (m: any, index: number) => `
+            <tr>
+              <td>${index + 1}</td>
+              <td>${escapeHtml(m?.name || "-")}</td>
+              <td>${escapeHtml(m?.id || "-")}</td>
+              <td>${escapeHtml(
+                Array.isArray(m?.__positionsInRange) && m.__positionsInRange.length > 0
+                  ? m.__positionsInRange
+                      .map((position: OrgPosition) => ORG_POSITION_LABELS[position] || ORG_POSITION_LABELS.member)
+                      .join(" / ")
+                  : ORG_POSITION_LABELS[(m?.__positionPrimary || m?.__defaultPosition || "member") as OrgPosition] || ORG_POSITION_LABELS.member
+              )}</td>
+              <td>${escapeHtml(MEMBER_GENDER_LABELS[m?.__gender as "male" | "female" | "other"] || "အခြား")}</td>
+              <td>${m?.__age === null || m?.__age === undefined ? "-" : `${m.__age}`}</td>
+              <td>${escapeHtml(MEMBER_STATUS_LABELS[m?.__status as MemberStatus] || m?.__status || "-")}</td>
+              <td>${escapeHtml(m?.phone || "-")}</td>
+              <td>${escapeHtml(formatDateForRegister(formatMemberDateByBasis(m)))}</td>
+            </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    `,
+    [formatMemberDateByBasis, memberDateBasis]
+  );
+
+  const buildFinancialSummaryRows = useCallback(
+    (granularity: "month" | "four_month" | "year") => {
+      const map = new Map<
+        string,
+        {
+          label: string;
+          sortKey: number;
+          income: number;
+          expense: number;
+          loanDisbursed: number;
+          loanRepaid: number;
+          interestIncome: number;
+          transferIn: number;
+          transferOut: number;
+        }
+      >();
+
+      filteredTxns.forEach((tx: any) => {
+        const d = new Date(tx?.date);
+        if (Number.isNaN(d.getTime())) return;
+        const year = d.getFullYear();
+        const month = d.getMonth();
+        const fourMonthBucket = Math.floor(month / 4) + 1;
+
+        let key = "";
+        let label = "";
+        let sortKey = 0;
+        if (granularity === "year") {
+          key = `Y-${year}`;
+          label = `${year}`;
+          sortKey = year * 100 + 1;
+        } else if (granularity === "four_month") {
+          key = `F-${year}-${fourMonthBucket}`;
+          label = `${year} (၄ လပတ် ${fourMonthBucket})`;
+          sortKey = year * 100 + fourMonthBucket;
+        } else {
+          key = `M-${year}-${month + 1}`;
+          label = `${year}-${String(month + 1).padStart(2, "0")}`;
+          sortKey = year * 100 + (month + 1);
+        }
+
+        const row = map.get(key) || {
+          label,
+          sortKey,
+          income: 0,
+          expense: 0,
+          loanDisbursed: 0,
+          loanRepaid: 0,
+          interestIncome: 0,
+          transferIn: 0,
+          transferOut: 0,
+        };
+
+        const amount = Number(tx?.amount || 0);
+        const type = String(tx?.type || "");
+        const category = String(tx?.category || "");
+        if (type === "income") row.income += amount;
+        if (type === "expense") row.expense += amount;
+        if (category === "loan_disbursement") row.loanDisbursed += amount;
+        if (category === "loan_repayment") row.loanRepaid += amount;
+        if (category === "interest_income" || category === "bank_interest") row.interestIncome += amount;
+        if (type === "transfer" && category === "bank_withdraw") row.transferIn += amount;
+        if (type === "transfer" && category === "bank_deposit") row.transferOut += amount;
+
+        map.set(key, row);
+      });
+
+      return Array.from(map.values()).sort((a, b) => a.sortKey - b.sortKey);
+    },
+    [filteredTxns]
+  );
+
+  const buildBaseHtml = useCallback(
+    (title: string, subtitle: string, content: string) => `
       <html>
         <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
           <style>
-            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 20px; }
-            h1 { text-align: center; color: #333; margin-bottom: 10px; }
-            p { text-align: center; color: #666; margin-top: 0; margin-bottom: 20px; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; }
-            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-            th { background-color: #f4f4f4; font-weight: bold; }
-            tr:nth-child(even) { background-color: #f9f9f9; }
-            .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #999; }
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 18px; color: #0F172A; }
+            h1 { text-align: center; margin: 0 0 8px; }
+            h2 { margin: 18px 0 8px; font-size: 16px; }
+            p.meta { text-align: center; margin: 0 0 12px; color: #475569; font-size: 12px; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 10px; }
+            th, td { border: 1px solid #E2E8F0; padding: 7px; text-align: left; vertical-align: top; }
+            th { background: #F1F5F9; font-weight: 700; }
+            tr:nth-child(even) { background: #F8FAFC; }
+            .summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+            .summary-box { border: 1px solid #E2E8F0; border-radius: 8px; padding: 8px; min-width: 150px; }
+            .summary-label { font-size: 11px; color: #64748B; }
+            .summary-value { font-size: 14px; font-weight: 700; margin-top: 4px; }
+            .footer { margin-top: 20px; text-align: center; font-size: 10px; color: #94A3B8; }
           </style>
         </head>
         <body>
-          <h1>Social Org Manager</h1>
-          <p>အသင်းဝင်စာရင်း အစီရင်ခံစာ • ${new Date().toLocaleDateString()}</p>
-          
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 40px;">No.</th>
-                <th>အမည်</th>
-                <th>အသင်းဝင်အမှတ်</th>
-                <th>ဖုန်း</th>
-                <th>အီးမေးလ်</th>
-                <th>NRC</th>
-                <th>ဝင်ခွင့်နေ့</th>
-                <th>အခြေအနေ</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${reportMembers.map((m: any, index: number) => `
-                <tr>
-                  <td>${index + 1}</td>
-                  <td>${m.name}</td>
-                  <td>${m.id}</td>
-                  <td>${m.phone || '-'}</td>
-                  <td>${m.email || '-'}</td>
-                  <td>${m.nrc || '-'}</td>
-                  <td>${m.joinDate || '-'}</td>
-                  <td>${MEMBER_STATUS_LABELS[m.status as MemberStatus] || m.status}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-          <div class="footer">Social Org Manager App မှ ထုတ်ပေးသည်</div>
+          <h1>${escapeHtml(accountSettings?.orgName || "Social Org Manager")}</h1>
+          <p class="meta">${escapeHtml(title)}<br/>${escapeHtml(subtitle)}</p>
+          ${content}
+          <div class="footer">Generated by Social Org Manager</div>
         </body>
       </html>
-    `;
+    `,
+    [accountSettings?.orgName]
+  );
 
-    try {
-      const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
-    } catch (error) {
-      console.error(error);
-      Alert.alert("Error", "PDF ထုတ်မရနိုင်ပါ။");
-    }
-  };
+  const generatePdf = useCallback(
+    async (kind: PrintReportKind) => {
+      try {
+        setPrinting(true);
+        const subtitle = `${scopeLabel} | ${formatDateForRegister(startDate)} - ${formatDateForRegister(endDate)} | ${new Date().toLocaleString()}`;
+
+        if (kind === "members_filtered") {
+          const content = `
+            <div class="summary">
+              <div class="summary-box"><div class="summary-label">စုစုပေါင်း</div><div class="summary-value">${memberSummaryStats.total}</div></div>
+              <div class="summary-box"><div class="summary-label">အစရှိ</div><div class="summary-value">${memberFlowStats.opening}</div></div>
+              <div class="summary-box"><div class="summary-label">တိုးလာ</div><div class="summary-value">${memberFlowStats.joined}</div></div>
+              <div class="summary-box"><div class="summary-label">လျှော့သွား</div><div class="summary-value">${memberFlowStats.exited}</div></div>
+              <div class="summary-box"><div class="summary-label">လက်ကျန်</div><div class="summary-value">${memberFlowStats.closing}</div></div>
+              <div class="summary-box"><div class="summary-label">ကျား</div><div class="summary-value">${memberSummaryStats.genderCounts.male}</div></div>
+              <div class="summary-box"><div class="summary-label">မ</div><div class="summary-value">${memberSummaryStats.genderCounts.female}</div></div>
+              <div class="summary-box"><div class="summary-label">အခြား</div><div class="summary-value">${memberSummaryStats.genderCounts.other}</div></div>
+            </div>
+            ${renderMemberReportTableHtml(filteredMemberRows, "အသင်းဝင် စီစစ်စာရင်း")}
+          `;
+          await shareHtmlAsPdf(buildBaseHtml("အသင်းဝင်အစီရင်ခံစာ", subtitle, content));
+          return;
+        }
+
+        if (kind === "executive_committee") {
+          const content = `
+            <div class="summary">
+              <div class="summary-box"><div class="summary-label">အမှုဆောင်စုစုပေါင်း</div><div class="summary-value">${executiveMembers.length}</div></div>
+              <div class="summary-box"><div class="summary-label">အစရှိ</div><div class="summary-value">${memberFlowStats.opening}</div></div>
+              <div class="summary-box"><div class="summary-label">တိုးလာ</div><div class="summary-value">${memberFlowStats.joined}</div></div>
+              <div class="summary-box"><div class="summary-label">လျှော့သွား</div><div class="summary-value">${memberFlowStats.exited}</div></div>
+              <div class="summary-box"><div class="summary-label">လက်ကျန်</div><div class="summary-value">${memberFlowStats.closing}</div></div>
+            </div>
+            ${renderMemberReportTableHtml(executiveMembers, "နာယကနှင့် အမှုဆောင်အဖွဲ့စာရင်း")}
+          `;
+          await shareHtmlAsPdf(buildBaseHtml("အမှုဆောင်အဖွဲ့အစီရင်ခံစာ", subtitle, content));
+          return;
+        }
+
+        if (kind === "monthly_summary" || kind === "four_month_summary" || kind === "yearly_summary") {
+          const granularity = kind === "monthly_summary" ? "month" : kind === "four_month_summary" ? "four_month" : "year";
+          const rows = buildFinancialSummaryRows(granularity);
+          const titleLabel = kind === "monthly_summary" ? "လချုပ် ငွေစာရင်းချုပ်" : kind === "four_month_summary" ? "၄ လပတ် ငွေစာရင်းချုပ်" : "နှစ်ချုပ် ငွေစာရင်းချုပ်";
+          const table = `
+            <h2>${titleLabel}</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>ကာလ</th>
+                  <th>ရငွေ</th>
+                  <th>အသုံးစရိတ်</th>
+                  <th>ချေးငွေထုတ်</th>
+                  <th>ချေးငွေပြန်ရ</th>
+                  <th>အတိုးရ</th>
+                  <th>ဘဏ်ထုတ်</th>
+                  <th>ဘဏ်သွင်း</th>
+                  <th>ခြားနားချက်</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows
+                  .map(
+                    (row) => `
+                  <tr>
+                    <td>${escapeHtml(row.label)}</td>
+                    <td>${row.income.toLocaleString()}</td>
+                    <td>${row.expense.toLocaleString()}</td>
+                    <td>${row.loanDisbursed.toLocaleString()}</td>
+                    <td>${row.loanRepaid.toLocaleString()}</td>
+                    <td>${row.interestIncome.toLocaleString()}</td>
+                    <td>${row.transferIn.toLocaleString()}</td>
+                    <td>${row.transferOut.toLocaleString()}</td>
+                    <td>${(row.income - row.expense).toLocaleString()}</td>
+                  </tr>`
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          `;
+          await shareHtmlAsPdf(buildBaseHtml(titleLabel, subtitle, table));
+          return;
+        }
+
+        if (kind === "current") {
+          let content = "";
+          if (reportTab === "members") {
+            content = renderMemberReportTableHtml(filteredMemberRows, "အသင်းဝင် စီစစ်စာရင်း");
+          } else if (reportTab === "registers") {
+            content = `
+              <h2>${escapeHtml(activeRegisterTitle)}</h2>
+              <table>
+                <thead><tr><th>No.</th><th>အမည်</th><th>အသင်းဝင်အမှတ်</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေပမာဏ</th></tr></thead>
+                <tbody>
+                  ${sortedRegisterRows
+                    .map(
+                      (row: any, index: number) => `
+                    <tr>
+                      <td>${index + 1}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.memberId || "-")}</td>
+                      <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.receipt)}</td><td>${escapeHtml(row.heading)}</td>
+                      <td>${Number(row.amount || 0).toLocaleString()}</td>
+                    </tr>`
+                    )
+                    .join("")}
+                </tbody>
+              </table>
+            `;
+          } else if (reportTab === "loans") {
+            content = `
+              <div class="summary">
+                <div class="summary-box"><div class="summary-label">ထုတ်ချေး</div><div class="summary-value">${loanStats.disbursed.toLocaleString()} KS</div></div>
+                <div class="summary-box"><div class="summary-label">ပြန်ဆပ်</div><div class="summary-value">${loanStats.repaid.toLocaleString()} KS</div></div>
+                <div class="summary-box"><div class="summary-label">အရင်းကျန်</div><div class="summary-value">${loanStats.principalOutstanding.toLocaleString()} KS</div></div>
+              </div>
+              <h2>ချေးငွေဆိုင်ရာမှတ်တမ်း</h2>
+              <table>
+                <thead><tr><th>No.</th><th>အမည်</th><th>အသင်းဝင်</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေ</th></tr></thead>
+                <tbody>
+                  ${sortedLoanTxnRows
+                    .map(
+                      (row: any, index: number) => `
+                    <tr>
+                      <td>${index + 1}</td><td>${escapeHtml(row.payerPayee || memberNameById.get(String(row.memberId || "")) || "-")}</td>
+                      <td>${escapeHtml(row.memberId || "-")}</td><td>${escapeHtml(formatDateForRegister(row.date))}</td>
+                      <td>${escapeHtml(row.receiptNumber || "-")}</td><td>${escapeHtml(getCategoryLabel(row.category))}</td>
+                      <td>${Number(row.amount || 0).toLocaleString()}</td>
+                    </tr>`
+                    )
+                    .join("")}
+                </tbody>
+              </table>
+            `;
+          } else if (reportTab === "fees") {
+            content = renderMemberReportTableHtml(
+              (reportMembers || []).map((member: any) => ({
+                ...member,
+                __status: normalizeMemberStatus(member?.status),
+                __defaultPosition: normalizeOrgPosition(member?.orgPosition || member?.status),
+                __positionPrimary: normalizeOrgPosition(member?.orgPosition || member?.status),
+                __positionsInRange: [normalizeOrgPosition(member?.orgPosition || member?.status)],
+                __gender: resolveMemberGender(member),
+                __age: calculateAge(member?.dob, endDate),
+              })),
+              "လစဉ်ကြေး ဆိုင်ရာ အသင်းဝင်စာရင်း"
+            );
+          } else {
+            content = `
+              <div class="summary">
+                <div class="summary-box"><div class="summary-label">ရငွေ</div><div class="summary-value">${incomeExpenseStats.income.toLocaleString()} KS</div></div>
+                <div class="summary-box"><div class="summary-label">အသုံးစရိတ်</div><div class="summary-value">${incomeExpenseStats.expense.toLocaleString()} KS</div></div>
+                <div class="summary-box"><div class="summary-label">ခြားနားချက်</div><div class="summary-value">${incomeExpenseStats.net.toLocaleString()} KS</div></div>
+              </div>
+              <h2>အသေးစိတ်စာရင်း</h2>
+              <table>
+                <thead><tr><th>No.</th><th>ရက်စွဲ</th><th>အမည်</th><th>အသင်းဝင်</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေ</th><th>Type</th></tr></thead>
+                <tbody>
+                  ${sortedNonTransferRows
+                    .map(
+                      (row: any, index: number) => `
+                    <tr>
+                      <td>${index + 1}</td><td>${escapeHtml(formatDateForRegister(row.date))}</td>
+                      <td>${escapeHtml(row.payerPayee || memberNameById.get(String(row.memberId || "")) || "-")}</td>
+                      <td>${escapeHtml(row.memberId || "-")}</td><td>${escapeHtml(row.receiptNumber || "-")}</td>
+                      <td>${escapeHtml(getCategoryLabel(row.category))}</td><td>${Number(row.amount || 0).toLocaleString()}</td><td>${escapeHtml(row.type || "-")}</td>
+                    </tr>`
+                    )
+                    .join("")}
+                </tbody>
+              </table>
+            `;
+          }
+
+          await shareHtmlAsPdf(buildBaseHtml("လက်ရှိအစီရင်ခံစာ", subtitle, content));
+        }
+      } catch (error) {
+        console.error(error);
+        Alert.alert("Error", "PDF ထုတ်မရနိုင်ပါ။");
+      } finally {
+        setPrinting(false);
+      }
+    },
+    [
+      scopeLabel,
+      startDate,
+      endDate,
+      memberSummaryStats,
+      memberFlowStats,
+      filteredMemberRows,
+      executiveMembers,
+      buildFinancialSummaryRows,
+      reportTab,
+      activeRegisterTitle,
+      sortedRegisterRows,
+      loanStats,
+      sortedLoanTxnRows,
+      memberNameById,
+      reportMembers,
+      incomeExpenseStats,
+      sortedNonTransferRows,
+      shareHtmlAsPdf,
+      buildBaseHtml,
+      renderMemberReportTableHtml,
+    ]
+  );
+
+  const handlePrintKind = useCallback(
+    (kind: PrintReportKind) => {
+      setShowPrintPicker(false);
+      setTimeout(() => {
+        void generatePdf(kind);
+      }, 140);
+    },
+    [generatePdf]
+  );
 
   if (loading || !computeReady) {
     return (
@@ -1095,8 +1830,12 @@ export default function ReportsScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>အစီရင်ခံစာ - {scopeLabel}</Text>
         <View style={styles.headerActions}>
-          <Pressable style={styles.headerIconBtn} onPress={generatePdf}>
-            <Ionicons name="print-outline" size={22} color={Colors.light.text} />
+          <Pressable style={styles.headerIconBtn} onPress={() => setShowPrintPicker(true)} disabled={printing}>
+            {printing ? (
+              <ActivityIndicator size="small" color={Colors.light.tint} />
+            ) : (
+              <Ionicons name="print-outline" size={22} color={Colors.light.text} />
+            )}
           </Pressable>
         </View>
       </View>
@@ -1277,6 +2016,9 @@ export default function ReportsScreen() {
           </Pressable>
           <Pressable style={[styles.tab, reportTab === "fees" && styles.activeTab]} onPress={() => setReportTab("fees")}>
             <Text style={[styles.tabText, reportTab === "fees" && styles.activeTabText]}>လစဉ်ကြေး</Text>
+          </Pressable>
+          <Pressable style={[styles.tab, reportTab === "members" && styles.activeTab]} onPress={() => setReportTab("members")}>
+            <Text style={[styles.tabText, reportTab === "members" && styles.activeTabText]}>အသင်းဝင်များ</Text>
           </Pressable>
           {canViewAuditFlags && (
             <Pressable style={[styles.tab, reportTab === "audit_flags" && styles.activeTab]} onPress={() => setReportTab("audit_flags")}>
@@ -1785,6 +2527,250 @@ export default function ReportsScreen() {
         </View>
       )}
 
+      {reportTab === "members" && (
+        <View style={styles.scrollContent}>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>အသင်းဝင် အချက်အလက် Filter</Text>
+            <Text style={styles.catSub}>အချိန်ကာလအခြေခံ</Text>
+            <View style={styles.registerModeRow}>
+              <Pressable style={[styles.registerModeChip, memberDateBasis === "join" && styles.registerModeChipActive]} onPress={() => setMemberDateBasis("join")}>
+                <Text style={[styles.registerModeChipText, memberDateBasis === "join" && styles.registerModeChipTextActive]}>ဝင်ခွင့်နေ့</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, memberDateBasis === "status" && styles.registerModeChipActive]} onPress={() => setMemberDateBasis("status")}>
+                <Text style={[styles.registerModeChipText, memberDateBasis === "status" && styles.registerModeChipTextActive]}>Status နေ့</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, memberDateBasis === "created" && styles.registerModeChipActive]} onPress={() => setMemberDateBasis("created")}>
+                <Text style={[styles.registerModeChipText, memberDateBasis === "created" && styles.registerModeChipTextActive]}>Created နေ့</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.catSub}>အခြေအနေ</Text>
+            <View style={styles.registerModeRow}>
+              <Pressable style={[styles.registerModeChip, memberStatusFilter === "all" && styles.registerModeChipActive]} onPress={() => setMemberStatusFilter("all")}>
+                <Text style={[styles.registerModeChipText, memberStatusFilter === "all" && styles.registerModeChipTextActive]}>အားလုံး</Text>
+              </Pressable>
+              {MEMBER_STATUS_VALUES.map((status) => (
+                <Pressable
+                  key={`status-${status}`}
+                  style={[styles.registerModeChip, memberStatusFilter === status && styles.registerModeChipActive]}
+                  onPress={() => setMemberStatusFilter(status)}
+                >
+                  <Text style={[styles.registerModeChipText, memberStatusFilter === status && styles.registerModeChipTextActive]}>
+                    {MEMBER_STATUS_LABELS[status]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.catSub}>ကျား / မ</Text>
+            <View style={styles.registerModeRow}>
+              <Pressable style={[styles.registerModeChip, memberGenderFilter === "all" && styles.registerModeChipActive]} onPress={() => setMemberGenderFilter("all")}>
+                <Text style={[styles.registerModeChipText, memberGenderFilter === "all" && styles.registerModeChipTextActive]}>အားလုံး</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, memberGenderFilter === "male" && styles.registerModeChipActive]} onPress={() => setMemberGenderFilter("male")}>
+                <Text style={[styles.registerModeChipText, memberGenderFilter === "male" && styles.registerModeChipTextActive]}>ကျား</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, memberGenderFilter === "female" && styles.registerModeChipActive]} onPress={() => setMemberGenderFilter("female")}>
+                <Text style={[styles.registerModeChipText, memberGenderFilter === "female" && styles.registerModeChipTextActive]}>မ</Text>
+              </Pressable>
+              <Pressable style={[styles.registerModeChip, memberGenderFilter === "other" && styles.registerModeChipActive]} onPress={() => setMemberGenderFilter("other")}>
+                <Text style={[styles.registerModeChipText, memberGenderFilter === "other" && styles.registerModeChipTextActive]}>အခြား</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.catSub}>အသက်အုပ်စု</Text>
+            <View style={styles.registerModeRow}>
+              {[
+                { key: "all", label: "အားလုံး" },
+                { key: "under18", label: "18 နှစ်အောက်" },
+                { key: "18_35", label: "18-35" },
+                { key: "36_60", label: "36-60" },
+                { key: "61_75", label: "61-75" },
+                { key: "over75", label: "75 အထက်" },
+                { key: "unknown", label: "မသိရှိ" },
+              ].map((ageOpt) => (
+                <Pressable
+                  key={`age-${ageOpt.key}`}
+                  style={[styles.registerModeChip, memberAgeFilter === (ageOpt.key as MemberAgeFilter) && styles.registerModeChipActive]}
+                  onPress={() => setMemberAgeFilter(ageOpt.key as MemberAgeFilter)}
+                >
+                  <Text style={[styles.registerModeChipText, memberAgeFilter === (ageOpt.key as MemberAgeFilter) && styles.registerModeChipTextActive]}>
+                    {ageOpt.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.catSub}>တာဝန်/ရာထူး</Text>
+            <View style={styles.registerModeRow}>
+              {[
+                { key: "all", label: "အားလုံး" },
+                { key: "executive", label: "အမှုဆောင်များ" },
+                { key: "patron", label: ORG_POSITION_LABELS.patron },
+                { key: "chairperson", label: ORG_POSITION_LABELS.chairperson },
+                { key: "vice_chairperson", label: ORG_POSITION_LABELS.vice_chairperson },
+                { key: "secretary", label: ORG_POSITION_LABELS.secretary },
+                { key: "joint_secretary", label: ORG_POSITION_LABELS.joint_secretary },
+                { key: "treasurer", label: ORG_POSITION_LABELS.treasurer },
+                { key: "auditor", label: ORG_POSITION_LABELS.auditor },
+                { key: "committee_member", label: ORG_POSITION_LABELS.committee_member },
+                { key: "member", label: ORG_POSITION_LABELS.member },
+              ].map((posOpt) => (
+                <Pressable
+                  key={`pos-${posOpt.key}`}
+                  style={[styles.registerModeChip, memberPositionFilter === (posOpt.key as MemberPositionFilter) && styles.registerModeChipActive]}
+                  onPress={() => setMemberPositionFilter(posOpt.key as MemberPositionFilter)}
+                >
+                  <Text
+                    style={[
+                      styles.registerModeChipText,
+                      memberPositionFilter === (posOpt.key as MemberPositionFilter) && styles.registerModeChipTextActive,
+                    ]}
+                  >
+                    {posOpt.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={styles.auditMetaText}>
+              မှတ်ချက်: ရာထူးသမိုင်း (assign/relieve date) မသိမ်းသေးပါက လက်ရှိရာထူးအခြေပြု filter ဖြင့်ပြသပါသည်။
+            </Text>
+          </View>
+
+          <View style={styles.summaryGrid}>
+            <View style={[styles.statBox, { borderLeftColor: "#0EA5A4" }]}>
+              <Text style={styles.statLabel}>စုစုပေါင်းအသင်းဝင်</Text>
+              <Text style={[styles.statValue, { color: "#0EA5A4" }]}>{memberSummaryStats.total.toLocaleString()}</Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#2563EB" }]}>
+              <Text style={styles.statLabel}>အမှုဆောင်စုစုပေါင်း</Text>
+              <Text style={[styles.statValue, { color: "#2563EB" }]}>{memberSummaryStats.executiveCount.toLocaleString()}</Text>
+            </View>
+          </View>
+          <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+            <View style={[styles.statBox, { borderLeftColor: "#0F766E" }]}>
+              <Text style={styles.statLabel}>ကျား / မ / အခြား</Text>
+              <Text style={[styles.statValue, { color: "#0F766E" }]}>
+                {memberSummaryStats.genderCounts.male} / {memberSummaryStats.genderCounts.female} / {memberSummaryStats.genderCounts.other}
+              </Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#7C3AED" }]}>
+              <Text style={styles.statLabel}>လက်ရှိ / နုတ်ထွက် / ကွယ်လွန်</Text>
+              <Text style={[styles.statValue, { color: "#7C3AED" }]}>
+                {memberSummaryStats.statusCounts.active} / {memberSummaryStats.statusCounts.resigned} / {memberSummaryStats.statusCounts.deceased}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+            <View style={[styles.statBox, { borderLeftColor: "#DC2626" }]}>
+              <Text style={styles.statLabel}>ထုတ်ပယ် / ဆိုင်းငံ့ / လျှောက်ထား</Text>
+              <Text style={[styles.statValue, { color: "#DC2626" }]}>
+                {memberSummaryStats.statusCounts.expelled} / {memberSummaryStats.statusCounts.suspended} / {memberSummaryStats.statusCounts.applicant}
+              </Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#B45309" }]}>
+              <Text style={styles.statLabel}>အသက်အုပ်စု (18-35 / 36-60 / 61-75 / 75+)</Text>
+              <Text style={[styles.statValue, { color: "#B45309" }]}>
+                {memberSummaryStats.ageCounts["18_35"]} / {memberSummaryStats.ageCounts["36_60"]} / {memberSummaryStats.ageCounts["61_75"]} / {memberSummaryStats.ageCounts.over75}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+            <View style={[styles.statBox, { borderLeftColor: "#0369A1" }]}>
+              <Text style={styles.statLabel}>အစရှိ (ကာလမတိုင်မီ)</Text>
+              <Text style={[styles.statValue, { color: "#0369A1" }]}>{memberFlowStats.opening.toLocaleString()}</Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#16A34A" }]}>
+              <Text style={styles.statLabel}>တိုးလာ (ကာလအတွင်း)</Text>
+              <Text style={[styles.statValue, { color: "#16A34A" }]}>{memberFlowStats.joined.toLocaleString()}</Text>
+            </View>
+          </View>
+          <View style={[styles.summaryGrid, { marginTop: -10 }]}>
+            <View style={[styles.statBox, { borderLeftColor: "#DC2626" }]}>
+              <Text style={styles.statLabel}>လျှော့သွား (ကာလအတွင်း)</Text>
+              <Text style={[styles.statValue, { color: "#DC2626" }]}>{memberFlowStats.exited.toLocaleString()}</Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#7C3AED" }]}>
+              <Text style={styles.statLabel}>လက်ကျန် (ကာလပြီး)</Text>
+              <Text style={[styles.statValue, { color: "#7C3AED" }]}>{memberFlowStats.closing.toLocaleString()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>နာယကနှင့် အမှုဆောင်အဖွဲ့</Text>
+            {pagedExecutiveMembers.length === 0 ? (
+              <Text style={styles.summaryOnlyNoteText}>သတ်မှတ်ထားသော filter အောက်တွင် အမှုဆောင်စာရင်း မရှိသေးပါ။</Text>
+            ) : (
+              pagedExecutiveMembers.map((member: any, index: number) => (
+                <View key={`exec-${member?.id || index}`} style={styles.registerCard}>
+                  <Text style={styles.registerCardTitle}>{index + 1}. {member?.name || "-"}</Text>
+                  <Text style={styles.registerCardMeta}>အသင်းဝင်အမှတ်: {member?.id || "-"}</Text>
+                  <Text style={styles.registerCardMeta}>
+                    တာဝန်:{" "}
+                    {Array.isArray(member?.__positionsInRange) && member.__positionsInRange.length > 0
+                      ? member.__positionsInRange
+                          .map((position: OrgPosition) => ORG_POSITION_LABELS[position] || ORG_POSITION_LABELS.member)
+                          .join(" / ")
+                      : ORG_POSITION_LABELS[(member?.__positionPrimary || member?.__defaultPosition || "member") as OrgPosition] || ORG_POSITION_LABELS.member}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>အခြေအနေ: {MEMBER_STATUS_LABELS[member?.__status as MemberStatus] || "-"}</Text>
+                  <Text style={styles.registerCardMeta}>ဖုန်း: {member?.phone || "-"}</Text>
+                </View>
+              ))
+            )}
+            {hasMoreExecutiveMembers ? (
+              <View style={styles.loadMoreWrap}>
+                <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleMemberCount((prev) => prev + REPORT_MEMBER_PAGE_SIZE)}>
+                  <Text style={styles.loadMoreBtnText}>
+                    နောက်ထပ် {Math.min(REPORT_MEMBER_PAGE_SIZE, executiveMembers.length - pagedExecutiveMembers.length).toLocaleString()} ဦး ပြရန်
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>အသင်းဝင် အသေးစိတ်စာရင်း</Text>
+            {pagedFilteredMemberRows.length === 0 ? (
+              <Text style={styles.summaryOnlyNoteText}>ရွေးချယ်ထားသည့် filter အောက်တွင် အသင်းဝင်စာရင်း မရှိပါ။</Text>
+            ) : (
+              pagedFilteredMemberRows.map((member: any, index: number) => (
+                <View key={`member-detail-${member?.id || index}`} style={styles.registerCard}>
+                  <Text style={styles.registerCardTitle}>{index + 1}. {member?.name || "-"}</Text>
+                  <Text style={styles.registerCardMeta}>အသင်းဝင်အမှတ်: {member?.id || "-"}</Text>
+                  <Text style={styles.registerCardMeta}>
+                    ကျား/မ: {MEMBER_GENDER_LABELS[member?.__gender as "male" | "female" | "other"] || "အခြား"} | အသက်: {member?.__age === null ? "မသိပါ" : `${member.__age} နှစ်`}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>
+                    အခြေအနေ: {MEMBER_STATUS_LABELS[member?.__status as MemberStatus] || "-"} | တာဝန်:{" "}
+                    {Array.isArray(member?.__positionsInRange) && member.__positionsInRange.length > 0
+                      ? member.__positionsInRange
+                          .map((position: OrgPosition) => ORG_POSITION_LABELS[position] || ORG_POSITION_LABELS.member)
+                          .join(" / ")
+                      : ORG_POSITION_LABELS[(member?.__positionPrimary || member?.__defaultPosition || "member") as OrgPosition] || ORG_POSITION_LABELS.member}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>
+                    {memberDateBasis === "status" ? "Status နေ့" : memberDateBasis === "created" ? "Created နေ့" : "Join နေ့"}:{" "}
+                    {formatDateForRegister(formatMemberDateByBasis(member))}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>ဖုန်း: {member?.phone || "-"}</Text>
+                  {!!member?.statusNote ? <Text style={styles.registerCardNote}>မှတ်ချက်: {member.statusNote}</Text> : null}
+                </View>
+              ))
+            )}
+            {hasMoreFilteredMemberRows ? (
+              <View style={styles.loadMoreWrap}>
+                <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleMemberCount((prev) => prev + REPORT_MEMBER_PAGE_SIZE)}>
+                  <Text style={styles.loadMoreBtnText}>
+                    နောက်ထပ် {Math.min(REPORT_MEMBER_PAGE_SIZE, filteredMemberRows.length - pagedFilteredMemberRows.length).toLocaleString()} ဦး ပြရန်
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      )}
+
       {reportTab === "audit_flags" && canViewAuditFlags && (
         <View style={styles.scrollContent}>
           <View style={styles.section}>
@@ -1844,6 +2830,61 @@ export default function ReportsScreen() {
         </View>
       )}
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showPrintPicker}
+        onRequestClose={() => setShowPrintPicker(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPrintPicker(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Print Report ရွေးချယ်ရန်</Text>
+            <View style={styles.printOptionList}>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handlePrintKind("current")}
+              >
+                <Text style={styles.printOptionText}>လက်ရှိ Report Tab ကို Print</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handlePrintKind("members_filtered")}
+              >
+                <Text style={styles.printOptionText}>အသင်းဝင် Filter စာရင်း Print</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handlePrintKind("executive_committee")}
+              >
+                <Text style={styles.printOptionText}>နာယကနှင့် အမှုဆောင်အဖွဲ့ Print</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handlePrintKind("monthly_summary")}
+              >
+                <Text style={styles.printOptionText}>လချုပ် ငွေစာရင်းချုပ် Print</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handlePrintKind("four_month_summary")}
+              >
+                <Text style={styles.printOptionText}>၄ လပတ် ငွေစာရင်းချုပ် Print</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handlePrintKind("yearly_summary")}
+              >
+                <Text style={styles.printOptionText}>နှစ်ချုပ် ငွေစာရင်းချုပ် Print</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowPrintPicker(false)}>
+              <Text style={styles.cancelBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       {!useInlineYearPicker && (
         <Modal
@@ -2268,6 +3309,20 @@ const styles = StyleSheet.create({
   modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
   modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
+  printOptionList: { gap: 8 },
+  printOptionBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  printOptionText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
   memberOptionRow: {
     paddingVertical: 10,
     borderBottomWidth: 1,

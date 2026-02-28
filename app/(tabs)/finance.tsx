@@ -83,6 +83,7 @@ function TransactionRow({
   canRequestDelete?: boolean;
   onDeleteRequestPress?: (txn: Transaction) => void;
 }) {
+  const longPressTriggeredRef = React.useRef(false);
   const isIncome = txn.type === "income";
   const isTransfer = (txn.type as string) === "transfer";
   const paymentMethod = (txn as any).paymentMethod || "cash";
@@ -97,10 +98,28 @@ function TransactionRow({
     return new Date(d);
   }, [txn.date]);
 
+  const handlePress = () => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    if (canEdit) {
+      router.push({ pathname: "/add-transaction", params: { editId: txn.id } });
+    }
+  };
+
+  const handleLongPress = () => {
+    if (!canRequestDelete || !onDeleteRequestPress) return;
+    longPressTriggeredRef.current = true;
+    onDeleteRequestPress(txn);
+  };
+
   return (
     <Pressable
       style={styles.txnRow}
-      onPress={canEdit ? () => router.push({ pathname: "/add-transaction", params: { editId: txn.id } }) : undefined}
+      onPress={canEdit ? handlePress : undefined}
+      onLongPress={canRequestDelete ? handleLongPress : undefined}
+      delayLongPress={420}
     >
       <View style={[styles.txnIcon, { backgroundColor: (isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")) + "15" }]}>
         <Ionicons
@@ -136,12 +155,6 @@ function TransactionRow({
             <Ionicons name={txn.auditFlagged ? "flag" : "flag-outline"} size={16} color={txn.auditFlagged ? "#B91C1C" : Colors.light.textSecondary} />
           </Pressable>
         ) : null}
-        {canRequestDelete && onDeleteRequestPress ? (
-          <Pressable style={styles.deleteRequestBtn} onPress={() => onDeleteRequestPress(txn)}>
-            <Ionicons name="trash-outline" size={13} color="#92400E" />
-            <Text style={styles.deleteRequestBtnText}>Delete Request</Text>
-          </Pressable>
-        ) : null}
         <Text style={[styles.txnAmount, { color: isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E") }]}>
           {isTransfer ? "" : (isIncome ? "+" : "-")}{txn.amount.toLocaleString()}
         </Text>
@@ -165,6 +178,7 @@ function LoanRow({
   canRequestDelete?: boolean;
   onDeleteRequestPress?: (loan: Loan) => void;
 }) {
+  const longPressTriggeredRef = React.useRef(false);
   const isPaid = loan.status === "paid";
   const principalAmount = getLoanPrincipal(loan as any);
 
@@ -178,10 +192,26 @@ function LoanRow({
     return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }, [loan.issueDate]);
 
+  const handlePress = () => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    router.push({ pathname: "/loan-detail", params: { id: loan.id } } as any);
+  };
+
+  const handleLongPress = () => {
+    if (!canRequestDelete || !onDeleteRequestPress) return;
+    longPressTriggeredRef.current = true;
+    onDeleteRequestPress(loan);
+  };
+
   return (
     <Pressable
       style={styles.loanRow}
-      onPress={() => router.push({ pathname: "/loan-detail", params: { id: loan.id } } as any)}
+      onPress={handlePress}
+      onLongPress={canRequestDelete ? handleLongPress : undefined}
+      delayLongPress={420}
     >
       <View style={[styles.loanIcon, { backgroundColor: (isPaid ? Colors.light.success : "#F59E0B") + "15" }]}>
         <Ionicons
@@ -203,12 +233,6 @@ function LoanRow({
         </View>
       </View>
       <View style={styles.loanRight}>
-        {canRequestDelete && onDeleteRequestPress ? (
-          <Pressable style={styles.deleteRequestBtn} onPress={() => onDeleteRequestPress(loan)}>
-            <Ionicons name="trash-outline" size={13} color="#92400E" />
-            <Text style={styles.deleteRequestBtnText}>Delete Request</Text>
-          </Pressable>
-        ) : null}
         <Text style={styles.loanOutstanding}>{formatKs(outstanding)}</Text>
         <View style={[styles.loanStatusBadge, isPaid ? styles.loanPaid : styles.loanActive]}>
           <Text style={[styles.loanStatusText, { color: isPaid ? Colors.light.success : "#3B82F6" }]}>
@@ -310,7 +334,7 @@ export default function FinanceScreen() {
   const computeLoans = useMemo(() => (computeReady ? (loans || []) : []), [computeReady, loans]);
 
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
-    router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
+    router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);
   };
 
   const handleOpenSettings = () => {
@@ -751,7 +775,7 @@ export default function FinanceScreen() {
           )}
           <Pressable
             style={styles.claimButton}
-            onPress={() => router.push("/expense-claims" as any)}
+            onPress={() => router.push({ pathname: "/expense-claims", params: { openCreate: "1" } } as any)}
           >
             <Ionicons name="add-circle-outline" size={18} color="white" />
             <Text style={styles.claimButtonText}>ငွေတောင်းခံရန်</Text>
@@ -910,7 +934,10 @@ export default function FinanceScreen() {
               <Ionicons name="trending-up-outline" size={18} color={Colors.light.tint} />
               <Text style={styles.quickActionText}>အတိုးဆပ်ရန်</Text>
             </Pressable>
-            <Pressable style={styles.quickActionBtn} onPress={() => router.push("/expense-claims" as any)}>
+            <Pressable
+              style={styles.quickActionBtn}
+              onPress={() => router.push({ pathname: "/expense-claims", params: { openCreate: "1" } } as any)}
+            >
               <Ionicons name="document-text-outline" size={18} color={Colors.light.tint} />
               <Text style={styles.quickActionText}>ငွေတောင်းခံရန်</Text>
             </Pressable>
@@ -1513,22 +1540,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFC",
     borderWidth: 1,
     borderColor: Colors.light.border,
-  },
-  deleteRequestBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    backgroundColor: "#FEF3C7",
-    borderWidth: 1,
-    borderColor: "#F59E0B",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  deleteRequestBtnText: {
-    fontSize: 10.5,
-    fontFamily: "Inter_700Bold",
-    color: "#92400E",
   },
   txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
   txnDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary },
