@@ -35,6 +35,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from "expo-file-system/legacy";
 import AccessDenied from "@/components/AccessDenied";
 import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
+import { toEnglishDigits } from "@/lib/member-utils";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -113,21 +114,33 @@ function formatDateForRegister(dateValue: unknown): string {
 }
 
 function parseDateMs(dateValue: unknown): number {
-  const raw = String(dateValue || "").trim();
+  const raw = toEnglishDigits(String(dateValue || "").trim()).replace(/[၊။]/g, ".").trim();
   if (!raw) return 0;
 
-  const dotParts = raw.split(".");
-  if (dotParts.length === 3) {
-    const day = Number(dotParts[0]);
-    const month = Number(dotParts[1]);
-    const year = Number(dotParts[2]);
+  const ymd = raw.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$/);
+  if (ymd) {
+    const year = Number(ymd[1]);
+    const month = Number(ymd[2]);
+    const day = Number(ymd[3]);
     if (Number.isFinite(day) && Number.isFinite(month) && Number.isFinite(year)) {
       const parsed = new Date(year, month - 1, day).getTime();
       if (Number.isFinite(parsed)) return parsed;
     }
   }
 
-  const direct = new Date(raw).getTime();
+  const dmy = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const yy = Number(dmy[3]);
+    const year = yy < 100 ? 2000 + yy : yy;
+    if (Number.isFinite(day) && Number.isFinite(month) && Number.isFinite(year)) {
+      const parsed = new Date(year, month - 1, day).getTime();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+
+  const direct = new Date(raw.replace(/\s+/g, " ")).getTime();
   if (Number.isFinite(direct)) return direct;
 
   return 0;
@@ -464,7 +477,14 @@ export default function ReportsScreen() {
       const defaultPosition = normalizeOrgPosition(member?.orgPosition || status);
       const gender = resolveMemberGender(member);
       const age = calculateAge(member?.dob, refDate);
-      const joinDateMs = parseDateMs(member?.joinDate || member?.createdAt);
+      const joinDateMsRaw = parseDateMs(
+        member?.joinDate ||
+          member?.createdAt ||
+          member?.orgPositionHistory?.[0]?.effectiveDate ||
+          member?.statusDate ||
+          member?.resignDate
+      );
+      const joinDateMs = joinDateMsRaw > 0 ? joinDateMsRaw : parseDateMs("2018-01-01");
       const rawExitDateMs = parseDateMs(member?.statusDate || member?.resignDate);
       const hasExitStatus = ["resigned", "deceased", "expelled", "suspended"].includes(status);
       const exitDateMs = hasExitStatus && Number.isFinite(rawExitDateMs) ? rawExitDateMs : 0;
@@ -1404,22 +1424,45 @@ export default function ReportsScreen() {
 
   const shareHtmlAsPdf = useCallback(async (html: string) => {
     if (Platform.OS === "web") {
-      const popup = typeof window !== "undefined" ? window.open("", "_blank", "noopener,noreferrer") : null;
-      if (!popup) {
+      if (typeof document === "undefined") {
         await Print.printAsync({ html });
         return;
       }
-      popup.document.open();
-      popup.document.write(html);
-      popup.document.close();
-      await new Promise<void>((resolve) => {
-        setTimeout(() => {
-          popup.focus();
-          popup.print();
-          popup.close();
-          resolve();
-        }, 260);
-      });
+
+      const frame = document.createElement("iframe");
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "0";
+      frame.style.height = "0";
+      frame.style.border = "0";
+      frame.setAttribute("aria-hidden", "true");
+      document.body.appendChild(frame);
+
+      const cleanup = () => {
+        try {
+          if (frame.parentNode) frame.parentNode.removeChild(frame);
+        } catch {}
+      };
+
+      try {
+        const doc = frame.contentDocument || frame.contentWindow?.document;
+        if (!doc || !frame.contentWindow) {
+          cleanup();
+          await Print.printAsync({ html });
+          return;
+        }
+        doc.open();
+        doc.write(html);
+        doc.close();
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        setTimeout(cleanup, 1200);
+      } catch {
+        cleanup();
+        await Print.printAsync({ html });
+      }
       return;
     }
     const { uri } = await Print.printToFileAsync({ html });
@@ -1796,9 +1839,7 @@ export default function ReportsScreen() {
   const handlePrintKind = useCallback(
     (kind: PrintReportKind) => {
       setShowPrintPicker(false);
-      setTimeout(() => {
-        void generatePdf(kind);
-      }, 140);
+      void generatePdf(kind);
     },
     [generatePdf]
   );
