@@ -45,6 +45,15 @@ import {
   DEFAULT_CLOUD_SYNC_FOLDER_NAME,
   DEFAULT_LAN_SYNC_URL as DEFAULT_LAN_SYNC_URL_BASE,
 } from "./sync-defaults";
+import {
+  getCloudSyncAccountEmail as getRemoteCloudSyncAccountEmail,
+  getCloudSyncApiKey as getRemoteCloudSyncApiKey,
+  getCloudSyncEndpoint as getRemoteCloudSyncEndpoint,
+  getCloudSyncFolderName as getRemoteCloudSyncFolderName,
+  getManagedCloudSyncEnabled,
+  getManagedLanSyncEnabled,
+  getManagedLanSyncUrl,
+} from "./remote-config";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -2786,6 +2795,8 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     receivingAyaPayPhone: "",
     receivingAyaPayAccountName: "",
     receivingAyaPayMmqr: "",
+    monthlyFeeRateRules: [],
+    monthlyFeeReliefRules: [],
   };
   const stored = await safeGet<Partial<AccountSettings> | null>(KEYS.ACCOUNT_SETTINGS, null);
   if (!stored || typeof stored !== "object") return defaults;
@@ -2809,6 +2820,12 @@ export async function getAccountSettings(): Promise<AccountSettings> {
   }
   if (!String(stored.cloudSyncFolderName || "").trim()) {
     merged.cloudSyncFolderName = defaults.cloudSyncFolderName;
+  }
+  if (!Array.isArray(stored.monthlyFeeRateRules)) {
+    merged.monthlyFeeRateRules = [];
+  }
+  if (!Array.isArray(stored.monthlyFeeReliefRules)) {
+    merged.monthlyFeeReliefRules = [];
   }
   return merged;
 }
@@ -2857,12 +2874,19 @@ async function resolveCloudSyncConfig(): Promise<{
   folderName: string;
 }> {
   const settings = await getAccountSettings();
-  const endpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const apiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
+  const remoteEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
+  const legacyEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+  const endpoint = remoteEndpoint || legacyEndpoint;
+  const managedEnabled = getManagedCloudSyncEnabled();
+  const remoteApiKey = sanitizeCloudApiKey(getRemoteCloudSyncApiKey() || "");
+  const legacyApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
+  const apiKey = remoteApiKey || legacyApiKey;
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
-  const accountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
-  const folderName = String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
-  const enabled = settings.cloudSyncEnabled === true && !!endpoint;
+  const remoteAccountEmail = String(getRemoteCloudSyncAccountEmail() || "").trim();
+  const accountEmail = remoteAccountEmail || String(settings.cloudSyncGoogleAccountEmail || "").trim();
+  const remoteFolderName = String(getRemoteCloudSyncFolderName() || "").trim();
+  const folderName = remoteFolderName || String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
+  const enabled = (managedEnabled === null ? settings.cloudSyncEnabled === true : managedEnabled === true) && !!endpoint;
   return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
 }
 
@@ -2915,11 +2939,54 @@ async function compressImageDataUrl(value: string): Promise<string> {
 
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
-  const url = normalizeSyncServerUrl(
-    settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL
-  );
-  const enabled = settings.syncEnabled !== false && !!url;
+  const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+  const url = normalizeSyncServerUrl(remoteUrl || settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL);
+  const managedEnabled = getManagedLanSyncEnabled();
+  const enabled = (managedEnabled === null ? settings.syncEnabled !== false : managedEnabled === true) && !!url;
   return { url, enabled };
+}
+
+export async function getEffectiveSyncRuntimeConfig(): Promise<{
+  lan: { enabled: boolean; url: string; source: "managed_remote_config" | "local_settings" | "default" };
+  cloud: {
+    enabled: boolean;
+    endpoint: string;
+    hasApiKey: boolean;
+    source: "managed_remote_config" | "local_settings" | "default";
+  };
+}> {
+  const settings = await getAccountSettings();
+  const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+  const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL);
+  const lan = await resolveSyncServerUrl();
+  const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanUrl
+    ? "managed_remote_config"
+    : String(settings.syncServerUrl || "").trim()
+      ? "local_settings"
+      : "default";
+
+  const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
+  const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+  const cloud = await resolveCloudSyncConfig();
+  const cloudSource: "managed_remote_config" | "local_settings" | "default" = managedCloudEndpoint
+    ? "managed_remote_config"
+    : localCloudEndpoint
+      ? "local_settings"
+      : "default";
+
+  return {
+    lan: {
+      enabled: lan.enabled,
+      url: lan.url || lanBase,
+      source: lanSource,
+    },
+    cloud: {
+      enabled: cloud.enabled,
+      endpoint: cloud.endpoint,
+      hasApiKey: !!sanitizeCloudApiKey(cloud.apiKey),
+      source: cloudSource,
+    },
+  };
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 8000): Promise<Response> {

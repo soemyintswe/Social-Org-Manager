@@ -146,6 +146,40 @@ export interface AccountSettings {
   receivingAyaPayPhone?: string;
   receivingAyaPayAccountName?: string;
   receivingAyaPayMmqr?: string;
+  monthlyFeeRateRules?: MonthlyFeeRateRule[];
+  monthlyFeeReliefRules?: MonthlyFeeReliefRule[];
+}
+
+export type MonthlyFeeRuleScope = "global" | "position" | "member";
+export type MonthlyFeeReliefMode = "full" | "percent" | "fixed";
+
+export interface MonthlyFeeRateRule {
+  id: string;
+  scope: MonthlyFeeRuleScope;
+  amount: number;
+  effectiveFrom: string; // YYYY-MM-DD
+  effectiveTo?: string; // YYYY-MM-DD
+  position?: OrgPosition;
+  memberId?: string;
+  reason?: string;
+  active?: boolean;
+  updatedAt?: string;
+  updatedByUserId?: string;
+}
+
+export interface MonthlyFeeReliefRule {
+  id: string;
+  scope: MonthlyFeeRuleScope;
+  mode: MonthlyFeeReliefMode;
+  value?: number; // percent/fixed အတွက် တန်ဖိုး
+  effectiveFrom: string; // YYYY-MM-DD
+  effectiveTo?: string; // YYYY-MM-DD
+  position?: OrgPosition;
+  memberId?: string;
+  reason?: string;
+  active?: boolean;
+  updatedAt?: string;
+  updatedByUserId?: string;
 }
 
 export type TransactionType = "income" | "expense";

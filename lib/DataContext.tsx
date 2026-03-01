@@ -281,6 +281,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     receivingWavePayAccountName: "",
     receivingAyaPayPhone: "",
     receivingAyaPayAccountName: "",
+    monthlyFeeRateRules: [],
+    monthlyFeeReliefRules: [],
   });
   const [loading, setLoading] = useState(true);
   const bootstrappedRef = useRef(false);

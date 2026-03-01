@@ -17,9 +17,11 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import type { AccountSettings } from "@/lib/types";
 import { normalizeOrgPosition } from "@/lib/types";
 import {
   checkCloudSyncHealth,
+  getEffectiveSyncRuntimeConfig,
   pullCloudSnapshotToLocalDetailed,
   checkLanSyncHealth,
   pullLanSnapshotToLocalDetailed,
@@ -31,6 +33,7 @@ import {
   DEFAULT_CLOUD_SYNC_FOLDER_NAME,
   DEFAULT_LAN_SYNC_URL,
 } from "@/lib/sync-defaults";
+import { getManagedSyncLockdownEnabled } from "@/lib/remote-config";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -72,6 +75,24 @@ export default function AccountSettingsScreen() {
   const [receivingAyaPayAccountName, setReceivingAyaPayAccountName] = useState(accountSettings.receivingAyaPayAccountName || "");
   const [receivingAyaPayMmqr, setReceivingAyaPayMmqr] = useState(accountSettings.receivingAyaPayMmqr || "");
   const [syncing, setSyncing] = useState(false);
+  const [syncConfigSummary, setSyncConfigSummary] = useState<{
+    lanSource: "managed_remote_config" | "local_settings" | "default";
+    cloudSource: "managed_remote_config" | "local_settings" | "default";
+    lanUrl: string;
+    lanEnabled: boolean;
+    cloudEndpoint: string;
+    cloudEnabled: boolean;
+    cloudHasApiKey: boolean;
+  }>({
+    lanSource: "default",
+    cloudSource: "default",
+    lanUrl: "",
+    lanEnabled: false,
+    cloudEndpoint: "",
+    cloudEnabled: false,
+    cloudHasApiKey: false,
+  });
+  const managedSyncLockdown = getManagedSyncLockdownEnabled();
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
@@ -82,8 +103,25 @@ export default function AccountSettingsScreen() {
     return withProtocol.replace(/\/+$/, "");
   };
 
-  const hasLanSyncConfigured = syncEnabled && !!normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
-  const hasCloudSyncConfigured = cloudSyncEnabled && !!cloudSyncEndpoint.trim();
+  const syncSourceLabel = (source: "managed_remote_config" | "local_settings" | "default"): string => {
+    if (source === "managed_remote_config") return "Firebase Remote Config";
+    if (source === "local_settings") return "Local Account Settings";
+    return "Default Value";
+  };
+
+  const summarizeEndpointForDisplay = (endpoint: string): string => {
+    const raw = String(endpoint || "").trim();
+    if (!raw) return "Not configured";
+    try {
+      const parsed = new URL(raw);
+      return `${parsed.origin}/...`;
+    } catch {
+      return "Configured";
+    }
+  };
+
+  const hasLanSyncConfigured = syncConfigSummary.lanEnabled && !!normalizeUrl((syncConfigSummary.lanUrl || syncServerUrl || DEFAULT_LAN_SYNC_URL));
+  const hasCloudSyncConfigured = syncConfigSummary.cloudEnabled && !!String(syncConfigSummary.cloudEndpoint || cloudSyncEndpoint || "").trim();
   const storageModeLabel = hasLanSyncConfigured && hasCloudSyncConfigured
     ? "Online + Offline (LAN + Cloud Sync)"
     : hasLanSyncConfigured
@@ -134,6 +172,31 @@ export default function AccountSettingsScreen() {
     accountSettings.receivingAyaPayMmqr,
   ]);
 
+  React.useEffect(() => {
+    let active = true;
+    const loadEffectiveSyncConfig = async () => {
+      try {
+        const resolved = await getEffectiveSyncRuntimeConfig();
+        if (!active) return;
+        setSyncConfigSummary({
+          lanSource: resolved.lan.source,
+          cloudSource: resolved.cloud.source,
+          lanUrl: resolved.lan.url,
+          lanEnabled: resolved.lan.enabled,
+          cloudEndpoint: resolved.cloud.endpoint,
+          cloudEnabled: resolved.cloud.enabled,
+          cloudHasApiKey: resolved.cloud.hasApiKey,
+        });
+      } catch {
+        // keep existing summary state
+      }
+    };
+    void loadEffectiveSyncConfig();
+    return () => {
+      active = false;
+    };
+  }, [accountSettings]);
+
   const getReceivingValuesForSave = () => {
     if (canEditReceivingAccounts) {
       return {
@@ -167,24 +230,62 @@ export default function AccountSettingsScreen() {
     };
   };
 
+  const getSyncValuesForSave = (): Pick<
+    AccountSettings,
+    | "syncServerUrl"
+    | "syncEnabled"
+    | "cloudSyncEnabled"
+    | "cloudSyncProvider"
+    | "cloudSyncEndpoint"
+    | "cloudSyncApiKey"
+    | "cloudSyncGoogleAccountEmail"
+    | "cloudSyncFolderName"
+  > => {
+    if (!canManageSystem) {
+      return {
+        syncServerUrl: String(accountSettings.syncServerUrl || ""),
+        syncEnabled: accountSettings.syncEnabled !== false,
+        cloudSyncEnabled: accountSettings.cloudSyncEnabled === true,
+        cloudSyncProvider: "google_drive_apps_script" as const,
+        cloudSyncEndpoint: String(accountSettings.cloudSyncEndpoint || ""),
+        cloudSyncApiKey: String(accountSettings.cloudSyncApiKey || ""),
+        cloudSyncGoogleAccountEmail: String(accountSettings.cloudSyncGoogleAccountEmail || ""),
+        cloudSyncFolderName: String(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME),
+      };
+    }
+
+    const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+    return {
+      syncServerUrl: managedSyncLockdown ? String(accountSettings.syncServerUrl || "") : normalizedUrl,
+      syncEnabled: managedSyncLockdown ? accountSettings.syncEnabled !== false : syncEnabled,
+      cloudSyncEnabled: managedSyncLockdown ? accountSettings.cloudSyncEnabled === true : cloudSyncEnabled,
+      cloudSyncProvider: "google_drive_apps_script",
+      cloudSyncEndpoint: managedSyncLockdown
+        ? String(accountSettings.cloudSyncEndpoint || "")
+        : cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
+      cloudSyncApiKey: managedSyncLockdown
+        ? String(accountSettings.cloudSyncApiKey || "")
+        : cloudSyncApiKey.trim(),
+      cloudSyncGoogleAccountEmail: managedSyncLockdown
+        ? String(accountSettings.cloudSyncGoogleAccountEmail || "")
+        : cloudSyncGoogleAccountEmail.trim(),
+      cloudSyncFolderName: managedSyncLockdown
+        ? String(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
+        : cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+    };
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
       const receiving = getReceivingValuesForSave();
+      const syncValues = getSyncValuesForSave();
       await updateAccountSettings({
         ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
         openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",
-        syncServerUrl: normalizedUrl,
-        syncEnabled,
-        cloudSyncEnabled,
-        cloudSyncProvider: "google_drive_apps_script",
-        cloudSyncEndpoint: cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
-        cloudSyncApiKey: cloudSyncApiKey.trim(),
-        cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
-        cloudSyncFolderName: cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+        ...syncValues,
         ...receiving,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -293,53 +394,50 @@ export default function AccountSettingsScreen() {
     if (syncing) return;
     setSyncing(true);
     try {
-      const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
       const receiving = getReceivingValuesForSave();
+      const syncValues = getSyncValuesForSave();
       await updateAccountSettings({
         ...accountSettings,
         openingBalanceCash: accountSettings.openingBalanceCash,
         openingBalanceBank: accountSettings.openingBalanceBank,
         currency: accountSettings.currency || "MMK",
-        syncServerUrl: normalizedUrl,
-        syncEnabled,
-        cloudSyncEnabled,
-        cloudSyncProvider: "google_drive_apps_script",
-        cloudSyncEndpoint: cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
-        cloudSyncApiKey: cloudSyncApiKey.trim(),
-        cloudSyncGoogleAccountEmail: cloudSyncGoogleAccountEmail.trim(),
-        cloudSyncFolderName: cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+        ...syncValues,
         ...receiving,
       });
-      if (syncEnabled && normalizedUrl) {
+      const runtimeConfig = await getEffectiveSyncRuntimeConfig();
+      const runtimeLanEnabled = runtimeConfig.lan.enabled;
+      const runtimeCloudEnabled = runtimeConfig.cloud.enabled;
+      const runtimeLanUrl = normalizeUrl(runtimeConfig.lan.url || syncValues.syncServerUrl || DEFAULT_LAN_SYNC_URL);
+
+      if (runtimeLanEnabled && runtimeLanUrl) {
         const health = await checkLanSyncHealth();
         if (!health.ok) {
           Alert.alert(
             "Sync Error",
-            `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${normalizedUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}\n\nComputer server run နေ/မနေ၊ Phone/Computer Wi-Fi တူ/မတူ၊ firewall ကို စစ်ပါ။`
+            `Server မချိတ်ဆက်နိုင်ပါ\nURL: ${runtimeLanUrl}\nReason: ${health.reason || "unknown"}${health.status ? ` (${health.status})` : ""}\n\nComputer server run နေ/မနေ၊ Phone/Computer Wi-Fi တူ/မတူ၊ firewall ကို စစ်ပါ။`
           );
         }        
       }
 
       let cloudHealthLine = "Cloud: Disabled";
-      if (cloudSyncEnabled && cloudSyncEndpoint.trim()) {
+      if (runtimeCloudEnabled) {
         const cloudHealth = await checkCloudSyncHealth();
         cloudHealthLine = cloudHealth.ok
           ? "Cloud Health: OK"
           : `Cloud Health: Fail (${cloudHealth.reason || "unknown"}${cloudHealth.status ? `/${cloudHealth.status}` : ""})`;
       }
 
-      const normalizedCloudEndpoint = cloudSyncEndpoint.trim();
-      const pullLan = syncEnabled && normalizedUrl
+      const pullLan = runtimeLanEnabled
         ? await pullLanSnapshotToLocalDetailed()
         : ({ ok: false, reason: "disabled_or_empty_url" } as const);
-      const pullCloud = cloudSyncEnabled && normalizedCloudEndpoint
+      const pullCloud = runtimeCloudEnabled
         ? await pullCloudSnapshotToLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
-      const pushLan = syncEnabled && normalizedUrl
+      const pushLan = runtimeLanEnabled
         ? await pushLanSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "disabled_or_empty_url" } as const);
-      const pushCloud = cloudSyncEnabled && normalizedCloudEndpoint
+      const pushCloud = runtimeCloudEnabled
         ? await pushCloudSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
@@ -416,72 +514,92 @@ export default function AccountSettingsScreen() {
             </Text>
           </View>
         </View>
-        <Text style={styles.label}>LAN Sync Server URL</Text>
-        <TextInput
-          style={styles.input}
-          value={syncServerUrl}
-          onChangeText={setSyncServerUrl}
-          placeholder="ဥပမာ - http://192.168.1.100:5000"
-          autoCapitalize="none"
-        />
-        <View style={styles.syncRow}>
-          <Pressable style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive]} onPress={() => setSyncEnabled((v) => !v)}>
-            <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
-            <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
-              {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
-            </Text>
-          </Pressable>
-          <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
-            <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.securityCard}>
-          <Text style={styles.sectionTitle}>Google Drive Cloud Sync (MVP)</Text>
-          <Text style={styles.sectionDesc}>
-            Computer မဖွင့်ဘဲ ဖုန်းများအချင်းချင်း Sync လုပ်ရန် Google Apps Script Web App URL ကိုထည့်ပါ။
-          </Text>
-          <Text style={styles.label}>Cloud Script URL</Text>
-          <TextInput
-            style={styles.input}
-            value={cloudSyncEndpoint}
-            onChangeText={setCloudSyncEndpoint}
-            placeholder="https://script.google.com/macros/s/.../exec"
-            autoCapitalize="none"
-          />
-          <Text style={styles.label}>Cloud API Key (Optional)</Text>
-          <TextInput
-            style={styles.input}
-            value={cloudSyncApiKey}
-            onChangeText={setCloudSyncApiKey}
-            placeholder="Shared key between phones"
-            autoCapitalize="none"
-          />
-          <Text style={styles.label}>Google Drive Account (Optional)</Text>
-          <TextInput
-            style={styles.input}
-            value={cloudSyncGoogleAccountEmail}
-            onChangeText={setCloudSyncGoogleAccountEmail}
-            placeholder="name@gmail.com"
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
-          <Text style={styles.label}>Cloud Folder Name</Text>
-          <TextInput
-            style={styles.input}
-            value={cloudSyncFolderName}
-            onChangeText={setCloudSyncFolderName}
-            placeholder="OrgHub Sync"
-          />
-          <View style={styles.syncRow}>
-            <Pressable style={[styles.syncToggleBtn, cloudSyncEnabled && styles.syncToggleBtnActive]} onPress={() => setCloudSyncEnabled((v) => !v)}>
-              <Ionicons name={cloudSyncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={cloudSyncEnabled ? "#fff" : Colors.light.text} />
-              <Text style={[styles.syncToggleText, cloudSyncEnabled && styles.syncToggleTextActive]}>
-                {cloudSyncEnabled ? "Cloud Sync Enabled" : "Cloud Sync Disabled"}
+        {canManageSystem && (
+          <>
+            <Text style={styles.label}>LAN Sync Server URL</Text>
+            <TextInput
+              style={[styles.input, managedSyncLockdown && styles.inputDisabled]}
+              value={syncServerUrl}
+              onChangeText={setSyncServerUrl}
+              placeholder="ဥပမာ - http://192.168.1.100:5000"
+              autoCapitalize="none"
+              editable={!managedSyncLockdown}
+            />
+            {managedSyncLockdown && (
+              <Text style={styles.helperText}>
+                Managed Mode: LAN URL ကို Firebase Remote Config ကနေထိန်းချုပ်နေပါသည်။
               </Text>
-            </Pressable>
-          </View>
-        </View>
+            )}
+            <View style={styles.syncRow}>
+              <Pressable
+                style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive, managedSyncLockdown && styles.syncToggleBtnDisabled]}
+                onPress={() => {
+                  if (!managedSyncLockdown) setSyncEnabled((v) => !v);
+                }}
+              >
+                <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
+                <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
+                  {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
+                </Text>
+              </Pressable>
+              <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
+                <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.securityCard}>
+              <Text style={styles.sectionTitle}>Managed Sync Configuration</Text>
+              <Text style={styles.sectionDesc}>
+                Cloud Sync URL/API Key များကို UI မှတိုက်ရိုက်မတည်းဖြတ်ဘဲ Firebase Remote Config မှတစ်ဆင့် ဗဟိုထိန်းချုပ်ထားပါသည်။
+              </Text>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Managed Lockdown</Text>
+                <Text style={styles.summaryValue}>{managedSyncLockdown ? "Enabled" : "Disabled"}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>LAN Source</Text>
+                <Text style={styles.summaryValue}>{syncSourceLabel(syncConfigSummary.lanSource)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>LAN Runtime</Text>
+                <Text style={styles.summaryValue}>{syncConfigSummary.lanEnabled ? "Enabled" : "Disabled"}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>LAN URL</Text>
+                <Text style={styles.summaryValue}>{summarizeEndpointForDisplay(syncConfigSummary.lanUrl)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Cloud Source</Text>
+                <Text style={styles.summaryValue}>{syncSourceLabel(syncConfigSummary.cloudSource)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Cloud Runtime</Text>
+                <Text style={styles.summaryValue}>{syncConfigSummary.cloudEnabled ? "Enabled" : "Disabled"}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Cloud Endpoint</Text>
+                <Text style={styles.summaryValue}>{summarizeEndpointForDisplay(syncConfigSummary.cloudEndpoint)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Cloud API Key</Text>
+                <Text style={styles.summaryValue}>{syncConfigSummary.cloudHasApiKey ? "Configured" : "Not configured"}</Text>
+              </View>
+              <View style={styles.syncRow}>
+                <Pressable
+                  style={[styles.syncToggleBtn, cloudSyncEnabled && styles.syncToggleBtnActive, managedSyncLockdown && styles.syncToggleBtnDisabled]}
+                  onPress={() => {
+                    if (!managedSyncLockdown) setCloudSyncEnabled((v) => !v);
+                  }}
+                >
+                  <Ionicons name={cloudSyncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={cloudSyncEnabled ? "#fff" : Colors.light.text} />
+                  <Text style={[styles.syncToggleText, cloudSyncEnabled && styles.syncToggleTextActive]}>
+                    {cloudSyncEnabled ? "Cloud Sync Enabled" : "Cloud Sync Disabled"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </>
+        )}
 
         {canEditReceivingAccounts && (
           <View style={styles.securityCard}>
@@ -922,6 +1040,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#16A34A",
     borderColor: "#16A34A",
   },
+  syncToggleBtnDisabled: {
+    opacity: 0.55,
+  },
   syncToggleText: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
@@ -939,6 +1060,28 @@ const styles = StyleSheet.create({
   },
   syncNowText: {
     color: "#fff",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2FF",
+    gap: 12,
+  },
+  summaryLabel: {
+    flex: 1,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    fontSize: 13,
+  },
+  summaryValue: {
+    flex: 1,
+    textAlign: "right",
+    color: Colors.light.text,
     fontFamily: "Inter_600SemiBold",
     fontSize: 13,
   },

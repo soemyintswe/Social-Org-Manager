@@ -24,6 +24,10 @@ import {
   MEMBER_GENDER_LABELS,
   MEMBER_STATUS_LABELS,
   MEMBER_STATUS_VALUES,
+  MonthlyFeeRateRule,
+  MonthlyFeeReliefRule,
+  MonthlyFeeRuleScope,
+  MonthlyFeeReliefMode,
   ORG_POSITION_LABELS,
   MemberStatus,
   type OrgPosition,
@@ -70,6 +74,25 @@ type PrintReportKind =
   | "monthly_summary"
   | "four_month_summary"
   | "yearly_summary";
+type PrintLayoutOptions = {
+  pageSize?: "A4";
+  orientation?: "portrait" | "landscape";
+};
+
+type FeeYearSummary = {
+  year: number;
+  months: { year: number; monthIdx: number; key: string; label: string; inSelectedRange: boolean }[];
+  memberRows: {
+    memberId: string;
+    memberName: string;
+    paidMap: Record<string, boolean>;
+    dueMap: Record<string, number>;
+    paidTotal: number;
+    dueTotal: number;
+    unpaidTotal: number;
+  }[];
+  totals: { paid: number; due: number; unpaid: number };
+};
 
 const REPORT_TXN_PAGE_SIZE = 60;
 const REPORT_REGISTER_PAGE_SIZE = 50;
@@ -322,16 +345,39 @@ function escapeHtml(text: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+function formatYmd(date: Date): string {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function monthStartFrom(dateLike: string): Date {
+  const ms = parseDateMs(dateLike);
+  const d = ms > 0 ? new Date(ms) : new Date();
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function monthEndFrom(year: number, monthIdx: number): Date {
+  return new Date(year, monthIdx + 1, 0, 23, 59, 59, 999);
+}
+
+function monthKey(year: number, monthIdx: number): string {
+  return `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
+}
+
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const { transactions, members, loading, accountSettings, loans, getLoanInterestDue } = useData() as any;
+  const { transactions, members, loading, accountSettings, loans, getLoanInterestDue, standardAmountRules, updateAccountSettings } = useData() as any;
   const { can, currentUser } = useAuth();
   const canViewAllReports = can("reports.view_all");
   const canViewReports = can("reports.view_summary") || canViewAllReports;
   const canViewAllFinanceRecords = can("finance.view_detail") || can("finance.view_all");
   const canViewAuditFlags = can("finance.audit_flag") || canViewAllFinanceRecords;
   const canChooseScope = canViewAllReports && canViewAllFinanceRecords;
+  const canManageFeePolicies =
+    currentUser?.systemRole === "admin" ||
+    can("finance.manage") ||
+    normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
   
   // Default to 2018-01-01 to Today
   const [pickerStartDate, setPickerStartDate] = useState(new Date(2018, 0, 1));
@@ -349,6 +395,7 @@ export default function ReportsScreen() {
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [showFeePolicyModal, setShowFeePolicyModal] = useState(false);
   const [showYearPicker, setShowYearPicker] = useState(false);
   const [showPrintPicker, setShowPrintPicker] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -368,6 +415,21 @@ export default function ReportsScreen() {
   const [visibleCashBookCount, setVisibleCashBookCount] = useState(REPORT_CASHBOOK_PAGE_SIZE);
   const [visibleAuditCount, setVisibleAuditCount] = useState(REPORT_AUDIT_PAGE_SIZE);
   const [visibleMemberCount, setVisibleMemberCount] = useState(REPORT_MEMBER_PAGE_SIZE);
+  const [newRateScope, setNewRateScope] = useState<MonthlyFeeRuleScope>("global");
+  const [newRatePosition, setNewRatePosition] = useState<OrgPosition>("patron");
+  const [newRateMemberId, setNewRateMemberId] = useState("");
+  const [newRateAmount, setNewRateAmount] = useState("");
+  const [newRateStart, setNewRateStart] = useState(formatYmd(new Date()));
+  const [newRateEnd, setNewRateEnd] = useState("");
+  const [newRateReason, setNewRateReason] = useState("");
+  const [newReliefScope, setNewReliefScope] = useState<MonthlyFeeRuleScope>("global");
+  const [newReliefPosition, setNewReliefPosition] = useState<OrgPosition>("patron");
+  const [newReliefMemberId, setNewReliefMemberId] = useState("");
+  const [newReliefMode, setNewReliefMode] = useState<MonthlyFeeReliefMode>("full");
+  const [newReliefValue, setNewReliefValue] = useState("");
+  const [newReliefStart, setNewReliefStart] = useState(formatYmd(new Date()));
+  const [newReliefEnd, setNewReliefEnd] = useState("");
+  const [newReliefReason, setNewReliefReason] = useState("");
   const effectiveScope: ReportViewScope = canChooseScope ? viewScope : "self";
   const showDetailRows = canViewAllReports || effectiveScope !== "all";
   const useInlineYearPicker = width >= 768;
@@ -964,48 +1026,105 @@ export default function ReportsScreen() {
     };
   }, [cashBookRows]);
 
-  const monthsInRange = useMemo(() => {
-    const months = [];
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    let current = new Date(start.getFullYear(), start.getMonth(), 1);
+  const defaultMonthlyFeeRate = useMemo(() => {
+    const monthlyRule = (standardAmountRules || []).find((row: any) => String(row?.key || "") === "monthly_fee_rate");
+    const amount = Number(monthlyRule?.amount || 0);
+    return amount > 0 ? amount : 2500;
+  }, [standardAmountRules]);
 
-    while (current <= end) {
-      months.push({
-        name: current.toLocaleString("default", { month: "short" }),
-        year: current.getFullYear(),
-        monthIdx: current.getMonth(),
+  const monthlyFeeRateRules = useMemo<MonthlyFeeRateRule[]>(() => {
+    const rows = Array.isArray(accountSettings?.monthlyFeeRateRules) ? accountSettings.monthlyFeeRateRules : [];
+    const normalized = rows
+      .map((row: any) => {
+        const scope = (["global", "position", "member"].includes(String(row?.scope || "")) ? row.scope : "global") as MonthlyFeeRuleScope;
+        const amount = Math.max(0, Number(row?.amount || 0));
+        const effectiveFrom = String(row?.effectiveFrom || "").trim();
+        if (!effectiveFrom || amount <= 0) return null;
+        return {
+          id: String(row?.id || `fee-rate-${Date.now()}`),
+          scope,
+          amount,
+          effectiveFrom,
+          effectiveTo: String(row?.effectiveTo || "").trim() || undefined,
+          memberId: String(row?.memberId || "").trim() || undefined,
+          position: row?.position ? normalizeOrgPosition(row.position) : undefined,
+          reason: String(row?.reason || "").trim() || undefined,
+          active: row?.active !== false,
+          updatedAt: String(row?.updatedAt || "").trim() || undefined,
+          updatedByUserId: String(row?.updatedByUserId || "").trim() || undefined,
+        } as MonthlyFeeRateRule;
+      })
+      .filter(Boolean) as MonthlyFeeRateRule[];
+    if (normalized.length === 0) {
+      normalized.push({
+        id: "default-global-fee-rate",
+        scope: "global",
+        amount: defaultMonthlyFeeRate,
+        effectiveFrom: "2018-01-01",
+        reason: "Default monthly fee",
+        active: true,
       });
-      current.setMonth(current.getMonth() + 1);
+      normalized.push({
+        id: "default-patron-fee-rate",
+        scope: "position",
+        position: "patron",
+        amount: 10000,
+        effectiveFrom: "2018-01-01",
+        reason: "နာယက စံနှုန်းထား",
+        active: true,
+      });
     }
-    return months;
-  }, [startDate, endDate]);
+    return normalized;
+  }, [accountSettings?.monthlyFeeRateRules, defaultMonthlyFeeRate]);
+
+  const monthlyFeeReliefRules = useMemo<MonthlyFeeReliefRule[]>(() => {
+    const rows = Array.isArray(accountSettings?.monthlyFeeReliefRules) ? accountSettings.monthlyFeeReliefRules : [];
+    return rows
+      .map((row: any) => {
+        const scope = (["global", "position", "member"].includes(String(row?.scope || "")) ? row.scope : "global") as MonthlyFeeRuleScope;
+        const mode = (["full", "percent", "fixed"].includes(String(row?.mode || "")) ? row.mode : "full") as MonthlyFeeReliefMode;
+        const effectiveFrom = String(row?.effectiveFrom || "").trim();
+        if (!effectiveFrom) return null;
+        return {
+          id: String(row?.id || `fee-relief-${Date.now()}`),
+          scope,
+          mode,
+          value: Number(row?.value || 0),
+          effectiveFrom,
+          effectiveTo: String(row?.effectiveTo || "").trim() || undefined,
+          memberId: String(row?.memberId || "").trim() || undefined,
+          position: row?.position ? normalizeOrgPosition(row.position) : undefined,
+          reason: String(row?.reason || "").trim() || undefined,
+          active: row?.active !== false,
+          updatedAt: String(row?.updatedAt || "").trim() || undefined,
+          updatedByUserId: String(row?.updatedByUserId || "").trim() || undefined,
+        } as MonthlyFeeReliefRule;
+      })
+      .filter(Boolean) as MonthlyFeeReliefRule[];
+  }, [accountSettings?.monthlyFeeReliefRules]);
 
   const feePaidMonthSet = useMemo(() => {
     const set = new Set<string>();
-    const monthKey = (memberId: string, year: number, monthIdx: number) => `${memberId}|${year}|${monthIdx}`;
     (reportTransactions || []).forEach((t: any) => {
       if (String(t?.category || "") !== "member_fees") return;
       const memberId = String(t?.memberId || "").trim();
       if (!memberId) return;
 
       if (t?.feePeriodStart && t?.feePeriodEnd) {
-        const start = new Date(t.feePeriodStart);
-        const end = new Date(t.feePeriodEnd);
-        if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-          let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-          const boundary = new Date(end.getFullYear(), end.getMonth(), 1);
-          while (cursor <= boundary) {
-            set.add(monthKey(memberId, cursor.getFullYear(), cursor.getMonth()));
-            cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-          }
-          return;
+        const start = monthStartFrom(String(t.feePeriodStart));
+        const end = monthStartFrom(String(t.feePeriodEnd));
+        let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+        const boundary = new Date(end.getFullYear(), end.getMonth(), 1);
+        while (cursor <= boundary) {
+          set.add(`${memberId}|${cursor.getFullYear()}|${cursor.getMonth()}`);
+          cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
         }
+        return;
       }
 
-      const d = new Date(t?.date);
+      const d = monthStartFrom(String(t?.date || ""));
       if (!Number.isNaN(d.getTime())) {
-        set.add(monthKey(memberId, d.getFullYear(), d.getMonth()));
+        set.add(`${memberId}|${d.getFullYear()}|${d.getMonth()}`);
       }
     });
     return set;
@@ -1021,6 +1140,209 @@ export default function ReportsScreen() {
     });
     return map;
   }, [filteredTxns]);
+
+  const memberFeePaidByYearMap = useMemo(() => {
+    const map = new Map<string, number>();
+    filteredTxns.forEach((t: any) => {
+      if (String(t?.category || "") !== "member_fees") return;
+      const memberId = String(t?.memberId || "").trim();
+      if (!memberId) return;
+      const amount = Number(t?.amount || 0);
+      if (amount <= 0) return;
+
+      if (t?.feePeriodStart && t?.feePeriodEnd) {
+        const start = monthStartFrom(String(t.feePeriodStart));
+        const end = monthStartFrom(String(t.feePeriodEnd));
+        const months: { year: number; monthIdx: number }[] = [];
+        let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+        const boundary = new Date(end.getFullYear(), end.getMonth(), 1);
+        while (cursor <= boundary) {
+          months.push({ year: cursor.getFullYear(), monthIdx: cursor.getMonth() });
+          cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+        }
+        if (months.length > 0) {
+          const perMonth = amount / months.length;
+          months.forEach((m) => {
+            const key = `${memberId}|${m.year}`;
+            map.set(key, (map.get(key) || 0) + perMonth);
+          });
+          return;
+        }
+      }
+
+      const d = monthStartFrom(String(t?.date || ""));
+      const key = `${memberId}|${d.getFullYear()}`;
+      map.set(key, (map.get(key) || 0) + amount);
+    });
+    return map;
+  }, [filteredTxns]);
+
+  const feeYearSummaries = useMemo<FeeYearSummary[]>(() => {
+    const startBoundary = new Date(startDate.getFullYear(), startDate.getMonth(), 1).getTime();
+    const endBoundary = new Date(endDate.getFullYear(), endDate.getMonth(), 1).getTime();
+    const years: number[] = [];
+    for (let year = startDate.getFullYear(); year <= endDate.getFullYear(); year += 1) years.push(year);
+
+    const scopeWeight = (scope: MonthlyFeeRuleScope): number => {
+      if (scope === "member") return 3;
+      if (scope === "position") return 2;
+      return 1;
+    };
+
+    const resolveMemberMonthDue = (member: any, year: number, monthIdx: number): number => {
+      const monthStart = new Date(year, monthIdx, 1);
+      const monthEnd = monthEndFrom(year, monthIdx);
+      const monthStartMs = monthStart.getTime();
+      const monthEndMs = monthEnd.getTime();
+
+      const joinDateMs = parseDateMs(
+        String(
+          member?.joinDate ||
+            member?.createdAt ||
+            member?.orgPositionHistory?.[0]?.effectiveDate ||
+            member?.statusDate ||
+            ""
+        )
+      );
+      const joinMonthMs = (joinDateMs > 0 ? new Date(joinDateMs) : new Date(2018, 0, 1));
+      const joinMonthStartMs = new Date(joinMonthMs.getFullYear(), joinMonthMs.getMonth(), 1).getTime();
+      if (monthStartMs < joinMonthStartMs) return 0;
+
+      const status = normalizeMemberStatus(member?.status);
+      const isExitStatus = ["resigned", "deceased", "expelled", "suspended"].includes(status);
+      const exitDateMs = isExitStatus ? parseDateMs(String(member?.statusDate || member?.resignDate || "")) : 0;
+      if (exitDateMs > 0) {
+        const exitMonth = new Date(exitDateMs);
+        const exitMonthStartMs = new Date(exitMonth.getFullYear(), exitMonth.getMonth(), 1).getTime();
+        if (monthStartMs > exitMonthStartMs) return 0;
+      }
+
+      const positionsInMonth = getMemberPositionsInRange(member, monthStartMs, monthEndMs).positions;
+
+      const applicableRates = monthlyFeeRateRules
+        .filter((rule) => rule.active !== false)
+        .filter((rule) => {
+          const fromMs = parseDateMs(rule.effectiveFrom);
+          const toMs = rule.effectiveTo ? parseDateMs(rule.effectiveTo) : Number.POSITIVE_INFINITY;
+          if (fromMs > monthEndMs) return false;
+          if (Number.isFinite(toMs) && toMs < monthStartMs) return false;
+          if (rule.scope === "member") return String(rule.memberId || "") === String(member?.id || "");
+          if (rule.scope === "position") return !!rule.position && positionsInMonth.includes(rule.position);
+          return true;
+        })
+        .sort((a, b) => {
+          const scopeDiff = scopeWeight(b.scope) - scopeWeight(a.scope);
+          if (scopeDiff !== 0) return scopeDiff;
+          return parseDateMs(b.effectiveFrom) - parseDateMs(a.effectiveFrom);
+        });
+
+      const selectedRate = applicableRates[0];
+      const baseRate = Math.max(0, Number(selectedRate?.amount ?? defaultMonthlyFeeRate));
+      if (baseRate <= 0) return 0;
+
+      const applicableReliefs = monthlyFeeReliefRules
+        .filter((rule) => rule.active !== false)
+        .filter((rule) => {
+          const fromMs = parseDateMs(rule.effectiveFrom);
+          const toMs = rule.effectiveTo ? parseDateMs(rule.effectiveTo) : Number.POSITIVE_INFINITY;
+          if (fromMs > monthEndMs) return false;
+          if (Number.isFinite(toMs) && toMs < monthStartMs) return false;
+          if (rule.scope === "member") return String(rule.memberId || "") === String(member?.id || "");
+          if (rule.scope === "position") return !!rule.position && positionsInMonth.includes(rule.position);
+          return true;
+        })
+        .sort((a, b) => {
+          const scopeDiff = scopeWeight(b.scope) - scopeWeight(a.scope);
+          if (scopeDiff !== 0) return scopeDiff;
+          return parseDateMs(b.effectiveFrom) - parseDateMs(a.effectiveFrom);
+        });
+
+      const selectedRelief = applicableReliefs[0];
+      if (!selectedRelief) return Math.round(baseRate);
+
+      if (selectedRelief.mode === "full") return 0;
+      if (selectedRelief.mode === "percent") {
+        const percent = Math.min(100, Math.max(0, Number(selectedRelief.value || 0)));
+        return Math.max(0, Math.round(baseRate * (1 - percent / 100)));
+      }
+      const fixed = Math.max(0, Number(selectedRelief.value || 0));
+      return Math.max(0, Math.round(baseRate - fixed));
+    };
+
+    return years.map((year) => {
+      const months = Array.from({ length: 12 }).map((_, monthIdx) => {
+        const key = monthKey(year, monthIdx);
+        const monthStartMs = new Date(year, monthIdx, 1).getTime();
+        return {
+          year,
+          monthIdx,
+          key,
+          label: new Date(year, monthIdx, 1).toLocaleString("default", { month: "short" }),
+          inSelectedRange: monthStartMs >= startBoundary && monthStartMs <= endBoundary,
+        };
+      });
+
+      const memberRows = (reportMembers || []).map((member: any) => {
+        const paidMap: Record<string, boolean> = {};
+        const dueMap: Record<string, number> = {};
+        let dueTotal = 0;
+        let unpaidTotal = 0;
+
+        months.forEach((month) => {
+          if (!month.inSelectedRange) {
+            paidMap[month.key] = false;
+            dueMap[month.key] = 0;
+            return;
+          }
+          const paid = feePaidMonthSet.has(`${member.id}|${month.year}|${month.monthIdx}`);
+          const due = resolveMemberMonthDue(member, month.year, month.monthIdx);
+          paidMap[month.key] = paid;
+          dueMap[month.key] = due;
+          dueTotal += due;
+          if (!paid) unpaidTotal += due;
+        });
+
+        const paidTotal = memberFeePaidByYearMap.get(`${String(member?.id || "")}|${year}`) || 0;
+        return {
+          memberId: String(member?.id || ""),
+          memberName: String(member?.name || "-"),
+          paidMap,
+          dueMap,
+          paidTotal,
+          dueTotal,
+          unpaidTotal,
+        };
+      });
+
+      return {
+        year,
+        months,
+        memberRows,
+        totals: {
+          paid: memberRows.reduce((sum: number, row: any) => sum + Number(row.paidTotal || 0), 0),
+          due: memberRows.reduce((sum: number, row: any) => sum + Number(row.dueTotal || 0), 0),
+          unpaid: memberRows.reduce((sum: number, row: any) => sum + Number(row.unpaidTotal || 0), 0),
+        },
+      };
+    });
+  }, [
+    startDate,
+    endDate,
+    reportMembers,
+    feePaidMonthSet,
+    monthlyFeeRateRules,
+    monthlyFeeReliefRules,
+    defaultMonthlyFeeRate,
+    memberFeePaidByYearMap,
+  ]);
+
+  const feeOutstandingRows = useMemo(() => {
+    const rows = feeYearSummaries
+      .flatMap((yearRow) => yearRow.memberRows.map((row) => ({ ...row, year: yearRow.year })))
+      .filter((row) => Number(row.unpaidTotal || 0) > 0)
+      .sort((a, b) => Number(b.unpaidTotal || 0) - Number(a.unpaidTotal || 0));
+    return rows;
+  }, [feeYearSummaries]);
 
   const incomeTransactions = useMemo(() => {
     return [...filteredTxns]
@@ -1234,7 +1556,6 @@ export default function ReportsScreen() {
   const pagedRegisterRows = useMemo(() => sortedRegisterRows.slice(0, visibleRegisterCount), [sortedRegisterRows, visibleRegisterCount]);
   const pagedCashBookRows = useMemo(() => cashBookRows.slice(0, visibleCashBookCount), [cashBookRows, visibleCashBookCount]);
   const pagedAuditRows = useMemo(() => scopedAuditRows.slice(0, visibleAuditCount), [scopedAuditRows, visibleAuditCount]);
-  const pagedReportMembers = useMemo(() => reportMembers.slice(0, visibleMemberCount), [reportMembers, visibleMemberCount]);
   const pagedFilteredMemberRows = useMemo(() => filteredMemberRows.slice(0, visibleMemberCount), [filteredMemberRows, visibleMemberCount]);
   const pagedExecutiveMembers = useMemo(() => executiveMembers.slice(0, visibleMemberCount), [executiveMembers, visibleMemberCount]);
 
@@ -1243,7 +1564,6 @@ export default function ReportsScreen() {
   const hasMoreRegisterRows = pagedRegisterRows.length < sortedRegisterRows.length;
   const hasMoreCashBookRows = pagedCashBookRows.length < cashBookRows.length;
   const hasMoreAuditRows = pagedAuditRows.length < scopedAuditRows.length;
-  const hasMoreReportMembers = pagedReportMembers.length < reportMembers.length;
   const hasMoreFilteredMemberRows = pagedFilteredMemberRows.length < filteredMemberRows.length;
   const hasMoreExecutiveMembers = pagedExecutiveMembers.length < executiveMembers.length;
 
@@ -1600,12 +1920,181 @@ export default function ReportsScreen() {
     [filteredTxns]
   );
 
+  const persistFeePolicies = useCallback(
+    async (rateRules: MonthlyFeeRateRule[], reliefRules: MonthlyFeeReliefRule[]) => {
+      await updateAccountSettings({
+        ...accountSettings,
+        monthlyFeeRateRules: rateRules,
+        monthlyFeeReliefRules: reliefRules,
+      });
+    },
+    [accountSettings, updateAccountSettings]
+  );
+
+  const handleAddFeeRateRule = useCallback(async () => {
+    if (!canManageFeePolicies) return;
+    const amount = Math.max(0, Number(newRateAmount || 0));
+    if (amount <= 0) {
+      Alert.alert("လိုအပ်ချက်", "နှုန်းထားပမာဏကို မှန်ကန်စွာထည့်ပါ။");
+      return;
+    }
+    const effectiveFrom = String(newRateStart || "").trim();
+    if (!effectiveFrom) {
+      Alert.alert("လိုအပ်ချက်", "စတင်သက်ရောက်မည့်နေ့ထည့်ပါ။");
+      return;
+    }
+    if (newRateScope === "member" && !String(newRateMemberId || "").trim()) {
+      Alert.alert("လိုအပ်ချက်", "အသင်းဝင်ကို ရွေးချယ်ပါ။");
+      return;
+    }
+    const nextRule: MonthlyFeeRateRule = {
+      id: `fee-rate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      scope: newRateScope,
+      amount,
+      effectiveFrom,
+      effectiveTo: String(newRateEnd || "").trim() || undefined,
+      memberId: newRateScope === "member" ? String(newRateMemberId || "").trim() : undefined,
+      position: newRateScope === "position" ? normalizeOrgPosition(newRatePosition) : undefined,
+      reason: String(newRateReason || "").trim() || undefined,
+      active: true,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: String(currentUser?.id || ""),
+    };
+    await persistFeePolicies([...(monthlyFeeRateRules || []), nextRule], monthlyFeeReliefRules || []);
+    setNewRateAmount("");
+    setNewRateReason("");
+    setNewRateEnd("");
+  }, [
+    canManageFeePolicies,
+    newRateAmount,
+    newRateStart,
+    newRateScope,
+    newRateMemberId,
+    newRateEnd,
+    newRatePosition,
+    newRateReason,
+    currentUser?.id,
+    persistFeePolicies,
+    monthlyFeeRateRules,
+    monthlyFeeReliefRules,
+  ]);
+
+  const handleAddFeeReliefRule = useCallback(async () => {
+    if (!canManageFeePolicies) return;
+    const effectiveFrom = String(newReliefStart || "").trim();
+    if (!effectiveFrom) {
+      Alert.alert("လိုအပ်ချက်", "ကင်းလွတ်/သက်သာ စတင်နေ့ ထည့်ပါ။");
+      return;
+    }
+    if (newReliefScope === "member" && !String(newReliefMemberId || "").trim()) {
+      Alert.alert("လိုအပ်ချက်", "အသင်းဝင်ကို ရွေးချယ်ပါ။");
+      return;
+    }
+    if (newReliefMode !== "full" && Math.max(0, Number(newReliefValue || 0)) <= 0) {
+      Alert.alert("လိုအပ်ချက်", "ကင်းလွတ်/သက်သာ တန်ဖိုး ထည့်ပါ။");
+      return;
+    }
+    const nextRule: MonthlyFeeReliefRule = {
+      id: `fee-relief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      scope: newReliefScope,
+      mode: newReliefMode,
+      value: newReliefMode === "full" ? undefined : Math.max(0, Number(newReliefValue || 0)),
+      effectiveFrom,
+      effectiveTo: String(newReliefEnd || "").trim() || undefined,
+      memberId: newReliefScope === "member" ? String(newReliefMemberId || "").trim() : undefined,
+      position: newReliefScope === "position" ? normalizeOrgPosition(newReliefPosition) : undefined,
+      reason: String(newReliefReason || "").trim() || undefined,
+      active: true,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: String(currentUser?.id || ""),
+    };
+    await persistFeePolicies(monthlyFeeRateRules || [], [...(monthlyFeeReliefRules || []), nextRule]);
+    setNewReliefValue("");
+    setNewReliefReason("");
+    setNewReliefEnd("");
+  }, [
+    canManageFeePolicies,
+    newReliefStart,
+    newReliefScope,
+    newReliefMemberId,
+    newReliefMode,
+    newReliefValue,
+    newReliefEnd,
+    newReliefPosition,
+    newReliefReason,
+    currentUser?.id,
+    persistFeePolicies,
+    monthlyFeeRateRules,
+    monthlyFeeReliefRules,
+  ]);
+
+  const handleDeleteFeeRateRule = useCallback(
+    async (id: string) => {
+      if (!canManageFeePolicies) return;
+      const nextRates = (monthlyFeeRateRules || []).filter((row) => String(row.id) !== String(id));
+      await persistFeePolicies(nextRates, monthlyFeeReliefRules || []);
+    },
+    [canManageFeePolicies, monthlyFeeRateRules, monthlyFeeReliefRules, persistFeePolicies]
+  );
+
+  const handleDeleteFeeReliefRule = useCallback(
+    async (id: string) => {
+      if (!canManageFeePolicies) return;
+      const nextReliefs = (monthlyFeeReliefRules || []).filter((row) => String(row.id) !== String(id));
+      await persistFeePolicies(monthlyFeeRateRules || [], nextReliefs);
+    },
+    [canManageFeePolicies, monthlyFeeRateRules, monthlyFeeReliefRules, persistFeePolicies]
+  );
+
+  const renderFeeYearTableHtml = useCallback((summary: FeeYearSummary) => {
+    const headerMonths = summary.months.map((m) => `<th>${escapeHtml(m.label)}</th>`).join("");
+    const rows = summary.memberRows
+      .map((row) => {
+        const monthCells = summary.months
+          .map((m) => {
+            const paid = !!row.paidMap[m.key];
+            if (!m.inSelectedRange) return `<td style="text-align:center;color:#94A3B8">-</td>`;
+            return `<td style="text-align:center;font-size:14px;">${paid ? "&#9745;" : "&#9744;"}</td>`;
+          })
+          .join("");
+        return `
+          <tr>
+            <td>${escapeHtml(row.memberName)}</td>
+            ${monthCells}
+            <td style="text-align:right;">${Number(row.paidTotal || 0).toLocaleString()} KS</td>
+          </tr>
+        `;
+      })
+      .join("");
+    return `
+      <h2>အသင်းဝင်ကြေး ပေးဆောင်မှု (${summary.year})</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>အမည်</th>
+            ${headerMonths}
+            <th>စုစုပေါင်း</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          <tr style="font-weight:700;background:#ECFDF5;">
+            <td>စုစုပေါင်း</td>
+            ${summary.months.map(() => "<td></td>").join("")}
+            <td style="text-align:right;">${summary.totals.paid.toLocaleString()} KS</td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+  }, []);
+
   const buildBaseHtml = useCallback(
-    (title: string, subtitle: string, content: string) => `
+    (title: string, subtitle: string, content: string, options?: PrintLayoutOptions) => `
       <html>
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
           <style>
+            @page { size: ${options?.pageSize || "A4"} ${options?.orientation || "portrait"}; margin: 10mm; }
             body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 18px; color: #0F172A; }
             h1 { text-align: center; margin: 0 0 8px; }
             h2 { margin: 18px 0 8px; font-size: 16px; }
@@ -1652,7 +2141,9 @@ export default function ReportsScreen() {
             </div>
             ${renderMemberReportTableHtml(filteredMemberRows, "အသင်းဝင် စီစစ်စာရင်း")}
           `;
-          await shareHtmlAsPdf(buildBaseHtml("အသင်းဝင်အစီရင်ခံစာ", subtitle, content));
+          await shareHtmlAsPdf(
+            buildBaseHtml("အသင်းဝင်အစီရင်ခံစာ", subtitle, content, { pageSize: "A4", orientation: "landscape" })
+          );
           return;
         }
 
@@ -1667,7 +2158,9 @@ export default function ReportsScreen() {
             </div>
             ${renderMemberReportTableHtml(executiveMembers, "နာယကနှင့် အမှုဆောင်အဖွဲ့စာရင်း")}
           `;
-          await shareHtmlAsPdf(buildBaseHtml("အမှုဆောင်အဖွဲ့အစီရင်ခံစာ", subtitle, content));
+          await shareHtmlAsPdf(
+            buildBaseHtml("အမှုဆောင်အဖွဲ့အစီရင်ခံစာ", subtitle, content, { pageSize: "A4", orientation: "landscape" })
+          );
           return;
         }
 
@@ -1716,14 +2209,105 @@ export default function ReportsScreen() {
         }
 
         if (kind === "current") {
+          const tabTitleMap: Record<ReportTab, string> = {
+            income_expense: isAllScope ? "ရငွေ/အသုံးစရိတ်" : "အသင်းသို့ပေးသွင်းငွေ",
+            loans: "ချေးငွေ",
+            funds: isAllScope ? "ဘဏ်/ငွေသား" : "အသင်းမှထုတ်ယူငွေ",
+            registers: "မှတ်ပုံတင်စာရင်း",
+            cash_book: "နှစ်ကော်လံ ငွေစာရင်း",
+            fees: "လစဉ်ကြေး",
+            members: "အသင်းဝင်များ",
+            audit_flags: "Audit Flag",
+          };
+
+          const renderTxnTable = (rows: any[]) => `
+            <table>
+              <thead><tr><th>No.</th><th>ရက်စွဲ</th><th>အမည်</th><th>အသင်းဝင်</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေ</th><th>Type</th></tr></thead>
+              <tbody>
+                ${rows
+                  .map(
+                    (row: any, index: number) => `
+                  <tr>
+                    <td>${index + 1}</td><td>${escapeHtml(formatDateForRegister(row.date))}</td>
+                    <td>${escapeHtml(row.payerPayee || memberNameById.get(String(row.memberId || "")) || "-")}</td>
+                    <td>${escapeHtml(row.memberId || "-")}</td><td>${escapeHtml(row.receiptNumber || "-")}</td>
+                    <td>${escapeHtml(getCategoryLabel(row.category))}</td><td>${Number(row.amount || 0).toLocaleString()}</td><td>${escapeHtml(row.type || "-")}</td>
+                  </tr>`
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          `;
+
+          const renderCategorySummaryTable = (
+            title: string,
+            rows: { category: string; amount: number; count: number }[],
+            emptyMessage: string
+          ) => `
+            <h2>${escapeHtml(title)}</h2>
+            ${
+              rows.length === 0
+                ? `<p>${escapeHtml(emptyMessage)}</p>`
+                : `<table>
+                    <thead><tr><th>ခေါင်းစဉ်</th><th>အရေအတွက်</th><th>စုစုပေါင်း</th></tr></thead>
+                    <tbody>
+                      ${rows
+                        .map(
+                          (row) => `
+                        <tr>
+                          <td>${escapeHtml(getCategoryLabel(row.category))}</td>
+                          <td>${row.count.toLocaleString()}</td>
+                          <td>${row.amount.toLocaleString()} KS</td>
+                        </tr>`
+                        )
+                        .join("")}
+                    </tbody>
+                  </table>`
+            }
+          `;
+
           let content = "";
           if (reportTab === "members") {
-            content = renderMemberReportTableHtml(filteredMemberRows, "အသင်းဝင် စီစစ်စာရင်း");
+            content = `
+              <div class="summary">
+                <div class="summary-box"><div class="summary-label">စုစုပေါင်း</div><div class="summary-value">${memberSummaryStats.total}</div></div>
+                <div class="summary-box"><div class="summary-label">အစရှိ</div><div class="summary-value">${memberFlowStats.opening}</div></div>
+                <div class="summary-box"><div class="summary-label">တိုးလာ</div><div class="summary-value">${memberFlowStats.joined}</div></div>
+                <div class="summary-box"><div class="summary-label">လျှော့သွား</div><div class="summary-value">${memberFlowStats.exited}</div></div>
+                <div class="summary-box"><div class="summary-label">လက်ကျန်</div><div class="summary-value">${memberFlowStats.closing}</div></div>
+              </div>
+              ${renderMemberReportTableHtml(filteredMemberRows, "အသင်းဝင် စီစစ်စာရင်း")}
+            `;
           } else if (reportTab === "registers") {
             content = `
+              <div class="summary">
+                <div class="summary-box"><div class="summary-label">စာရင်းအရေအတွက်</div><div class="summary-value">${activeRegisterTotals.count.toLocaleString()}</div></div>
+                <div class="summary-box"><div class="summary-label">စုစုပေါင်းငွေ</div><div class="summary-value">${activeRegisterTotals.amount.toLocaleString()} KS</div></div>
+              </div>
               <h2>${escapeHtml(activeRegisterTitle)}</h2>
+              <h2>ခေါင်းစဉ်အလိုက် စာရင်းချုပ်</h2>
+              ${
+                activeRegisterSummaryByHeading.length === 0
+                  ? "<p>စာရင်းမရှိသေးပါ။</p>"
+                  : `<table>
+                      <thead><tr><th>ခေါင်းစဉ်</th><th>အရေအတွက်</th><th>စုစုပေါင်း</th></tr></thead>
+                      <tbody>
+                        ${activeRegisterSummaryByHeading
+                          .map(
+                            (row) => `
+                          <tr>
+                            <td>${escapeHtml(row.heading)}</td>
+                            <td>${row.count.toLocaleString()}</td>
+                            <td>${row.total.toLocaleString()} KS</td>
+                          </tr>`
+                          )
+                          .join("")}
+                      </tbody>
+                    </table>`
+              }
+              <h2>အသေးစိတ်မှတ်တမ်း</h2>
               <table>
-                <thead><tr><th>No.</th><th>အမည်</th><th>အသင်းဝင်အမှတ်</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေပမာဏ</th></tr></thead>
+                <thead><tr><th>No.</th><th>အမည်</th><th>အသင်းဝင်အမှတ်</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေပမာဏ</th><th>မှတ်ချက်</th></tr></thead>
                 <tbody>
                   ${sortedRegisterRows
                     .map(
@@ -1731,7 +2315,7 @@ export default function ReportsScreen() {
                     <tr>
                       <td>${index + 1}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.memberId || "-")}</td>
                       <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.receipt)}</td><td>${escapeHtml(row.heading)}</td>
-                      <td>${Number(row.amount || 0).toLocaleString()}</td>
+                      <td>${Number(row.amount || 0).toLocaleString()}</td><td>${escapeHtml(row.notes || "-")}</td>
                     </tr>`
                     )
                     .join("")}
@@ -1743,7 +2327,9 @@ export default function ReportsScreen() {
               <div class="summary">
                 <div class="summary-box"><div class="summary-label">ထုတ်ချေး</div><div class="summary-value">${loanStats.disbursed.toLocaleString()} KS</div></div>
                 <div class="summary-box"><div class="summary-label">ပြန်ဆပ်</div><div class="summary-value">${loanStats.repaid.toLocaleString()} KS</div></div>
+                <div class="summary-box"><div class="summary-label">အတိုးရ</div><div class="summary-value">${loanStats.interest.toLocaleString()} KS</div></div>
                 <div class="summary-box"><div class="summary-label">အရင်းကျန်</div><div class="summary-value">${loanStats.principalOutstanding.toLocaleString()} KS</div></div>
+                <div class="summary-box"><div class="summary-label">အတိုးကျန်</div><div class="summary-value">${loanStats.interestOutstanding.toLocaleString()} KS</div></div>
               </div>
               <h2>ချေးငွေဆိုင်ရာမှတ်တမ်း</h2>
               <table>
@@ -1763,19 +2349,161 @@ export default function ReportsScreen() {
                 </tbody>
               </table>
             `;
+          } else if (reportTab === "funds") {
+            content = isAllScope
+              ? `
+                <div class="summary">
+                  <div class="summary-box"><div class="summary-label">စာရင်းဖွင့် လက်ကျန် (ငွေသား/ဘဏ်)</div><div class="summary-value">${fundStats.opening.cash.toLocaleString()} / ${fundStats.opening.bank.toLocaleString()}</div></div>
+                  <div class="summary-box"><div class="summary-label">စာရင်းဖွင့် စုစုပေါင်း</div><div class="summary-value">${fundStats.opening.total.toLocaleString()} KS</div></div>
+                  <div class="summary-box"><div class="summary-label">စာရင်းပိတ် လက်ကျန် (ငွေသား/ဘဏ်)</div><div class="summary-value">${fundStats.closing.cash.toLocaleString()} / ${fundStats.closing.bank.toLocaleString()}</div></div>
+                  <div class="summary-box"><div class="summary-label">စာရင်းပိတ် စုစုပေါင်း</div><div class="summary-value">${fundStats.closing.total.toLocaleString()} KS</div></div>
+                </div>
+                ${renderCategorySummaryTable("ရငွေ စာရင်းချုပ် (ခေါင်းစဉ်အလိုက်)", incomeByCategory, "ရငွေစာရင်း မရှိသေးပါ။")}
+                ${renderCategorySummaryTable("အသုံးစရိတ် စာရင်းချုပ် (ခေါင်းစဉ်အလိုက်)", expenseByCategory, "အသုံးစရိတ်စာရင်း မရှိသေးပါ။")}
+                ${renderCategorySummaryTable("ဘဏ်သွင်း/ဘဏ်ထုတ် စာရင်းချုပ်", transferByCategory, "ဘဏ်သွင်း/ဘဏ်ထုတ် မှတ်တမ်း မရှိသေးပါ။")}
+                ${showDetailRows ? `<h2>အသေးစိတ် စာရင်းများ</h2>${renderTxnTable(sortedNonTransferRows)}` : "<p>အသေးစိတ်ကြည့်ခွင့် ကန့်သတ်ထားသောကြောင့် အကျဉ်းချုပ်သာ ပြထားပါသည်။</p>"}
+              `
+              : `
+                <div class="summary">
+                  <div class="summary-box"><div class="summary-label">အသင်းသို့ပေးသွင်းငွေ</div><div class="summary-value">${incomeExpenseStats.income.toLocaleString()} KS</div></div>
+                  <div class="summary-box"><div class="summary-label">အသင်းမှထုတ်ယူငွေ</div><div class="summary-value">${incomeExpenseStats.expense.toLocaleString()} KS</div></div>
+                  <div class="summary-box"><div class="summary-label">ခြားနားချက် (+/-)</div><div class="summary-value">${incomeExpenseStats.net.toLocaleString()} KS</div></div>
+                </div>
+                ${showDetailRows ? `<h2>အသေးစိတ် စာရင်းများ</h2>${renderTxnTable(sortedNonTransferRows)}` : "<p>အသေးစိတ်ကြည့်ခွင့် ကန့်သတ်ထားသောကြောင့် အကျဉ်းချုပ်သာ ပြထားပါသည်။</p>"}
+              `;
+          } else if (reportTab === "cash_book") {
+            content = isAllScope
+              ? `
+                <div class="summary">
+                  <div class="summary-box"><div class="summary-label">စာရင်းဖွင့် (ငွေသား/ဘဏ်)</div><div class="summary-value">${cashBookSummary.openingCash.toLocaleString()} / ${cashBookSummary.openingBank.toLocaleString()}</div></div>
+                  <div class="summary-box"><div class="summary-label">စာရင်းပိတ် (ငွေသား/ဘဏ်)</div><div class="summary-value">${cashBookSummary.closingCash.toLocaleString()} / ${cashBookSummary.closingBank.toLocaleString()}</div></div>
+                  <div class="summary-box"><div class="summary-label">ငွေသား ဝင် / ထွက်</div><div class="summary-value">${cashBookSummary.cashIn.toLocaleString()} / ${cashBookSummary.cashOut.toLocaleString()}</div></div>
+                  <div class="summary-box"><div class="summary-label">ဘဏ် ဝင် / ထွက်</div><div class="summary-value">${cashBookSummary.bankIn.toLocaleString()} / ${cashBookSummary.bankOut.toLocaleString()}</div></div>
+                </div>
+                <h2>နှစ်ကော်လံ ငွေစာရင်းစာအုပ် (နေ့စဉ်အသေးစိတ်)</h2>
+                <table>
+                  <thead>
+                    <tr><th>ရက်စွဲ</th><th>ပြေစာအမှတ်</th><th>အကြောင်းအရာ</th><th>ငွေသားဝင်</th><th>ငွေသားထွက်</th><th>ဘဏ်ဝင်</th><th>ဘဏ်ထွက်</th><th>ငွေသားလက်ကျန်</th><th>ဘဏ်လက်ကျန်</th></tr>
+                  </thead>
+                  <tbody>
+                    ${cashBookRows
+                      .map((row) => {
+                        const rowStyle =
+                          row.rowType === "opening"
+                            ? ' style="background:#ECFEFF;font-weight:700;"'
+                            : row.rowType === "daily_total"
+                              ? ' style="background:#FEF9C3;font-weight:700;"'
+                              : "";
+                        return `
+                          <tr${rowStyle}>
+                            <td>${escapeHtml(row.date || "-")}</td>
+                            <td>${escapeHtml(row.receipt || "-")}</td>
+                            <td>${escapeHtml(row.particulars || "-")}</td>
+                            <td>${row.cashIn ? row.cashIn.toLocaleString() : "-"}</td>
+                            <td>${row.cashOut ? row.cashOut.toLocaleString() : "-"}</td>
+                            <td>${row.bankIn ? row.bankIn.toLocaleString() : "-"}</td>
+                            <td>${row.bankOut ? row.bankOut.toLocaleString() : "-"}</td>
+                            <td>${row.cashBalance.toLocaleString()}</td>
+                            <td>${row.bankBalance.toLocaleString()}</td>
+                          </tr>
+                        `;
+                      })
+                      .join("")}
+                  </tbody>
+                </table>
+              `
+              : `
+                <div class="summary">
+                  <div class="summary-box"><div class="summary-label">အသင်းသို့ပေးသွင်းငွေ</div><div class="summary-value">${incomeExpenseStats.income.toLocaleString()} KS</div></div>
+                  <div class="summary-box"><div class="summary-label">အသင်းမှထုတ်ယူငွေ</div><div class="summary-value">${incomeExpenseStats.expense.toLocaleString()} KS</div></div>
+                  <div class="summary-box"><div class="summary-label">ခြားနားချက် (+/-)</div><div class="summary-value">${incomeExpenseStats.net.toLocaleString()} KS</div></div>
+                </div>
+                ${showDetailRows ? `<h2>အသေးစိတ် စာရင်းများ</h2>${renderTxnTable(sortedNonTransferRows)}` : "<p>အသေးစိတ်ကြည့်ခွင့် ကန့်သတ်ထားသောကြောင့် အကျဉ်းချုပ်သာ ပြထားပါသည်။</p>"}
+              `;
           } else if (reportTab === "fees") {
-            content = renderMemberReportTableHtml(
-              (reportMembers || []).map((member: any) => ({
-                ...member,
-                __status: normalizeMemberStatus(member?.status),
-                __defaultPosition: normalizeOrgPosition(member?.orgPosition || member?.status),
-                __positionPrimary: normalizeOrgPosition(member?.orgPosition || member?.status),
-                __positionsInRange: [normalizeOrgPosition(member?.orgPosition || member?.status)],
-                __gender: resolveMemberGender(member),
-                __age: calculateAge(member?.dob, endDate),
-              })),
-              "လစဉ်ကြေး ဆိုင်ရာ အသင်းဝင်စာရင်း"
-            );
+            const yearlySections = feeYearSummaries
+              .map(
+                (summary, idx) =>
+                  `<section style="${idx > 0 ? "page-break-before: always;" : ""}">
+                    ${renderFeeYearTableHtml(summary)}
+                  </section>`
+              )
+              .join("");
+
+            const outstandingTable =
+              feeOutstandingRows.length === 0
+                ? "<p>ရွေးချယ်ထားသောကာလအတွက် လစဉ်ကြေးကျန်သည့်စာရင်း မရှိပါ။</p>"
+                : `<table>
+                    <thead>
+                      <tr>
+                        <th>No.</th>
+                        <th>ခုနှစ်</th>
+                        <th>အမည်</th>
+                        <th>ကျသင့်စုစုပေါင်း</th>
+                        <th>ပေးပြီးစုစုပေါင်း</th>
+                        <th>ပေးရန်ကျန်</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${feeOutstandingRows
+                        .map(
+                          (row: any, index: number) => `
+                        <tr>
+                          <td>${index + 1}</td>
+                          <td>${row.year}</td>
+                          <td>${escapeHtml(row.memberName || "-")}</td>
+                          <td>${Number(row.dueTotal || 0).toLocaleString()} KS</td>
+                          <td>${Number(row.paidTotal || 0).toLocaleString()} KS</td>
+                          <td>${Number(row.unpaidTotal || 0).toLocaleString()} KS</td>
+                        </tr>
+                      `
+                        )
+                        .join("")}
+                    </tbody>
+                  </table>`;
+
+            content = `
+              <div class="summary">
+                <div class="summary-box"><div class="summary-label">နှုန်းထား စည်းမျဉ်း</div><div class="summary-value">${monthlyFeeRateRules.length.toLocaleString()}</div></div>
+                <div class="summary-box"><div class="summary-label">ကင်းလွတ်/သက်သာ စည်းမျဉ်း</div><div class="summary-value">${monthlyFeeReliefRules.length.toLocaleString()}</div></div>
+                <div class="summary-box"><div class="summary-label">လစဉ်ကြေးရငွေ (ရွေးကာလ)</div><div class="summary-value">${Array.from(memberFeeTotalsByMemberId.values()).reduce((sum, value) => sum + Number(value || 0), 0).toLocaleString()} KS</div></div>
+              </div>
+              ${yearlySections}
+              <section style="page-break-before: always;">
+                <h2>လစဉ်ကြေးပေးရန်ကျန် စာရင်း</h2>
+                ${outstandingTable}
+              </section>
+            `;
+          } else if (reportTab === "audit_flags" && canViewAuditFlags) {
+            content = `
+              <div class="summary">
+                <div class="summary-box"><div class="summary-label">အရေအတွက်</div><div class="summary-value">${scopedAuditRows.length.toLocaleString()}</div></div>
+              </div>
+              <h2>စာရင်းစစ် အမှတ်အသားပြုထားသော စာရင်းများ</h2>
+              ${
+                scopedAuditRows.length === 0
+                  ? "<p>အမှတ်အသားပြုစာရင်း မရှိသေးပါ။</p>"
+                  : `<table>
+                      <thead><tr><th>No.</th><th>အသင်းဝင်</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေ</th><th>Audit Note</th></tr></thead>
+                      <tbody>
+                        ${scopedAuditRows
+                          .map(
+                            (row: any, index: number) => `
+                          <tr>
+                            <td>${index + 1}</td>
+                            <td>${escapeHtml(row.memberId || "-")}</td>
+                            <td>${escapeHtml(formatDateForRegister(row.date))}</td>
+                            <td>${escapeHtml(row.receiptNumber || "-")}</td>
+                            <td>${escapeHtml(getCategoryLabel(row.category))}</td>
+                            <td>${Number(row.amount || 0).toLocaleString()} KS</td>
+                            <td>${escapeHtml(row.auditNote || "-")}</td>
+                          </tr>`
+                          )
+                          .join("")}
+                      </tbody>
+                    </table>`
+              }
+            `;
           } else {
             content = `
               <div class="summary">
@@ -1784,26 +2512,18 @@ export default function ReportsScreen() {
                 <div class="summary-box"><div class="summary-label">ခြားနားချက်</div><div class="summary-value">${incomeExpenseStats.net.toLocaleString()} KS</div></div>
               </div>
               <h2>အသေးစိတ်စာရင်း</h2>
-              <table>
-                <thead><tr><th>No.</th><th>ရက်စွဲ</th><th>အမည်</th><th>အသင်းဝင်</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>ငွေ</th><th>Type</th></tr></thead>
-                <tbody>
-                  ${sortedNonTransferRows
-                    .map(
-                      (row: any, index: number) => `
-                    <tr>
-                      <td>${index + 1}</td><td>${escapeHtml(formatDateForRegister(row.date))}</td>
-                      <td>${escapeHtml(row.payerPayee || memberNameById.get(String(row.memberId || "")) || "-")}</td>
-                      <td>${escapeHtml(row.memberId || "-")}</td><td>${escapeHtml(row.receiptNumber || "-")}</td>
-                      <td>${escapeHtml(getCategoryLabel(row.category))}</td><td>${Number(row.amount || 0).toLocaleString()}</td><td>${escapeHtml(row.type || "-")}</td>
-                    </tr>`
-                    )
-                    .join("")}
-                </tbody>
-              </table>
+              ${renderTxnTable(sortedNonTransferRows)}
             `;
           }
 
-          await shareHtmlAsPdf(buildBaseHtml("လက်ရှိအစီရင်ခံစာ", subtitle, content));
+          const currentOrientation =
+            reportTab === "members" || reportTab === "fees" || reportTab === "cash_book" ? "landscape" : "portrait";
+          await shareHtmlAsPdf(
+            buildBaseHtml(`လက်ရှိအစီရင်ခံစာ (${tabTitleMap[reportTab]})`, subtitle, content, {
+              pageSize: "A4",
+              orientation: currentOrientation,
+            })
+          );
         }
       } catch (error) {
         console.error(error);
@@ -1822,17 +2542,34 @@ export default function ReportsScreen() {
       executiveMembers,
       buildFinancialSummaryRows,
       reportTab,
+      isAllScope,
+      showDetailRows,
       activeRegisterTitle,
+      activeRegisterTotals,
+      activeRegisterSummaryByHeading,
       sortedRegisterRows,
       loanStats,
       sortedLoanTxnRows,
       memberNameById,
-      reportMembers,
       incomeExpenseStats,
       sortedNonTransferRows,
+      fundStats,
+      incomeByCategory,
+      expenseByCategory,
+      transferByCategory,
+      cashBookSummary,
+      cashBookRows,
+      feeYearSummaries,
+      feeOutstandingRows,
+      monthlyFeeRateRules,
+      monthlyFeeReliefRules,
+      memberFeeTotalsByMemberId,
+      scopedAuditRows,
+      canViewAuditFlags,
       shareHtmlAsPdf,
       buildBaseHtml,
       renderMemberReportTableHtml,
+      renderFeeYearTableHtml,
     ]
   );
 
@@ -2377,31 +3114,31 @@ export default function ReportsScreen() {
         <View style={styles.scrollContent}>
           {isAllScope ? (
             <>
-              <View style={styles.summaryGrid}>
-                <View style={[styles.statBox, { borderLeftColor: "#0EA5A4" }]}>
-                  <Text style={styles.statLabel}>စာရင်းဖွင့် (ငွေသား/ဘဏ်)</Text>
-                  <Text style={[styles.statValue, { color: "#0EA5A4" }]}>
+              <View style={styles.cashBookSummaryRow}>
+                <View style={[styles.cashBookSummaryBox, { borderLeftColor: "#0EA5A4" }]}>
+                  <Text style={styles.cashBookSummaryLabel}>စာရင်းဖွင့် (ငွေသား/ဘဏ်)</Text>
+                  <Text style={[styles.cashBookSummaryValue, { color: "#0EA5A4" }]}>
                     {cashBookSummary.openingCash.toLocaleString()} / {cashBookSummary.openingBank.toLocaleString()}
                   </Text>
                 </View>
-                <View style={[styles.statBox, { borderLeftColor: "#2563EB" }]}>
-                  <Text style={styles.statLabel}>စာရင်းပိတ် (ငွေသား/ဘဏ်)</Text>
-                  <Text style={[styles.statValue, { color: "#2563EB" }]}>
+                <View style={[styles.cashBookSummaryBox, { borderLeftColor: "#2563EB" }]}>
+                  <Text style={styles.cashBookSummaryLabel}>စာရင်းပိတ် (ငွေသား/ဘဏ်)</Text>
+                  <Text style={[styles.cashBookSummaryValue, { color: "#2563EB" }]}>
                     {cashBookSummary.closingCash.toLocaleString()} / {cashBookSummary.closingBank.toLocaleString()}
                   </Text>
                 </View>
               </View>
 
-              <View style={[styles.summaryGrid, { marginTop: -10 }]}>
-                <View style={[styles.statBox, { borderLeftColor: "#10B981" }]}>
-                  <Text style={styles.statLabel}>ငွေသား ဝင် / ထွက်</Text>
-                  <Text style={[styles.statValue, { color: "#10B981" }]}>
+              <View style={[styles.cashBookSummaryRow, { marginTop: -10 }]}>
+                <View style={[styles.cashBookSummaryBox, { borderLeftColor: "#10B981" }]}>
+                  <Text style={styles.cashBookSummaryLabel}>ငွေသား ဝင် / ထွက်</Text>
+                  <Text style={[styles.cashBookSummaryValue, { color: "#10B981" }]}>
                     {cashBookSummary.cashIn.toLocaleString()} / {cashBookSummary.cashOut.toLocaleString()}
                   </Text>
                 </View>
-                <View style={[styles.statBox, { borderLeftColor: "#F59E0B" }]}>
-                  <Text style={styles.statLabel}>ဘဏ် ဝင် / ထွက်</Text>
-                  <Text style={[styles.statValue, { color: "#F59E0B" }]}>
+                <View style={[styles.cashBookSummaryBox, { borderLeftColor: "#F59E0B" }]}>
+                  <Text style={styles.cashBookSummaryLabel}>ဘဏ် ဝင် / ထွက်</Text>
+                  <Text style={[styles.cashBookSummaryValue, { color: "#F59E0B" }]}>
                     {cashBookSummary.bankIn.toLocaleString()} / {cashBookSummary.bankOut.toLocaleString()}
                   </Text>
                 </View>
@@ -2507,63 +3244,113 @@ export default function ReportsScreen() {
       {reportTab === "fees" && (
         <View style={styles.scrollContent}>
           <View style={{ paddingHorizontal: 20 }}>
-            <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({startDate.getFullYear()})</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-              <View style={{ paddingBottom: 20 }}>
-                <View style={styles.tableHeader}>
-                  <View style={styles.tableNameCol}>
-                    <Text style={styles.tableHeaderText}>အမည်</Text>
-                  </View>
-                  {monthsInRange.map((m) => (
-                    <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
-                      <Text style={styles.tableHeaderText}>{m.name}</Text>
-                    </View>
-                  ))}
-                  <View style={[styles.tableMonthCol, { width: 90 }]}>
-                    <Text style={styles.tableHeaderText}>စုစုပေါင်း</Text>
-                  </View>
-                </View>
-
-                {pagedReportMembers.map((member: any) => (
-                  <View key={member.id} style={styles.tableRow}>
-                    <View style={styles.tableNameCol}>
-                      <Text style={styles.tableName} numberOfLines={1}>
-                        {member.name}
-                      </Text>
-                    </View>
-                    {monthsInRange.map((m) => {
-                      const isPaid = feePaidMonthSet.has(`${member.id}|${m.year}|${m.monthIdx}`);
-                      return (
-                        <View key={`${m.monthIdx}-${m.year}`} style={styles.tableMonthCol}>
-                          {isPaid ? (
-                            <View style={[styles.paidBadge, { backgroundColor: Colors.light.success }]}>
-                              <Ionicons name="checkmark" size={14} color="white" />
-                            </View>
-                          ) : (
-                            <Ionicons name="close" size={14} color={Colors.light.textSecondary + "40"} />
-                          )}
+            <View style={styles.scopeTopRow}>
+              <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု</Text>
+              {canManageFeePolicies ? (
+                <Pressable style={styles.exportBtn} onPress={() => setShowFeePolicyModal(true)}>
+                  <Ionicons name="construct-outline" size={15} color={Colors.light.tint} />
+                  <Text style={styles.exportBtnText}>သတ်မှတ်ချက်</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            {feeYearSummaries.map((yearSummary) => {
+              const pagedRows = yearSummary.memberRows.slice(0, visibleMemberCount);
+              return (
+                <View key={`fee-year-${yearSummary.year}`} style={{ marginBottom: 16 }}>
+                  <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({yearSummary.year})</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator>
+                    <View style={{ paddingBottom: 10 }}>
+                      <View style={styles.tableHeader}>
+                        <View style={styles.tableNameCol}>
+                          <Text style={styles.tableHeaderText}>အမည်</Text>
                         </View>
-                      );
-                    })}
+                        {yearSummary.months.map((m) => (
+                          <View key={`fee-h-${yearSummary.year}-${m.monthIdx}`} style={styles.tableMonthCol}>
+                            <Text style={styles.tableHeaderText}>{m.label}</Text>
+                          </View>
+                        ))}
+                        <View style={[styles.tableMonthCol, { width: 110 }]}>
+                          <Text style={styles.tableHeaderText}>စုစုပေါင်း</Text>
+                        </View>
+                      </View>
 
-                    <View style={[styles.tableMonthCol, { width: 90 }]}>
-                      <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
-                        {(memberFeeTotalsByMemberId.get(String(member.id || "")) || 0).toLocaleString()}
-                      </Text>
+                      {pagedRows.map((row) => (
+                        <View key={`${yearSummary.year}-${row.memberId}`} style={styles.tableRow}>
+                          <View style={styles.tableNameCol}>
+                            <Text style={styles.tableName} numberOfLines={1}>
+                              {row.memberName}
+                            </Text>
+                          </View>
+                          {yearSummary.months.map((m) => {
+                            const isPaid = !!row.paidMap[m.key];
+                            return (
+                              <View key={`fee-c-${row.memberId}-${m.key}`} style={styles.tableMonthCol}>
+                                {!m.inSelectedRange ? (
+                                  <Text style={{ color: Colors.light.textSecondary, opacity: 0.4 }}>-</Text>
+                                ) : isPaid ? (
+                                  <View style={[styles.paidBadge, { backgroundColor: Colors.light.success }]}>
+                                    <Ionicons name="checkmark" size={14} color="white" />
+                                  </View>
+                                ) : (
+                                  <View style={[styles.paidBadge, { backgroundColor: "#E2E8F0" }]}>
+                                    <Text style={{ color: "#64748B", fontSize: 12, fontFamily: "Inter_700Bold" }}>□</Text>
+                                  </View>
+                                )}
+                              </View>
+                            );
+                          })}
+
+                          <View style={[styles.tableMonthCol, { width: 110 }]}>
+                            <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
+                              {Number(row.paidTotal || 0).toLocaleString()}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
+                      <View style={[styles.tableRow, { backgroundColor: "#ECFDF5" }]}>
+                        <View style={styles.tableNameCol}>
+                          <Text style={[styles.tableName, { fontFamily: "Inter_700Bold" }]}>စုစုပေါင်း</Text>
+                        </View>
+                        {yearSummary.months.map((m) => (
+                          <View key={`fee-total-${yearSummary.year}-${m.monthIdx}`} style={styles.tableMonthCol}>
+                            <Text style={{ color: "transparent" }}>-</Text>
+                          </View>
+                        ))}
+                        <View style={[styles.tableMonthCol, { width: 110 }]}>
+                          <Text style={[styles.tableName, { fontFamily: "Inter_700Bold", color: Colors.light.tint }]}>
+                            {yearSummary.totals.paid.toLocaleString()}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
-                  </View>
-                ))}
-                {hasMoreReportMembers ? (
-                  <View style={styles.loadMoreWrap}>
-                    <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleMemberCount((prev) => prev + REPORT_MEMBER_PAGE_SIZE)}>
-                      <Text style={styles.loadMoreBtnText}>
-                        နောက်ထပ် {Math.min(REPORT_MEMBER_PAGE_SIZE, reportMembers.length - pagedReportMembers.length).toLocaleString()} ဦး ပြရန်
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : null}
+                  </ScrollView>
+                </View>
+              );
+            })}
+            {feeYearSummaries.some((row) => row.memberRows.length > visibleMemberCount) ? (
+              <View style={styles.loadMoreWrap}>
+                <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleMemberCount((prev) => prev + REPORT_MEMBER_PAGE_SIZE)}>
+                  <Text style={styles.loadMoreBtnText}>
+                    နောက်ထပ် {REPORT_MEMBER_PAGE_SIZE.toLocaleString()} ဦး ပြရန်
+                  </Text>
+                </Pressable>
               </View>
-            </ScrollView>
+            ) : null}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>လစဉ်ကြေးပေးရန်ကျန် စာရင်း</Text>
+              {feeOutstandingRows.length === 0 ? (
+                <Text style={styles.catSub}>ရွေးချယ်ထားသောကာလအတွက် ကျန်ငွေမရှိပါ။</Text>
+              ) : (
+                feeOutstandingRows.slice(0, 120).map((row, index) => (
+                  <View key={`fee-out-${row.year}-${row.memberId}-${index}`} style={styles.registerCard}>
+                    <Text style={styles.registerCardTitle}>{index + 1}. {row.memberName} ({row.year})</Text>
+                    <Text style={styles.registerCardMeta}>ကျသင့်စုစုပေါင်း: {Number(row.dueTotal || 0).toLocaleString()} KS</Text>
+                    <Text style={styles.registerCardMeta}>ပေးပြီးစုစုပေါင်း: {Number(row.paidTotal || 0).toLocaleString()} KS</Text>
+                    <Text style={[styles.registerCardAmount, { color: "#DC2626" }]}>ပေးရန်ကျန်: {Number(row.unpaidTotal || 0).toLocaleString()} KS</Text>
+                  </View>
+                ))
+              )}
+            </View>
           </View>
         </View>
       )}
@@ -2871,6 +3658,217 @@ export default function ReportsScreen() {
         </View>
       )}
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showFeePolicyModal}
+        onRequestClose={() => setShowFeePolicyModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowFeePolicyModal(false)} />
+          <View style={[styles.modalContent, { maxHeight: "90%" }]}>
+            <Text style={styles.modalTitle}>လစဉ်ကြေး သတ်မှတ်ချက်</Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.sectionTitle}>နှုန်းထား စည်းမျဉ်းများ</Text>
+              {(monthlyFeeRateRules || []).map((rule) => (
+                <View key={`rate-rule-${rule.id}`} style={styles.registerCard}>
+                  <Text style={styles.registerCardTitle}>
+                    {rule.scope === "global" ? "အားလုံး" : rule.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(rule.position || "member")]}` : `အသင်းဝင်: ${rule.memberId || "-"}`}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>နှုန်းထား: {Number(rule.amount || 0).toLocaleString()} KS / လ</Text>
+                  <Text style={styles.registerCardMeta}>ကာလ: {rule.effectiveFrom} ~ {rule.effectiveTo || "အကန့်အသတ်မရှိ"}</Text>
+                  <Text style={styles.registerCardMeta}>အကြောင်းအရာ: {rule.reason || "-"}</Text>
+                  {canManageFeePolicies ? (
+                    <Pressable style={styles.memberReportActionBtn} onPress={() => void handleDeleteFeeRateRule(rule.id)}>
+                      <Text style={styles.memberReportActionText}>ဖျက်ရန်</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ))}
+
+              {canManageFeePolicies ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>နှုန်းထားအသစ် ထည့်ရန်</Text>
+                  <View style={styles.registerModeRow}>
+                    {(["global", "position", "member"] as MonthlyFeeRuleScope[]).map((scope) => (
+                      <Pressable
+                        key={`rate-scope-${scope}`}
+                        style={[styles.registerModeChip, newRateScope === scope && styles.registerModeChipActive]}
+                        onPress={() => setNewRateScope(scope)}
+                      >
+                        <Text style={[styles.registerModeChipText, newRateScope === scope && styles.registerModeChipTextActive]}>
+                          {scope === "global" ? "အားလုံး" : scope === "position" ? "ရာထူး" : "အသင်းဝင်"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {newRateScope === "position" ? (
+                    <View style={styles.registerModeRow}>
+                      {(["patron", "chairperson", "vice_chairperson", "secretary", "joint_secretary", "treasurer", "auditor", "committee_member", "member"] as OrgPosition[]).map((position) => (
+                        <Pressable
+                          key={`rate-pos-${position}`}
+                          style={[styles.registerModeChip, newRatePosition === position && styles.registerModeChipActive]}
+                          onPress={() => setNewRatePosition(position)}
+                        >
+                          <Text style={[styles.registerModeChipText, newRatePosition === position && styles.registerModeChipTextActive]}>
+                            {ORG_POSITION_LABELS[position]}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                  {newRateScope === "member" ? (
+                    <TextInput
+                      style={styles.memberSearchInput}
+                      value={newRateMemberId}
+                      onChangeText={setNewRateMemberId}
+                      placeholder="အသင်းဝင် ID (ဥပမာ - ရဆသ-001)"
+                    />
+                  ) : null}
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newRateAmount}
+                    onChangeText={setNewRateAmount}
+                    placeholder="နှုန်းထား (တစ်လလျှင်) KS"
+                    keyboardType="numeric"
+                  />
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newRateStart}
+                    onChangeText={setNewRateStart}
+                    placeholder="စတင်နေ့ YYYY-MM-DD"
+                  />
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newRateEnd}
+                    onChangeText={setNewRateEnd}
+                    placeholder="ပြီးဆုံးနေ့ YYYY-MM-DD (optional)"
+                  />
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newRateReason}
+                    onChangeText={setNewRateReason}
+                    placeholder="အကြောင်းအရာ (optional)"
+                  />
+                  <Pressable style={styles.exportBtn} onPress={() => void handleAddFeeRateRule()}>
+                    <Ionicons name="add-circle-outline" size={15} color={Colors.light.tint} />
+                    <Text style={styles.exportBtnText}>နှုန်းထားထည့်ရန်</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              <Text style={styles.sectionTitle}>ကင်းလွတ် / သက်သာ စည်းမျဉ်းများ</Text>
+              {(monthlyFeeReliefRules || []).map((rule) => (
+                <View key={`relief-rule-${rule.id}`} style={styles.registerCard}>
+                  <Text style={styles.registerCardTitle}>
+                    {rule.scope === "global" ? "အားလုံး" : rule.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(rule.position || "member")]}` : `အသင်းဝင်: ${rule.memberId || "-"}`}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>
+                    အမျိုးအစား: {rule.mode === "full" ? "အပြည့်ကင်းလွတ်" : rule.mode === "percent" ? `${Number(rule.value || 0)}% သက်သာ` : `${Number(rule.value || 0).toLocaleString()} KS သက်သာ`}
+                  </Text>
+                  <Text style={styles.registerCardMeta}>ကာလ: {rule.effectiveFrom} ~ {rule.effectiveTo || "အကန့်အသတ်မရှိ"}</Text>
+                  <Text style={styles.registerCardMeta}>အကြောင်းအရာ: {rule.reason || "-"}</Text>
+                  {canManageFeePolicies ? (
+                    <Pressable style={styles.memberReportActionBtn} onPress={() => void handleDeleteFeeReliefRule(rule.id)}>
+                      <Text style={styles.memberReportActionText}>ဖျက်ရန်</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ))}
+
+              {canManageFeePolicies ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>ကင်းလွတ်/သက်သာ အသစ်ထည့်ရန်</Text>
+                  <View style={styles.registerModeRow}>
+                    {(["global", "position", "member"] as MonthlyFeeRuleScope[]).map((scope) => (
+                      <Pressable
+                        key={`relief-scope-${scope}`}
+                        style={[styles.registerModeChip, newReliefScope === scope && styles.registerModeChipActive]}
+                        onPress={() => setNewReliefScope(scope)}
+                      >
+                        <Text style={[styles.registerModeChipText, newReliefScope === scope && styles.registerModeChipTextActive]}>
+                          {scope === "global" ? "အားလုံး" : scope === "position" ? "ရာထူး" : "အသင်းဝင်"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {newReliefScope === "position" ? (
+                    <View style={styles.registerModeRow}>
+                      {(["patron", "chairperson", "vice_chairperson", "secretary", "joint_secretary", "treasurer", "auditor", "committee_member", "member"] as OrgPosition[]).map((position) => (
+                        <Pressable
+                          key={`relief-pos-${position}`}
+                          style={[styles.registerModeChip, newReliefPosition === position && styles.registerModeChipActive]}
+                          onPress={() => setNewReliefPosition(position)}
+                        >
+                          <Text style={[styles.registerModeChipText, newReliefPosition === position && styles.registerModeChipTextActive]}>
+                            {ORG_POSITION_LABELS[position]}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                  {newReliefScope === "member" ? (
+                    <TextInput
+                      style={styles.memberSearchInput}
+                      value={newReliefMemberId}
+                      onChangeText={setNewReliefMemberId}
+                      placeholder="အသင်းဝင် ID (ဥပမာ - ရဆသ-001)"
+                    />
+                  ) : null}
+                  <View style={styles.registerModeRow}>
+                    {(["full", "percent", "fixed"] as MonthlyFeeReliefMode[]).map((mode) => (
+                      <Pressable
+                        key={`relief-mode-${mode}`}
+                        style={[styles.registerModeChip, newReliefMode === mode && styles.registerModeChipActive]}
+                        onPress={() => setNewReliefMode(mode)}
+                      >
+                        <Text style={[styles.registerModeChipText, newReliefMode === mode && styles.registerModeChipTextActive]}>
+                          {mode === "full" ? "ကင်းလွတ်" : mode === "percent" ? "ရာခိုင်နှုန်း" : "ငွေပမာဏ"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {newReliefMode !== "full" ? (
+                    <TextInput
+                      style={styles.memberSearchInput}
+                      value={newReliefValue}
+                      onChangeText={setNewReliefValue}
+                      placeholder={newReliefMode === "percent" ? "သက်သာရာခိုင်နှုန်း" : "သက်သာငွေ (KS)"}
+                      keyboardType="numeric"
+                    />
+                  ) : null}
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newReliefStart}
+                    onChangeText={setNewReliefStart}
+                    placeholder="စတင်နေ့ YYYY-MM-DD"
+                  />
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newReliefEnd}
+                    onChangeText={setNewReliefEnd}
+                    placeholder="ပြီးဆုံးနေ့ YYYY-MM-DD (optional)"
+                  />
+                  <TextInput
+                    style={styles.memberSearchInput}
+                    value={newReliefReason}
+                    onChangeText={setNewReliefReason}
+                    placeholder="အကြောင်းအရာ (optional)"
+                  />
+                  <Pressable style={styles.exportBtn} onPress={() => void handleAddFeeReliefRule()}>
+                    <Ionicons name="add-circle-outline" size={15} color={Colors.light.tint} />
+                    <Text style={styles.exportBtnText}>ကင်းလွတ်/သက်သာ ထည့်ရန်</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </ScrollView>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowFeePolicyModal(false)}>
+              <Text style={styles.cancelBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="slide"
@@ -3223,6 +4221,37 @@ const styles = StyleSheet.create({
   },
   statLabel: { fontSize: 11.5, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, flex: 1 },
   statValue: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  cashBookSummaryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 14,
+    paddingHorizontal: 16,
+  },
+  cashBookSummaryBox: {
+    width: "48%",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderLeftWidth: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 6,
+    minHeight: 102,
+    justifyContent: "center",
+  },
+  cashBookSummaryLabel: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+  },
+  cashBookSummaryValue: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontFamily: "Inter_700Bold",
+  },
   section: { backgroundColor: "white", marginHorizontal: 16, padding: 12, borderRadius: 14, marginBottom: 14 },
   sectionTitle: { fontSize: 14.5, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 10 },
   catRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
@@ -3260,6 +4289,21 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFC",
   },
   exportBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
+  memberReportActionBtn: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    backgroundColor: "#FEF2F2",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  memberReportActionText: {
+    color: "#B91C1C",
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
   auditMetaText: { fontSize: 12, color: Colors.light.textSecondary, marginTop: 8, marginBottom: 8 },
   auditRow: {
     borderWidth: 1,

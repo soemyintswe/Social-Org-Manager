@@ -26,6 +26,7 @@ import {
   checkCloudSyncHealth,
   checkLanSyncHealth,
   exportData,
+  getEffectiveSyncRuntimeConfig,
   pullCloudSnapshotToLocalDetailed,
   pullLanSnapshotToLocalDetailed,
   pushCloudSnapshotFromLocalDetailed,
@@ -181,12 +182,12 @@ export default function DashboardScreen() {
     if (syncingNow) return;
     setSyncingNow(true);
     try {
-      const lanEnabled = accountSettings?.syncEnabled !== false;
-      const syncServerUrl = normalizeUrl(accountSettings?.syncServerUrl || DEFAULT_LAN_SYNC_URL);
-      const cloudEnabled = accountSettings?.cloudSyncEnabled === true;
-      const cloudEndpoint = String(accountSettings?.cloudSyncEndpoint || "").trim();
+      const runtimeConfig = await getEffectiveSyncRuntimeConfig();
+      const lanEnabled = runtimeConfig.lan.enabled;
+      const syncServerUrl = normalizeUrl(runtimeConfig.lan.url || accountSettings?.syncServerUrl || DEFAULT_LAN_SYNC_URL);
+      const cloudEnabled = runtimeConfig.cloud.enabled;
 
-      if ((!lanEnabled || !syncServerUrl) && (!cloudEnabled || !cloudEndpoint)) {
+      if (!lanEnabled && !cloudEnabled) {
         Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync ကို Account Settings မှာ Enable လုပ်ပေးပါ။");
         return;
       }
@@ -200,7 +201,7 @@ export default function DashboardScreen() {
       }
 
       let cloudHealthLine = "Cloud Health: Skip (disabled)";
-      if (cloudEnabled && cloudEndpoint) {
+      if (cloudEnabled) {
         const health = await checkCloudSyncHealth();
         cloudHealthLine = health.ok
           ? "Cloud Health: OK"
@@ -213,10 +214,10 @@ export default function DashboardScreen() {
       const pushLan = lanEnabled && syncServerUrl
         ? await pushLanSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "disabled_or_empty_url" } as const);
-      const pullCloud = cloudEnabled && cloudEndpoint
+      const pullCloud = cloudEnabled
         ? await pullCloudSnapshotToLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
-      const pushCloud = cloudEnabled && cloudEndpoint
+      const pushCloud = cloudEnabled
         ? await pushCloudSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
@@ -1179,7 +1180,6 @@ export default function DashboardScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>Project Owner & Developer: MR. SOE MYINT SWE</Text>
-        <Text style={styles.footerSubText}>Developed with Gemini AI Assistance</Text>
       </View>
     </ScrollView>
   );
