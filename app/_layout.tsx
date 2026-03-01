@@ -512,6 +512,7 @@ function RootLayoutNav() {
             <Stack.Screen name="notifications" options={{ headerShown: false }} />
             <Stack.Screen name="loans" options={{ headerShown: false }} />
             <Stack.Screen name="expense-claims" options={{ headerShown: false }} />
+            <Stack.Screen name="monthly-fees" options={{ headerShown: false }} />
           </Stack>
         </View>
       </View>

@@ -31,6 +31,7 @@ import {
   OrgPosition,
   MEMBER_GENDER_LABELS,
   MEMBER_STATUS_LABELS,
+  MemberGender,
   MemberStatus,
   MEMBER_STATUS_VALUES,
   MEMBER_GENDER_VALUES,
@@ -80,6 +81,39 @@ const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
     n.startsWith("ma ")
   ) return "female";
   return "other";
+};
+
+const DEFAULT_MEMBER_JOIN_DATE_DMY = "01/01/2018";
+
+const formatDateToDmy = (value: unknown, fallback = ""): string => {
+  const text = String(value || "").trim();
+  if (!text) return fallback;
+
+  const dmy = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmy) {
+    const day = String(Number(dmy[1])).padStart(2, "0");
+    const month = String(Number(dmy[2])).padStart(2, "0");
+    const year = dmy[3];
+    return `${day}/${month}/${year}`;
+  }
+
+  const ymd = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (ymd) {
+    const year = ymd[1];
+    const month = String(Number(ymd[2])).padStart(2, "0");
+    const day = String(Number(ymd[3])).padStart(2, "0");
+    return `${day}/${month}/${year}`;
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    const day = String(parsed.getDate()).padStart(2, "0");
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const year = parsed.getFullYear();
+    return `${day}/${month}/${year}`;
+  }
+
+  return fallback || text;
 };
 
 const TXN_CATEGORY_MM_LABELS: Record<string, string> = {
@@ -133,7 +167,7 @@ function toFamilyFormRows(input: unknown): FamilyFormMember[] {
         name,
         gender: item.gender === "male" || item.gender === "female" || item.gender === "other" ? item.gender : "other",
         relation: item.relation ? String(item.relation) : "",
-        dob: item.dob ? String(item.dob) : "",
+        dob: formatDateToDmy(item.dob ? String(item.dob) : ""),
         nrc: item.nrc ? String(item.nrc) : "",
         occupation: item.occupation ? String(item.occupation) : "",
       } as FamilyFormMember;
@@ -185,18 +219,24 @@ export default function MemberDetailScreen() {
 
   const [editName, setEditName] = useState(member?.name || "");
   const [editMemberId, setEditMemberId] = useState(member?.id || "");
+  const [editGender, setEditGender] = useState<MemberGender>(
+    ((member as any)?.gender as MemberGender) || inferGenderFromName(member?.name || "")
+  );
   const [editEmail, setEditEmail] = useState(member?.email || "");
-  const [editDob, setEditDob] = useState(member?.dob || "");
+  const [editNrc, setEditNrc] = useState((member as any)?.nrc || "");
+  const [editDob, setEditDob] = useState(formatDateToDmy(member?.dob || ""));
+  const [editJoinDate, setEditJoinDate] = useState(formatDateToDmy(member?.joinDate || DEFAULT_MEMBER_JOIN_DATE_DMY));
   const [editPhone, setEditPhone] = useState(member?.phone || "");
   const [editOccupation, setEditOccupation] = useState((member as any)?.occupation || "");
   const [editAddress, setEditAddress] = useState(member?.address || "");
   const [editProfileImage, setEditProfileImage] = useState<string | undefined>(member?.profileImage || undefined);
   const [editStatus, setEditStatus] = useState<MemberStatus>(member?.status || "active");
-  const [editStatusDate, setEditStatusDate] = useState(member?.statusDate || member?.resignDate || "");
+  const [editStatusDate, setEditStatusDate] = useState(formatDateToDmy(member?.statusDate || member?.resignDate || ""));
   const [editStatusNote, setEditStatusNote] = useState(member?.statusNote || "");
   const [editOrgPosition, setEditOrgPosition] = useState<OrgPosition>(member?.orgPosition || "member");
   const [editFamilyMembers, setEditFamilyMembers] = useState<FamilyFormMember[]>(toFamilyFormRows((member as any)?.familyMembers));
   const [showDobPicker, setShowDobPicker] = useState(false);
+  const [showJoinDatePicker, setShowJoinDatePicker] = useState(false);
   const [showStatusDatePicker, setShowStatusDatePicker] = useState(false);
   const [showPositionPicker, setShowPositionPicker] = useState(false);
   const [familyDobPickerRowId, setFamilyDobPickerRowId] = useState<string | null>(null);
@@ -233,14 +273,17 @@ export default function MemberDetailScreen() {
     if (!member) return;
     setEditName(member.name || "");
     setEditMemberId(member.id || "");
+    setEditGender(((member as any).gender as MemberGender) || inferGenderFromName(member.name || ""));
     setEditEmail(member.email || "");
-    setEditDob(member.dob || "");
+    setEditNrc((member as any).nrc || "");
+    setEditDob(formatDateToDmy(member.dob || ""));
+    setEditJoinDate(formatDateToDmy(member.joinDate || DEFAULT_MEMBER_JOIN_DATE_DMY));
     setEditPhone(member.phone || "");
     setEditOccupation((member as any).occupation || "");
     setEditAddress(member.address || "");
     setEditProfileImage(member.profileImage || undefined);
     setEditStatus((member.status as MemberStatus) || "active");
-    setEditStatusDate(member.statusDate || member.resignDate || "");
+    setEditStatusDate(formatDateToDmy(member.statusDate || member.resignDate || ""));
     setEditStatusNote(member.statusNote || "");
     setEditOrgPosition((member.orgPosition as OrgPosition) || "member");
     setEditFamilyMembers(toFamilyFormRows((member as any).familyMembers));
@@ -295,9 +338,9 @@ export default function MemberDetailScreen() {
   if (!member) {
     return (
       <View style={[styles.container, styles.center]}>
-        <Text>Member not found.</Text>
+        <Text>အသင်းဝင် မတွေ့ပါ။</Text>
         <Pressable onPress={() => router.back()} style={{ marginTop: 20 }}>
-          <Text style={{ color: Colors.light.tint }}>Go Back</Text>
+          <Text style={{ color: Colors.light.tint }}>နောက်သို့</Text>
         </Pressable>
       </View>
     );
@@ -324,6 +367,18 @@ export default function MemberDetailScreen() {
       const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
       const year = selectedDate.getFullYear();
       setEditStatusDate(`${day}/${month}/${year}`);
+    }
+  };
+
+  const handleJoinDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === "android") {
+      setShowJoinDatePicker(false);
+    }
+    if (selectedDate) {
+      const day = String(selectedDate.getDate()).padStart(2, "0");
+      const month = String(selectedDate.getMonth() + 1).padStart(2, "0");
+      const year = selectedDate.getFullYear();
+      setEditJoinDate(`${day}/${month}/${year}`);
     }
   };
 
@@ -447,11 +502,11 @@ export default function MemberDetailScreen() {
 
   const handleUpdate = async () => {
     if (!editName.trim()) {
-      Alert.alert("Error", "Name is required");
+      Alert.alert("အမှား", "အမည် ဖြည့်သွင်းရန်လိုအပ်ပါသည်။");
       return;
     }
     if (!editMemberId.trim()) {
-      Alert.alert("Error", "Member ID is required");
+      Alert.alert("အမှား", "အသင်းဝင်အမှတ် (ID) ဖြည့်သွင်းရန်လိုအပ်ပါသည်။");
       return;
     }
 
@@ -467,7 +522,10 @@ export default function MemberDetailScreen() {
       const nextPayload: any = {
         id: editMemberId.trim(),
         name: editName.trim(),
+        gender: editGender,
+        nrc: editNrc.trim(),
         dob: editDob.trim(),
+        joinDate: editJoinDate.trim(),
         email: editEmail.trim(),
         phone: editPhone.trim(),
         occupation: editOccupation.trim(),
@@ -580,17 +638,17 @@ export default function MemberDetailScreen() {
         router.replace({ pathname: "/member-detail", params: { id: editMemberId.trim() } } as any);
       }
     } catch (error) {
-      Alert.alert("Error", `Could not update member (${String((error as any)?.message || "")})`);
+      Alert.alert("အမှား", `အသင်းဝင်အချက်အလက် မပြင်နိုင်ပါ။ (${String((error as any)?.message || "")})`);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = () => {
-    Alert.alert("Delete Member", "Are you sure you want to delete this member?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert("အသင်းဝင်ဖျက်ရန်", "ဤအသင်းဝင်ကို ဖျက်ရန်သေချာပါသလား?", [
+      { text: "မလုပ်တော့ပါ", style: "cancel" },
       {
-        text: "Delete",
+        text: "ဖျက်မည်",
         style: "destructive",
         onPress: async () => {
           if (canDeleteAll) {
@@ -608,16 +666,13 @@ export default function MemberDetailScreen() {
               createdByUserId: currentUser.id,
               createdByMemberId: currentUser.memberId,
             });
-            Alert.alert("အောင်မြင်ပါသည်", "Delete request ကို approver ထံပို့ပြီးပါပြီ။");
+            Alert.alert("အောင်မြင်ပါသည်", "ဖျက်ရန်တင်ပြချက်ကို approver ထံ ပို့ပြီးပါပြီ။");
             router.back();
           }
         },
       },
     ]);
   };
-
-  // createdAt error ကို ရှောင်ရန် helper variable
-  const createdAtValue = (member as any).createdAt;
 
   // နှုတ်ထွက်သည့်နေ့ ရှိ/မရှိ စစ်ဆေးပြီး Status သတ်မှတ်ခြင်း
   const statusLabel = MEMBER_STATUS_LABELS[member.status as MemberStatus] || member.status;
@@ -632,6 +687,9 @@ export default function MemberDetailScreen() {
     (member as any).gender === "male" || (member as any).gender === "female" || (member as any).gender === "other"
       ? ((member as any).gender as "male" | "female" | "other")
       : inferGenderFromName(member.name || "");
+  const displayJoinDate = formatDateToDmy(member.joinDate || DEFAULT_MEMBER_JOIN_DATE_DMY, DEFAULT_MEMBER_JOIN_DATE_DMY);
+  const displayDob = formatDateToDmy(member.dob || "", "-");
+  const displayStatusDate = formatDateToDmy(member.statusDate || member.resignDate || "", "-");
 
   return (
     <KeyboardAvoidingView 
@@ -643,11 +701,11 @@ export default function MemberDetailScreen() {
         <Pressable onPress={() => (editing ? setEditing(false) : router.back())}>
           <Ionicons name={editing ? "close" : "arrow-back"} size={24} color={Colors.light.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>{editing ? "Edit Profile" : "Member Profile"}</Text>
+        <Text style={styles.headerTitle}>{editing ? "အချက်အလက်ပြင်ရန်" : "အသင်းဝင်အချက်အလက်"}</Text>
         {canManage && (
           <Pressable onPress={editing ? handleUpdate : () => setEditing(true)} disabled={saving}>
             <Text style={[styles.editBtnText, { color: Colors.light.tint }]}>
-              {editing ? (saving ? "Saving..." : "Done") : "Edit"}
+              {editing ? (saving ? "သိမ်းနေသည်..." : "သိမ်းမည်") : "ပြင်ဆင်မည်"}
             </Text>
           </Pressable>
         )}
@@ -671,25 +729,20 @@ export default function MemberDetailScreen() {
           </View>
           <Text style={styles.name}>{member.name}</Text>
 
-          {/* createdAt ရှိမှသာ ပြသရန်နှင့် error မတက်စေရန် ပြင်ဆင်ထားပါသည် */}
-          {createdAtValue && (
-            <Text style={styles.joinDate}>
-              Joined on {new Date(createdAtValue).toLocaleDateString()}
-            </Text>
-          )}
+          <Text style={styles.joinDate}>အသင်းဝင်သည့်နေ့: {displayJoinDate}</Text>
 
           <Pressable 
             style={styles.cardBtn} 
             onPress={() => router.push({ pathname: "/member-card", params: { id: member.id } } as any)}
           >
             <Ionicons name="card-outline" size={18} color="#fff" />
-            <Text style={styles.cardBtnText}>View Member Card</Text>
+            <Text style={styles.cardBtnText}>အသင်းဝင်ကတ်ကြည့်ရန်</Text>
           </Pressable>
         </View>
 
         {editing ? (
           <View style={styles.editForm}>
-            <Text style={styles.editLabel}>Profile ပုံ</Text>
+            <Text style={styles.editLabel}>ဓာတ်ပုံ</Text>
             <View style={styles.profileEditRow}>
               <Pressable onPress={canEditGeneralFields ? pickProfileImage : undefined} style={[styles.profileEditBtn, !canEditGeneralFields ? styles.inputReadOnly : undefined]}>
                 {editProfileImage ? (
@@ -708,36 +761,86 @@ export default function MemberDetailScreen() {
               )}
             </View>
 
-            <Text style={styles.editLabel}>Member ID</Text>
+            <Text style={styles.editLabel}>အသင်းဝင်အမှတ် (ID)</Text>
             <TextInput
               style={[styles.editInput, !canEditRestrictedFields && styles.inputReadOnly]}
               value={editMemberId}
               onChangeText={setEditMemberId}
+              placeholder="ဥပမာ- ရဆသ-၀၀၁"
+              placeholderTextColor={Colors.light.textSecondary}
               editable={canEditRestrictedFields}
             />
 
-            <Text style={styles.editLabel}>Full Name</Text>
-            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editName} onChangeText={setEditName} editable={canEditGeneralFields} />
+            <Text style={styles.editLabel}>အမည်</Text>
+            <TextInput
+              style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editName}
+              onChangeText={setEditName}
+              placeholder="အမည်အပြည့်အစုံ"
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={canEditGeneralFields}
+            />
 
-            <Text style={styles.editLabel}>Gender</Text>
-            <TextInput style={styles.editInput} value={MEMBER_GENDER_LABELS[resolvedGender]} editable={false} />
+            <Text style={styles.editLabel}>ကျား / မ / အခြား</Text>
+            <View style={styles.statusRow}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {MEMBER_GENDER_VALUES.map((g) => (
+                  <Pressable
+                    key={g}
+                    style={[
+                      styles.statusChip,
+                      editGender === g ? styles.statusChipActive : undefined,
+                      !canEditGeneralFields ? styles.inputReadOnly : undefined,
+                    ]}
+                    onPress={() => canEditGeneralFields && setEditGender(g)}
+                  >
+                    <Text style={[styles.statusChipText, editGender === g ? styles.statusChipTextActive : undefined]}>
+                      {MEMBER_GENDER_LABELS[g]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
 
-            <Text style={styles.editLabel}>Position</Text>
-            <Pressable
-              style={[styles.dropdown, !canEditRestrictedFields && styles.inputReadOnly]}
-              onPress={() => canEditRestrictedFields && setShowPositionPicker(true)}
-            >
-              <Text style={styles.dropdownText}>{ORG_POSITION_LABELS[editOrgPosition]}</Text>
-              <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
-            </Pressable>
+            <Text style={styles.editLabel}>ဖုန်းနံပါတ်</Text>
+            <TextInput
+              style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editPhone}
+              onChangeText={setEditPhone}
+              keyboardType="phone-pad"
+              placeholder="၀၉..."
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={canEditGeneralFields}
+            />
 
-            <Text style={styles.editLabel}>Date of Birth</Text>
+            <Text style={styles.editLabel}>အလုပ်အကိုင်</Text>
+            <TextInput
+              style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editOccupation}
+              onChangeText={setEditOccupation}
+              placeholder="အလုပ်အကိုင်"
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={canEditGeneralFields}
+            />
+
+            <Text style={styles.editLabel}>မှတ်ပုံတင်အမှတ်</Text>
+            <TextInput
+              style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editNrc}
+              onChangeText={setEditNrc}
+              placeholder="၁၂/သကတ(နိုင်)...."
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={canEditGeneralFields}
+            />
+
+            <Text style={styles.editLabel}>မွေးသက္ကရာဇ်</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
                 style={[styles.editInput, { flex: 1 }, !canEditGeneralFields && styles.inputReadOnly]}
                 value={editDob}
                 onChangeText={setEditDob}
-                placeholder="DD/MM/YYYY"
+                placeholder="ရက်.လ.ခုနှစ် (သို့) မြန်မာသက္ကရာဇ်"
+                placeholderTextColor={Colors.light.textSecondary}
                 editable={canEditGeneralFields}
               />
               {Platform.OS === 'web' ? (
@@ -770,19 +873,70 @@ export default function MemberDetailScreen() {
               />
             )}
 
-            <Text style={styles.editLabel}>Email Address</Text>
-            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editEmail} onChangeText={setEditEmail} keyboardType="email-address" editable={canEditGeneralFields} />
+            <Text style={styles.editLabel}>နေရပ်လိပ်စာ</Text>
+            <TextInput
+              style={[styles.editInput, { height: 80, textAlignVertical: "top" }, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editAddress}
+              onChangeText={setEditAddress}
+              placeholder="အိမ်အမှတ်၊ လမ်း၊ ရပ်ကွက်..."
+              placeholderTextColor={Colors.light.textSecondary}
+              multiline
+              editable={canEditGeneralFields}
+            />
 
-            <Text style={styles.editLabel}>Phone Number</Text>
-            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editPhone} onChangeText={setEditPhone} keyboardType="phone-pad" editable={canEditGeneralFields} />
+            <Text style={styles.editLabel}>အသင်းဝင်သည့်နေ့</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TextInput
+                style={[styles.editInput, { flex: 1 }, !canEditGeneralFields && styles.inputReadOnly]}
+                value={editJoinDate}
+                onChangeText={setEditJoinDate}
+                placeholder="ရက်.လ.ခုနှစ် (DD/MM/YYYY)"
+                placeholderTextColor={Colors.light.textSecondary}
+                editable={canEditGeneralFields}
+              />
+              {Platform.OS === "web" ? (
+                <View style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0, position: "relative" }, !canEditGeneralFields && styles.inputReadOnly]}>
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                  {React.createElement("input", {
+                    type: "date",
+                    style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" },
+                    disabled: !canEditGeneralFields,
+                    onChange: (e: any) => {
+                      if (e.target.value) {
+                        const [y, m, d] = e.target.value.split("-");
+                        setEditJoinDate(`${d}/${m}/${y}`);
+                      }
+                    },
+                  })}
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => canEditGeneralFields && setShowJoinDatePicker(true)}
+                  style={[styles.editInput, { width: 50, justifyContent: "center", alignItems: "center", padding: 0 }, !canEditGeneralFields && styles.inputReadOnly]}
+                >
+                  <Ionicons name="calendar-outline" size={24} color={Colors.light.textSecondary} />
+                </Pressable>
+              )}
+            </View>
+            {showJoinDatePicker && Platform.OS !== "web" && (
+              <DateTimePicker
+                value={getParsedDate(editJoinDate)}
+                mode="date"
+                display="default"
+                onChange={handleJoinDateChange}
+              />
+            )}
 
-            <Text style={styles.editLabel}>Occupation</Text>
-            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editOccupation} onChangeText={setEditOccupation} editable={canEditGeneralFields} />
+            <Text style={styles.editLabel}>အသင်းဝင် အဆင့်အတန်း (Position)</Text>
+            <Pressable
+              style={[styles.dropdown, !canEditRestrictedFields && styles.inputReadOnly]}
+              onPress={() => canEditRestrictedFields && setShowPositionPicker(true)}
+            >
+              <Text style={styles.dropdownText}>{ORG_POSITION_LABELS[editOrgPosition]}</Text>
+              <Ionicons name="chevron-down" size={20} color={Colors.light.textSecondary} />
+            </Pressable>
 
-            <Text style={styles.editLabel}>Address</Text>
-            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editAddress} onChangeText={setEditAddress} multiline editable={canEditGeneralFields} />
-
-            <Text style={styles.editLabel}>Status</Text>
+            <Text style={styles.editLabel}>အခြေအနေ (Status)</Text>
             <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>
               {MEMBER_STATUS_VALUES.map(s => (
                 <Pressable 
@@ -799,13 +953,14 @@ export default function MemberDetailScreen() {
               ))}
             </View>
 
-            <Text style={styles.editLabel}>Status Date</Text>
+            <Text style={styles.editLabel}>အခြေအနေပြောင်းလဲသည့်နေ့ (Status Date)</Text>
             <View style={{ flexDirection: "row", gap: 10 }}>
               <TextInput
                 style={[styles.editInput, { flex: 1 }, !canEditRestrictedFields && styles.inputReadOnly]}
                 value={editStatusDate}
                 onChangeText={setEditStatusDate}
-                placeholder="DD/MM/YYYY"
+                placeholder="ရက်.လ.ခုနှစ် (ရှိလျှင်)"
+                placeholderTextColor={Colors.light.textSecondary}
                 editable={canEditRestrictedFields}
               />
               {Platform.OS === "web" ? (
@@ -836,8 +991,27 @@ export default function MemberDetailScreen() {
               <DateTimePicker value={getParsedDate(editStatusDate)} mode="date" display="default" onChange={handleStatusDateChange} />
             )}
 
-            <Text style={styles.editLabel}>Status Note</Text>
-            <TextInput style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]} value={editStatusNote} onChangeText={setEditStatusNote} multiline editable={canEditGeneralFields} />
+            <Text style={styles.editLabel}>မှတ်ချက် (Status Note)</Text>
+            <TextInput
+              style={[styles.editInput, { height: 60, textAlignVertical: "top" }, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editStatusNote}
+              onChangeText={setEditStatusNote}
+              placeholder="အကြောင်းအရင်း..."
+              placeholderTextColor={Colors.light.textSecondary}
+              multiline
+              editable={canEditGeneralFields}
+            />
+
+            <Text style={styles.editLabel}>အီးမေးလ်</Text>
+            <TextInput
+              style={[styles.editInput, !canEditGeneralFields && styles.inputReadOnly]}
+              value={editEmail}
+              onChangeText={setEditEmail}
+              keyboardType="email-address"
+              placeholder="example@email.com"
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={canEditGeneralFields}
+            />
 
             <View style={styles.familySectionHeader}>
               <Text style={styles.editLabel}>မိသားစုဝင်များ</Text>
@@ -948,7 +1122,7 @@ export default function MemberDetailScreen() {
             {(canDeleteAll || canProposeChanges) && (
               <Pressable style={styles.deleteBtn} onPress={handleDelete}>
                 <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                <Text style={styles.deleteBtnText}>{canDeleteAll ? "Delete Member" : "Propose Delete"}</Text>
+                <Text style={styles.deleteBtnText}>{canDeleteAll ? "အသင်းဝင်ဖျက်မည်" : "ဖျက်ရန်တင်ပြမည်"}</Text>
               </Pressable>
             )}
           </View>
@@ -962,18 +1136,18 @@ export default function MemberDetailScreen() {
               />
               <InfoRow icon="male-female-outline" label="ကျား / မ / အခြား" value={MEMBER_GENDER_LABELS[resolvedGender]} />
               <InfoRow icon="ribbon-outline" label="ရာထူး" value={ORG_POSITION_LABELS[(member.orgPosition || "member") as OrgPosition]} />
-              <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={member.dob} />
-              {member.status !== 'active' && <InfoRow icon="calendar-outline" label="ရက်စွဲ" value={member.statusDate || member.resignDate} />}
+              <InfoRow icon="gift-outline" label="မွေးသက္ကရာဇ်" value={displayDob} />
+              {member.status !== 'active' && <InfoRow icon="calendar-outline" label="ရက်စွဲ" value={displayStatusDate} />}
               {member.status !== 'active' && member.statusNote && <InfoRow icon="document-text-outline" label="မှတ်ချက်" value={member.statusNote} />}
-              <InfoRow icon="mail-outline" label="Email" value={member.email} />
-              <InfoRow icon="call-outline" label="Phone" value={member.phone} />
-              <InfoRow icon="briefcase-outline" label="Occupation" value={(member as any).occupation} />
-              <InfoRow icon="location-outline" label="Address" value={member.address} />
+              <InfoRow icon="mail-outline" label="အီးမေးလ်" value={member.email} />
+              <InfoRow icon="call-outline" label="ဖုန်းနံပါတ်" value={member.phone} />
+              <InfoRow icon="briefcase-outline" label="အလုပ်အကိုင်" value={(member as any).occupation} />
+              <InfoRow icon="location-outline" label="နေရပ်လိပ်စာ" value={member.address} />
             </View>
 
             {canViewFinanceSection && (
               <>
-                <Text style={styles.sectionTitle}>Financial Report</Text>
+                <Text style={styles.sectionTitle}>ငွေကြေးအချက်အလက်</Text>
                 <View style={styles.statsGrid}>
                   <View style={styles.statCard}>
                     <Text style={styles.statLabel}>စုစုပေါင်း ပေးသွင်း</Text>
@@ -994,7 +1168,7 @@ export default function MemberDetailScreen() {
                   </View>
                 </View>
 
-                <Text style={styles.sectionTitle}>Recent Transactions</Text>
+                <Text style={styles.sectionTitle}>မကြာသေးမီ ငွေစာရင်း</Text>
                 {memberTxns.length > 0 ? (
                   memberTxns.slice(0, 5).map((t: any) => (
                     <View key={t.id} style={styles.txnRow}>
@@ -1003,7 +1177,7 @@ export default function MemberDetailScreen() {
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.txnCat}>{getTxnCategoryLabel(t)}</Text>
-                        <Text style={styles.txnDate}>{new Date(t.date).toLocaleDateString()}</Text>
+                        <Text style={styles.txnDate}>{formatDateToDmy(t.date, "-")}</Text>
                       </View>
                       <Text style={[styles.txnAmount, { color: t.type === 'income' ? Colors.light.success : Colors.light.accent }]}>
                         {t.type === 'income' ? "+" : "-"}{t.amount.toLocaleString()}
@@ -1012,14 +1186,14 @@ export default function MemberDetailScreen() {
                   ))
                 ) : (
                   <View style={styles.emptyState}>
-                    <Text style={styles.emptyText}>No transactions found</Text>
+                    <Text style={styles.emptyText}>ငွေစာရင်း မတွေ့ပါ။</Text>
                   </View>
                 )}
                 <View style={{ height: 20 }} />
               </>
             )}
 
-            <Text style={styles.sectionTitle}>Groups</Text>
+            <Text style={styles.sectionTitle}>အသင်းဝင်အုပ်စုများ</Text>
             {memberGroups.length > 0 ? (
               memberGroups.map((g: any) => (
                 <View key={g.id} style={styles.groupChip}>
@@ -1040,9 +1214,9 @@ export default function MemberDetailScreen() {
                       {row.name} {row.relation ? `(${row.relation})` : ""}
                     </Text>
                     <Text style={styles.emptyText}>
-                      {row.gender ? MEMBER_GENDER_LABELS[row.gender] : "-"} • DOB: {row.dob || "-"} • NRC: {row.nrc || "-"}
+                      {row.gender ? MEMBER_GENDER_LABELS[row.gender] : "-"} • DOB: {formatDateToDmy(row.dob || "", "-")} • NRC: {row.nrc || "-"}
                     </Text>
-                    <Text style={styles.emptyText}>Occupation: {row.occupation || "-"}</Text>
+                    <Text style={styles.emptyText}>အလုပ်အကိုင်: {row.occupation || "-"}</Text>
                   </View>
                 </View>
               ))
@@ -1161,6 +1335,7 @@ const styles = StyleSheet.create({
   editForm: { gap: 4 },
   editLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 12 },
   editInput: { backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
+  statusRow: { marginTop: 5 },
   inputReadOnly: { opacity: 0.65 },
   familyInputLabel: { fontSize: 12, fontWeight: "600", color: Colors.light.textSecondary, marginTop: 2, marginBottom: -2 },
   dropdown: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: Colors.light.surface, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.light.border },

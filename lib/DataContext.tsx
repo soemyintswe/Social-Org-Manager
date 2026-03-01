@@ -283,6 +283,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     receivingAyaPayAccountName: "",
     monthlyFeeRateRules: [],
     monthlyFeeReliefRules: [],
+    monthlyFeePolicyRequests: [],
   });
   const [loading, setLoading] = useState(true);
   const bootstrappedRef = useRef(false);

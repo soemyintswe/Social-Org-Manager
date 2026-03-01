@@ -148,6 +148,7 @@ export interface AccountSettings {
   receivingAyaPayMmqr?: string;
   monthlyFeeRateRules?: MonthlyFeeRateRule[];
   monthlyFeeReliefRules?: MonthlyFeeReliefRule[];
+  monthlyFeePolicyRequests?: MonthlyFeePolicyRequest[];
 }
 
 export type MonthlyFeeRuleScope = "global" | "position" | "member";
@@ -180,6 +181,28 @@ export interface MonthlyFeeReliefRule {
   active?: boolean;
   updatedAt?: string;
   updatedByUserId?: string;
+}
+
+export type MonthlyFeePolicyRequestType = "rate_rule" | "relief_rule";
+export type MonthlyFeePolicyAction = "create" | "delete";
+export type MonthlyFeePolicyRequestStatus = "pending_chair_approval" | "approved" | "rejected";
+
+export interface MonthlyFeePolicyRequest {
+  id: string;
+  policyType: MonthlyFeePolicyRequestType;
+  action: MonthlyFeePolicyAction;
+  payload: MonthlyFeeRateRule | MonthlyFeeReliefRule;
+  targetRuleId?: string;
+  status: MonthlyFeePolicyRequestStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdByRole?: OrgPosition;
+  createdAt: string;
+  reviewNote?: string;
+  reviewedByUserId?: string;
+  reviewedByMemberId?: string;
+  reviewedAt?: string;
+  appliedAt?: string;
 }
 
 export type TransactionType = "income" | "expense";

@@ -93,6 +93,12 @@ export default function FloatingTabMenu({
         enabled: can("reports.view_all") || can("reports.view_summary"),
       },
       {
+        name: "လစဉ်ကြေး",
+        icon: "calendar-number-outline",
+        route: "/monthly-fees",
+        enabled: can("reports.view_all") || can("reports.view_summary") || can("finance.view_summary") || can("finance.view_detail"),
+      },
+      {
         name: "System Information",
         icon: "settings-outline",
         route: "/system",

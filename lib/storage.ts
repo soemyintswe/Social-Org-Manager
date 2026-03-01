@@ -76,6 +76,9 @@ const KEYS = {
   NOTIFICATIONS: "@orghub_notifications",
 };
 
+const MEMBER_JOIN_DATE_FALLBACK_DMY = "01/01/2018";
+const MEMBER_JOIN_DATE_MIGRATION_V1_KEY = "@orghub_member_join_date_migration_v1";
+
 const EXTRA_SHARED_KEYS = [
   "@custom_categories",
   "@org_notice_custom_topics",
@@ -576,8 +579,20 @@ export const getMembers = async (): Promise<Member[]> => {
   const rows = await safeGet<Member[]>(KEYS.MEMBERS, []);
   if (!Array.isArray(rows) || rows.length === 0) return [];
 
+  const migrationFlag = await AsyncStorage.getItem(MEMBER_JOIN_DATE_MIGRATION_V1_KEY);
+  const shouldRunJoinDateMigration = migrationFlag !== "1";
+  let joinDateMigrationChanged = false;
+  const migratedRows = shouldRunJoinDateMigration
+    ? rows.map((row: any) => {
+        const joinDateText = String(row?.joinDate || "").trim();
+        if (joinDateText) return row;
+        joinDateMigrationChanged = true;
+        return { ...row, joinDate: MEMBER_JOIN_DATE_FALLBACK_DMY };
+      })
+    : rows;
+
   let changed = false;
-  const normalized = rows.map((row: any) => {
+  const normalized = migratedRows.map((row: any) => {
     const next = normalizeMemberRecord(row);
     if (!changed) {
       try {
@@ -589,7 +604,10 @@ export const getMembers = async (): Promise<Member[]> => {
     return next;
   });
 
-  if (changed) {
+  if (shouldRunJoinDateMigration) {
+    await AsyncStorage.setItem(MEMBER_JOIN_DATE_MIGRATION_V1_KEY, "1");
+  }
+  if (changed || joinDateMigrationChanged) {
     await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
   }
   return normalized;
@@ -2797,6 +2815,7 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     receivingAyaPayMmqr: "",
     monthlyFeeRateRules: [],
     monthlyFeeReliefRules: [],
+    monthlyFeePolicyRequests: [],
   };
   const stored = await safeGet<Partial<AccountSettings> | null>(KEYS.ACCOUNT_SETTINGS, null);
   if (!stored || typeof stored !== "object") return defaults;
@@ -2826,6 +2845,9 @@ export async function getAccountSettings(): Promise<AccountSettings> {
   }
   if (!Array.isArray(stored.monthlyFeeReliefRules)) {
     merged.monthlyFeeReliefRules = [];
+  }
+  if (!Array.isArray(stored.monthlyFeePolicyRequests)) {
+    merged.monthlyFeePolicyRequests = [];
   }
   return merged;
 }

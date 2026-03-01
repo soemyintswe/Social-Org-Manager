@@ -296,6 +296,9 @@ export default function SignInScreen() {
               )}
             </View>
           </View>
+          <View style={styles.ownerFooter}>
+            <Text style={styles.ownerFooterText}>Project Owner & Developer: MR. SOE MYINT SWE</Text>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -385,4 +388,14 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   guideToggleText: { color: "#0F766E", fontSize: 12, fontWeight: "700" },
+  ownerFooter: {
+    marginTop: 12,
+    alignItems: "center",
+  },
+  ownerFooterText: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "600",
+    textAlign: "center",
+  },
 });

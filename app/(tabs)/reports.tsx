@@ -37,6 +37,7 @@ import {
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from "expo-file-system/legacy";
+import { useRouter } from "expo-router";
 import AccessDenied from "@/components/AccessDenied";
 import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
 import { toEnglishDigits } from "@/lib/member-utils";
@@ -86,6 +87,8 @@ type FeeYearSummary = {
     memberId: string;
     memberName: string;
     paidMap: Record<string, boolean>;
+    eligibleMap: Record<string, boolean>;
+    exemptMap: Record<string, boolean>;
     dueMap: Record<string, number>;
     paidTotal: number;
     dueTotal: number;
@@ -93,6 +96,7 @@ type FeeYearSummary = {
   }[];
   totals: { paid: number; due: number; unpaid: number };
 };
+type FeePolicyMemberOption = { id: string; name: string };
 
 const REPORT_TXN_PAGE_SIZE = 60;
 const REPORT_REGISTER_PAGE_SIZE = 50;
@@ -367,6 +371,7 @@ function monthKey(year: number, monthIdx: number): string {
 export default function ReportsScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  const router = useRouter();
   const { transactions, members, loading, accountSettings, loans, getLoanInterestDue, standardAmountRules, updateAccountSettings } = useData() as any;
   const { can, currentUser } = useAuth();
   const canViewAllReports = can("reports.view_all");
@@ -417,14 +422,16 @@ export default function ReportsScreen() {
   const [visibleMemberCount, setVisibleMemberCount] = useState(REPORT_MEMBER_PAGE_SIZE);
   const [newRateScope, setNewRateScope] = useState<MonthlyFeeRuleScope>("global");
   const [newRatePosition, setNewRatePosition] = useState<OrgPosition>("patron");
-  const [newRateMemberId, setNewRateMemberId] = useState("");
+  const [newRateMemberIds, setNewRateMemberIds] = useState<string[]>([]);
+  const [newRateMemberSearch, setNewRateMemberSearch] = useState("");
   const [newRateAmount, setNewRateAmount] = useState("");
   const [newRateStart, setNewRateStart] = useState(formatYmd(new Date()));
   const [newRateEnd, setNewRateEnd] = useState("");
   const [newRateReason, setNewRateReason] = useState("");
   const [newReliefScope, setNewReliefScope] = useState<MonthlyFeeRuleScope>("global");
   const [newReliefPosition, setNewReliefPosition] = useState<OrgPosition>("patron");
-  const [newReliefMemberId, setNewReliefMemberId] = useState("");
+  const [newReliefMemberIds, setNewReliefMemberIds] = useState<string[]>([]);
+  const [newReliefMemberSearch, setNewReliefMemberSearch] = useState("");
   const [newReliefMode, setNewReliefMode] = useState<MonthlyFeeReliefMode>("full");
   const [newReliefValue, setNewReliefValue] = useState("");
   const [newReliefStart, setNewReliefStart] = useState(formatYmd(new Date()));
@@ -472,6 +479,74 @@ export default function ReportsScreen() {
       return id.includes(needle) || name.includes(needle);
     });
   }, [members, memberSearch]);
+
+  const feePolicyMemberOptions = useMemo<FeePolicyMemberOption[]>(() => {
+    return (members || [])
+      .map((member: any) => ({
+        id: String(member?.id || "").trim(),
+        name: String(member?.name || "").trim() || "-",
+      }))
+      .filter((member: FeePolicyMemberOption) => !!member.id)
+      .sort((a: FeePolicyMemberOption, b: FeePolicyMemberOption) =>
+        String(a.id).localeCompare(String(b.id), "en", { numeric: true })
+      );
+  }, [members]);
+
+  const filteredRateMemberOptions = useMemo(() => {
+    const needle = String(newRateMemberSearch || "").trim().toLowerCase();
+    if (!needle) return feePolicyMemberOptions;
+    return feePolicyMemberOptions.filter((member: FeePolicyMemberOption) => {
+      return String(member.id).toLowerCase().includes(needle) || String(member.name).toLowerCase().includes(needle);
+    });
+  }, [feePolicyMemberOptions, newRateMemberSearch]);
+
+  const filteredReliefMemberOptions = useMemo(() => {
+    const needle = String(newReliefMemberSearch || "").trim().toLowerCase();
+    if (!needle) return feePolicyMemberOptions;
+    return feePolicyMemberOptions.filter((member: FeePolicyMemberOption) => {
+      return String(member.id).toLowerCase().includes(needle) || String(member.name).toLowerCase().includes(needle);
+    });
+  }, [feePolicyMemberOptions, newReliefMemberSearch]);
+
+  useEffect(() => {
+    const validIds = new Set(feePolicyMemberOptions.map((member: FeePolicyMemberOption) => member.id));
+    setNewRateMemberIds((prev) => prev.filter((id) => validIds.has(String(id))));
+    setNewReliefMemberIds((prev) => prev.filter((id) => validIds.has(String(id))));
+  }, [feePolicyMemberOptions]);
+
+  const toggleRateMemberSelection = useCallback((memberId: string) => {
+    const id = String(memberId || "").trim();
+    if (!id) return;
+    setNewRateMemberIds((prev) => (prev.includes(id) ? prev.filter((row) => row !== id) : [...prev, id]));
+  }, []);
+
+  const toggleReliefMemberSelection = useCallback((memberId: string) => {
+    const id = String(memberId || "").trim();
+    if (!id) return;
+    setNewReliefMemberIds((prev) => (prev.includes(id) ? prev.filter((row) => row !== id) : [...prev, id]));
+  }, []);
+
+  const handleSelectAllRateMembers = useCallback(() => {
+    const ids = filteredRateMemberOptions
+      .map((member: FeePolicyMemberOption) => String(member.id || "").trim())
+      .filter(Boolean);
+    setNewRateMemberIds(Array.from(new Set(ids)));
+  }, [filteredRateMemberOptions]);
+
+  const handleDeselectAllRateMembers = useCallback(() => {
+    setNewRateMemberIds([]);
+  }, []);
+
+  const handleSelectAllReliefMembers = useCallback(() => {
+    const ids = filteredReliefMemberOptions
+      .map((member: FeePolicyMemberOption) => String(member.id || "").trim())
+      .filter(Boolean);
+    setNewReliefMemberIds(Array.from(new Set(ids)));
+  }, [filteredReliefMemberOptions]);
+
+  const handleDeselectAllReliefMembers = useCallback(() => {
+    setNewReliefMemberIds([]);
+  }, []);
 
   const scopedMemberId = useMemo<string | null>(() => {
     if (effectiveScope === "all") return null;
@@ -1103,31 +1178,54 @@ export default function ReportsScreen() {
       .filter(Boolean) as MonthlyFeeReliefRule[];
   }, [accountSettings?.monthlyFeeReliefRules]);
 
-  const feePaidMonthSet = useMemo(() => {
-    const set = new Set<string>();
+  const memberFeePaidAmountByMonthMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const addMonthAmount = (memberId: string, year: number, monthIdx: number, amount: number) => {
+      if (!memberId || !Number.isFinite(amount) || amount <= 0) return;
+      const key = `${memberId}|${year}|${monthIdx}`;
+      map.set(key, (map.get(key) || 0) + amount);
+    };
+
     (reportTransactions || []).forEach((t: any) => {
       if (String(t?.category || "") !== "member_fees") return;
       const memberId = String(t?.memberId || "").trim();
-      if (!memberId) return;
+      const amount = Math.max(0, Math.round(Number(t?.amount || 0)));
+      if (!memberId || !Number.isFinite(amount) || amount <= 0) return;
 
       if (t?.feePeriodStart && t?.feePeriodEnd) {
         const start = monthStartFrom(String(t.feePeriodStart));
         const end = monthStartFrom(String(t.feePeriodEnd));
-        let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-        const boundary = new Date(end.getFullYear(), end.getMonth(), 1);
+        const startMs = start.getTime();
+        const endMs = end.getTime();
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return;
+        const from = startMs <= endMs ? start : end;
+        const to = startMs <= endMs ? end : start;
+        const months: { year: number; monthIdx: number }[] = [];
+        let cursor = new Date(from.getFullYear(), from.getMonth(), 1);
+        const boundary = new Date(to.getFullYear(), to.getMonth(), 1);
         while (cursor <= boundary) {
-          set.add(`${memberId}|${cursor.getFullYear()}|${cursor.getMonth()}`);
+          months.push({ year: cursor.getFullYear(), monthIdx: cursor.getMonth() });
           cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
         }
-        return;
+        if (months.length > 0) {
+          const perMonthBase = Math.floor(amount / months.length);
+          let remainder = amount - perMonthBase * months.length;
+          months.forEach((m) => {
+            const add = perMonthBase + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) remainder -= 1;
+            addMonthAmount(memberId, m.year, m.monthIdx, add);
+          });
+          return;
+        }
       }
 
       const d = monthStartFrom(String(t?.date || ""));
       if (!Number.isNaN(d.getTime())) {
-        set.add(`${memberId}|${d.getFullYear()}|${d.getMonth()}`);
+        addMonthAmount(memberId, d.getFullYear(), d.getMonth(), amount);
       }
     });
-    return set;
+
+    return map;
   }, [reportTransactions]);
 
   const memberFeeTotalsByMemberId = useMemo(() => {
@@ -1137,42 +1235,6 @@ export default function ReportsScreen() {
       const memberId = String(t?.memberId || "").trim();
       if (!memberId) return;
       map.set(memberId, (map.get(memberId) || 0) + Number(t?.amount || 0));
-    });
-    return map;
-  }, [filteredTxns]);
-
-  const memberFeePaidByYearMap = useMemo(() => {
-    const map = new Map<string, number>();
-    filteredTxns.forEach((t: any) => {
-      if (String(t?.category || "") !== "member_fees") return;
-      const memberId = String(t?.memberId || "").trim();
-      if (!memberId) return;
-      const amount = Number(t?.amount || 0);
-      if (amount <= 0) return;
-
-      if (t?.feePeriodStart && t?.feePeriodEnd) {
-        const start = monthStartFrom(String(t.feePeriodStart));
-        const end = monthStartFrom(String(t.feePeriodEnd));
-        const months: { year: number; monthIdx: number }[] = [];
-        let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-        const boundary = new Date(end.getFullYear(), end.getMonth(), 1);
-        while (cursor <= boundary) {
-          months.push({ year: cursor.getFullYear(), monthIdx: cursor.getMonth() });
-          cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-        }
-        if (months.length > 0) {
-          const perMonth = amount / months.length;
-          months.forEach((m) => {
-            const key = `${memberId}|${m.year}`;
-            map.set(key, (map.get(key) || 0) + perMonth);
-          });
-          return;
-        }
-      }
-
-      const d = monthStartFrom(String(t?.date || ""));
-      const key = `${memberId}|${d.getFullYear()}`;
-      map.set(key, (map.get(key) || 0) + amount);
     });
     return map;
   }, [filteredTxns]);
@@ -1189,7 +1251,11 @@ export default function ReportsScreen() {
       return 1;
     };
 
-    const resolveMemberMonthDue = (member: any, year: number, monthIdx: number): number => {
+    const resolveMemberMonthDue = (
+      member: any,
+      year: number,
+      monthIdx: number
+    ): { due: number; exempted: boolean } => {
       const monthStart = new Date(year, monthIdx, 1);
       const monthEnd = monthEndFrom(year, monthIdx);
       const monthStartMs = monthStart.getTime();
@@ -1206,7 +1272,7 @@ export default function ReportsScreen() {
       );
       const joinMonthMs = (joinDateMs > 0 ? new Date(joinDateMs) : new Date(2018, 0, 1));
       const joinMonthStartMs = new Date(joinMonthMs.getFullYear(), joinMonthMs.getMonth(), 1).getTime();
-      if (monthStartMs < joinMonthStartMs) return 0;
+      if (monthStartMs < joinMonthStartMs) return { due: 0, exempted: false };
 
       const status = normalizeMemberStatus(member?.status);
       const isExitStatus = ["resigned", "deceased", "expelled", "suspended"].includes(status);
@@ -1214,7 +1280,7 @@ export default function ReportsScreen() {
       if (exitDateMs > 0) {
         const exitMonth = new Date(exitDateMs);
         const exitMonthStartMs = new Date(exitMonth.getFullYear(), exitMonth.getMonth(), 1).getTime();
-        if (monthStartMs > exitMonthStartMs) return 0;
+        if (monthStartMs > exitMonthStartMs) return { due: 0, exempted: false };
       }
 
       const positionsInMonth = getMemberPositionsInRange(member, monthStartMs, monthEndMs).positions;
@@ -1238,7 +1304,7 @@ export default function ReportsScreen() {
 
       const selectedRate = applicableRates[0];
       const baseRate = Math.max(0, Number(selectedRate?.amount ?? defaultMonthlyFeeRate));
-      if (baseRate <= 0) return 0;
+      if (baseRate <= 0) return { due: 0, exempted: false };
 
       const applicableReliefs = monthlyFeeReliefRules
         .filter((rule) => rule.active !== false)
@@ -1258,15 +1324,47 @@ export default function ReportsScreen() {
         });
 
       const selectedRelief = applicableReliefs[0];
-      if (!selectedRelief) return Math.round(baseRate);
+      if (!selectedRelief) return { due: Math.round(baseRate), exempted: false };
 
-      if (selectedRelief.mode === "full") return 0;
+      if (selectedRelief.mode === "full") return { due: 0, exempted: true };
       if (selectedRelief.mode === "percent") {
         const percent = Math.min(100, Math.max(0, Number(selectedRelief.value || 0)));
-        return Math.max(0, Math.round(baseRate * (1 - percent / 100)));
+        const due = Math.max(0, Math.round(baseRate * (1 - percent / 100)));
+        return { due, exempted: due <= 0 && percent >= 100 };
       }
       const fixed = Math.max(0, Number(selectedRelief.value || 0));
-      return Math.max(0, Math.round(baseRate - fixed));
+      const due = Math.max(0, Math.round(baseRate - fixed));
+      return { due, exempted: due <= 0 && fixed >= baseRate };
+    };
+
+    const resolveMemberMonthEligibility = (member: any, year: number, monthIdx: number): boolean => {
+      const monthStartMs = new Date(year, monthIdx, 1).getTime();
+
+      const joinDateMs = parseDateMs(
+        String(
+          member?.joinDate ||
+            member?.createdAt ||
+            member?.orgPositionHistory?.[0]?.effectiveDate ||
+            member?.statusDate ||
+            ""
+        )
+      );
+      const joinMonth = joinDateMs > 0 ? new Date(joinDateMs) : new Date(2018, 0, 1);
+      const joinMonthStartMs = new Date(joinMonth.getFullYear(), joinMonth.getMonth(), 1).getTime();
+      if (monthStartMs < joinMonthStartMs) return false;
+
+      const status = normalizeMemberStatus(member?.status);
+      const isExitStatus = ["resigned", "deceased", "expelled", "suspended"].includes(status);
+      if (isExitStatus) {
+        const exitDateMs = parseDateMs(String(member?.statusDate || member?.resignDate || ""));
+        if (exitDateMs > 0) {
+          const exitMonth = new Date(exitDateMs);
+          const exitMonthStartMs = new Date(exitMonth.getFullYear(), exitMonth.getMonth(), 1).getTime();
+          if (monthStartMs > exitMonthStartMs) return false;
+        }
+      }
+
+      return true;
     };
 
     return years.map((year) => {
@@ -1284,34 +1382,56 @@ export default function ReportsScreen() {
 
       const memberRows = (reportMembers || []).map((member: any) => {
         const paidMap: Record<string, boolean> = {};
+        const eligibleMap: Record<string, boolean> = {};
+        const exemptMap: Record<string, boolean> = {};
         const dueMap: Record<string, number> = {};
+        let paidTotal = 0;
         let dueTotal = 0;
         let unpaidTotal = 0;
 
         months.forEach((month) => {
           if (!month.inSelectedRange) {
             paidMap[month.key] = false;
+            eligibleMap[month.key] = false;
+            exemptMap[month.key] = false;
             dueMap[month.key] = 0;
             return;
           }
-          const paid = feePaidMonthSet.has(`${member.id}|${month.year}|${month.monthIdx}`);
-          const due = resolveMemberMonthDue(member, month.year, month.monthIdx);
-          paidMap[month.key] = paid;
-          dueMap[month.key] = due;
-          dueTotal += due;
-          if (!paid) unpaidTotal += due;
-        });
 
-        const paidTotal = memberFeePaidByYearMap.get(`${String(member?.id || "")}|${year}`) || 0;
+          const eligible = resolveMemberMonthEligibility(member, month.year, month.monthIdx);
+          eligibleMap[month.key] = eligible;
+          if (!eligible) {
+            paidMap[month.key] = false;
+            exemptMap[month.key] = false;
+            dueMap[month.key] = 0;
+            return;
+          }
+
+          const paidAmount = Number(memberFeePaidAmountByMonthMap.get(`${member.id}|${month.year}|${month.monthIdx}`) || 0);
+          const paid = paidAmount > 0;
+          const dueInfo = resolveMemberMonthDue(member, month.year, month.monthIdx);
+          const due = Number(dueInfo?.due || 0);
+          paidMap[month.key] = paid;
+          exemptMap[month.key] = Boolean(dueInfo?.exempted);
+          dueMap[month.key] = due;
+          paidTotal += paidAmount;
+          dueTotal += due;
+        });
+        unpaidTotal = Math.max(0, dueTotal - paidTotal);
+
         return {
           memberId: String(member?.id || ""),
           memberName: String(member?.name || "-"),
           paidMap,
+          eligibleMap,
+          exemptMap,
           dueMap,
           paidTotal,
           dueTotal,
           unpaidTotal,
         };
+      }).filter((row: any) => {
+        return months.some((month) => month.inSelectedRange && !!row.eligibleMap?.[month.key]);
       });
 
       return {
@@ -1329,11 +1449,10 @@ export default function ReportsScreen() {
     startDate,
     endDate,
     reportMembers,
-    feePaidMonthSet,
+    memberFeePaidAmountByMonthMap,
     monthlyFeeRateRules,
     monthlyFeeReliefRules,
     defaultMonthlyFeeRate,
-    memberFeePaidByYearMap,
   ]);
 
   const feeOutstandingRows = useMemo(() => {
@@ -1943,24 +2062,44 @@ export default function ReportsScreen() {
       Alert.alert("လိုအပ်ချက်", "စတင်သက်ရောက်မည့်နေ့ထည့်ပါ။");
       return;
     }
-    if (newRateScope === "member" && !String(newRateMemberId || "").trim()) {
+    const selectedMemberIds = Array.from(
+      new Set((newRateMemberIds || []).map((row) => String(row || "").trim()).filter(Boolean))
+    );
+    if (newRateScope === "member" && selectedMemberIds.length === 0) {
       Alert.alert("လိုအပ်ချက်", "အသင်းဝင်ကို ရွေးချယ်ပါ။");
       return;
     }
-    const nextRule: MonthlyFeeRateRule = {
-      id: `fee-rate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      scope: newRateScope,
+    const baseRule = {
       amount,
       effectiveFrom,
       effectiveTo: String(newRateEnd || "").trim() || undefined,
-      memberId: newRateScope === "member" ? String(newRateMemberId || "").trim() : undefined,
       position: newRateScope === "position" ? normalizeOrgPosition(newRatePosition) : undefined,
       reason: String(newRateReason || "").trim() || undefined,
       active: true,
       updatedAt: new Date().toISOString(),
       updatedByUserId: String(currentUser?.id || ""),
     };
-    await persistFeePolicies([...(monthlyFeeRateRules || []), nextRule], monthlyFeeReliefRules || []);
+    const nextRateRules = [...(monthlyFeeRateRules || [])];
+    if (newRateScope === "member") {
+      selectedMemberIds.forEach((memberId, index) => {
+        nextRateRules.push({
+          id: `fee-rate-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          scope: "member",
+          ...baseRule,
+          memberId,
+          position: undefined,
+        } as MonthlyFeeRateRule);
+      });
+    } else {
+      nextRateRules.push({
+        id: `fee-rate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        scope: newRateScope,
+        ...baseRule,
+      } as MonthlyFeeRateRule);
+    }
+    await persistFeePolicies(nextRateRules, monthlyFeeReliefRules || []);
+    setNewRateMemberIds([]);
+    setNewRateMemberSearch("");
     setNewRateAmount("");
     setNewRateReason("");
     setNewRateEnd("");
@@ -1969,7 +2108,7 @@ export default function ReportsScreen() {
     newRateAmount,
     newRateStart,
     newRateScope,
-    newRateMemberId,
+    newRateMemberIds,
     newRateEnd,
     newRatePosition,
     newRateReason,
@@ -1986,7 +2125,10 @@ export default function ReportsScreen() {
       Alert.alert("လိုအပ်ချက်", "ကင်းလွတ်/သက်သာ စတင်နေ့ ထည့်ပါ။");
       return;
     }
-    if (newReliefScope === "member" && !String(newReliefMemberId || "").trim()) {
+    const selectedMemberIds = Array.from(
+      new Set((newReliefMemberIds || []).map((row) => String(row || "").trim()).filter(Boolean))
+    );
+    if (newReliefScope === "member" && selectedMemberIds.length === 0) {
       Alert.alert("လိုအပ်ချက်", "အသင်းဝင်ကို ရွေးချယ်ပါ။");
       return;
     }
@@ -1994,21 +2136,38 @@ export default function ReportsScreen() {
       Alert.alert("လိုအပ်ချက်", "ကင်းလွတ်/သက်သာ တန်ဖိုး ထည့်ပါ။");
       return;
     }
-    const nextRule: MonthlyFeeReliefRule = {
-      id: `fee-relief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      scope: newReliefScope,
+    const baseRule = {
       mode: newReliefMode,
       value: newReliefMode === "full" ? undefined : Math.max(0, Number(newReliefValue || 0)),
       effectiveFrom,
       effectiveTo: String(newReliefEnd || "").trim() || undefined,
-      memberId: newReliefScope === "member" ? String(newReliefMemberId || "").trim() : undefined,
       position: newReliefScope === "position" ? normalizeOrgPosition(newReliefPosition) : undefined,
       reason: String(newReliefReason || "").trim() || undefined,
       active: true,
       updatedAt: new Date().toISOString(),
       updatedByUserId: String(currentUser?.id || ""),
     };
-    await persistFeePolicies(monthlyFeeRateRules || [], [...(monthlyFeeReliefRules || []), nextRule]);
+    const nextReliefRules = [...(monthlyFeeReliefRules || [])];
+    if (newReliefScope === "member") {
+      selectedMemberIds.forEach((memberId, index) => {
+        nextReliefRules.push({
+          id: `fee-relief-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          scope: "member",
+          ...baseRule,
+          memberId,
+          position: undefined,
+        } as MonthlyFeeReliefRule);
+      });
+    } else {
+      nextReliefRules.push({
+        id: `fee-relief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        scope: newReliefScope,
+        ...baseRule,
+      } as MonthlyFeeReliefRule);
+    }
+    await persistFeePolicies(monthlyFeeRateRules || [], nextReliefRules);
+    setNewReliefMemberIds([]);
+    setNewReliefMemberSearch("");
     setNewReliefValue("");
     setNewReliefReason("");
     setNewReliefEnd("");
@@ -2016,7 +2175,7 @@ export default function ReportsScreen() {
     canManageFeePolicies,
     newReliefStart,
     newReliefScope,
-    newReliefMemberId,
+    newReliefMemberIds,
     newReliefMode,
     newReliefValue,
     newReliefEnd,
@@ -2046,6 +2205,29 @@ export default function ReportsScreen() {
     [canManageFeePolicies, monthlyFeeRateRules, monthlyFeeReliefRules, persistFeePolicies]
   );
 
+  const getFeeRateLabelForRow = useCallback(
+    (
+      row: {
+        dueMap: Record<string, number>;
+      },
+      months: { key: string; inSelectedRange: boolean }[]
+    ) => {
+      const values = months
+        .filter((m) => m.inSelectedRange)
+        .map((m) => Number(row?.dueMap?.[m.key] || 0))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (values.length === 0) return "-";
+      const normalized = Array.from(
+        new Set(values.map((value) => Math.round(value * 100) / 100))
+      ).sort((a, b) => a - b);
+      if (normalized.length === 1) return `${normalized[0].toLocaleString()} KS`;
+      const min = normalized[0];
+      const max = normalized[normalized.length - 1];
+      return `${min.toLocaleString()} ~ ${max.toLocaleString()} KS`;
+    },
+    []
+  );
+
   const renderFeeYearTableHtml = useCallback((summary: FeeYearSummary) => {
     const headerMonths = summary.months.map((m) => `<th>${escapeHtml(m.label)}</th>`).join("");
     const rows = summary.memberRows
@@ -2053,13 +2235,17 @@ export default function ReportsScreen() {
         const monthCells = summary.months
           .map((m) => {
             const paid = !!row.paidMap[m.key];
+            const eligible = !!row.eligibleMap[m.key];
+            const exempt = !!row.exemptMap?.[m.key];
             if (!m.inSelectedRange) return `<td style="text-align:center;color:#94A3B8">-</td>`;
+            if (!eligible || exempt) return `<td style="text-align:center;color:#94A3B8;font-weight:700;">x</td>`;
             return `<td style="text-align:center;font-size:14px;">${paid ? "&#9745;" : "&#9744;"}</td>`;
           })
           .join("");
         return `
           <tr>
             <td>${escapeHtml(row.memberName)}</td>
+            <td>${escapeHtml(getFeeRateLabelForRow(row, summary.months))}</td>
             ${monthCells}
             <td style="text-align:right;">${Number(row.paidTotal || 0).toLocaleString()} KS</td>
           </tr>
@@ -2067,11 +2253,12 @@ export default function ReportsScreen() {
       })
       .join("");
     return `
-      <h2>အသင်းဝင်ကြေး ပေးဆောင်မှု (${summary.year})</h2>
+      <h2>လစဉ်ကြေး ပေးဆောင်မှု (${summary.year})</h2>
       <table>
         <thead>
           <tr>
             <th>အမည်</th>
+            <th>နှုန်းထား</th>
             ${headerMonths}
             <th>စုစုပေါင်း</th>
           </tr>
@@ -2080,13 +2267,14 @@ export default function ReportsScreen() {
           ${rows}
           <tr style="font-weight:700;background:#ECFDF5;">
             <td>စုစုပေါင်း</td>
+            <td></td>
             ${summary.months.map(() => "<td></td>").join("")}
             <td style="text-align:right;">${summary.totals.paid.toLocaleString()} KS</td>
           </tr>
         </tbody>
       </table>
     `;
-  }, []);
+  }, [getFeeRateLabelForRow]);
 
   const buildBaseHtml = useCallback(
     (title: string, subtitle: string, content: string, options?: PrintLayoutOptions) => `
@@ -3245,9 +3433,9 @@ export default function ReportsScreen() {
         <View style={styles.scrollContent}>
           <View style={{ paddingHorizontal: 20 }}>
             <View style={styles.scopeTopRow}>
-              <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု</Text>
+              <Text style={styles.sectionTitle}>လစဉ်ကြေး ပေးဆောင်မှု</Text>
               {canManageFeePolicies ? (
-                <Pressable style={styles.exportBtn} onPress={() => setShowFeePolicyModal(true)}>
+                <Pressable style={styles.exportBtn} onPress={() => router.push("/monthly-fees" as any)}>
                   <Ionicons name="construct-outline" size={15} color={Colors.light.tint} />
                   <Text style={styles.exportBtnText}>သတ်မှတ်ချက်</Text>
                 </Pressable>
@@ -3257,12 +3445,15 @@ export default function ReportsScreen() {
               const pagedRows = yearSummary.memberRows.slice(0, visibleMemberCount);
               return (
                 <View key={`fee-year-${yearSummary.year}`} style={{ marginBottom: 16 }}>
-                  <Text style={styles.sectionTitle}>အသင်းဝင်ကြေး ပေးဆောင်မှု ({yearSummary.year})</Text>
+                  <Text style={styles.sectionTitle}>လစဉ်ကြေး ပေးဆောင်မှု ({yearSummary.year})</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator>
                     <View style={{ paddingBottom: 10 }}>
                       <View style={styles.tableHeader}>
                         <View style={styles.tableNameCol}>
                           <Text style={styles.tableHeaderText}>အမည်</Text>
+                        </View>
+                        <View style={styles.tableRateCol}>
+                          <Text style={styles.tableHeaderText}>နှုန်းထား</Text>
                         </View>
                         {yearSummary.months.map((m) => (
                           <View key={`fee-h-${yearSummary.year}-${m.monthIdx}`} style={styles.tableMonthCol}>
@@ -3281,12 +3472,21 @@ export default function ReportsScreen() {
                               {row.memberName}
                             </Text>
                           </View>
+                          <View style={styles.tableRateCol}>
+                            <Text style={styles.tableName} numberOfLines={1}>
+                              {getFeeRateLabelForRow(row, yearSummary.months)}
+                            </Text>
+                          </View>
                           {yearSummary.months.map((m) => {
                             const isPaid = !!row.paidMap[m.key];
+                            const isEligible = !!row.eligibleMap[m.key];
+                            const isExempt = !!row.exemptMap?.[m.key];
                             return (
                               <View key={`fee-c-${row.memberId}-${m.key}`} style={styles.tableMonthCol}>
                                 {!m.inSelectedRange ? (
                                   <Text style={{ color: Colors.light.textSecondary, opacity: 0.4 }}>-</Text>
+                                ) : !isEligible || isExempt ? (
+                                  <Text style={styles.feeNotEligibleText}>x</Text>
                                 ) : isPaid ? (
                                   <View style={[styles.paidBadge, { backgroundColor: Colors.light.success }]}>
                                     <Ionicons name="checkmark" size={14} color="white" />
@@ -3310,6 +3510,9 @@ export default function ReportsScreen() {
                       <View style={[styles.tableRow, { backgroundColor: "#ECFDF5" }]}>
                         <View style={styles.tableNameCol}>
                           <Text style={[styles.tableName, { fontFamily: "Inter_700Bold" }]}>စုစုပေါင်း</Text>
+                        </View>
+                        <View style={styles.tableRateCol}>
+                          <Text style={{ color: "transparent" }}>-</Text>
                         </View>
                         {yearSummary.months.map((m) => (
                           <View key={`fee-total-${yearSummary.year}-${m.monthIdx}`} style={styles.tableMonthCol}>
@@ -3674,7 +3877,11 @@ export default function ReportsScreen() {
               {(monthlyFeeRateRules || []).map((rule) => (
                 <View key={`rate-rule-${rule.id}`} style={styles.registerCard}>
                   <Text style={styles.registerCardTitle}>
-                    {rule.scope === "global" ? "အားလုံး" : rule.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(rule.position || "member")]}` : `အသင်းဝင်: ${rule.memberId || "-"}`}
+                    {rule.scope === "global"
+                      ? "အားလုံး"
+                      : rule.scope === "position"
+                        ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(rule.position || "member")]}`
+                        : `အသင်းဝင်: ${memberNameById.get(String(rule.memberId || "")) || "-"} (${rule.memberId || "-"})`}
                   </Text>
                   <Text style={styles.registerCardMeta}>နှုန်းထား: {Number(rule.amount || 0).toLocaleString()} KS / လ</Text>
                   <Text style={styles.registerCardMeta}>ကာလ: {rule.effectiveFrom} ~ {rule.effectiveTo || "အကန့်အသတ်မရှိ"}</Text>
@@ -3719,12 +3926,50 @@ export default function ReportsScreen() {
                     </View>
                   ) : null}
                   {newRateScope === "member" ? (
-                    <TextInput
-                      style={styles.memberSearchInput}
-                      value={newRateMemberId}
-                      onChangeText={setNewRateMemberId}
-                      placeholder="အသင်းဝင် ID (ဥပမာ - ရဆသ-001)"
-                    />
+                    <View style={styles.memberMultiSelectWrap}>
+                      <TextInput
+                        style={styles.memberSearchInput}
+                        value={newRateMemberSearch}
+                        onChangeText={setNewRateMemberSearch}
+                        placeholder="အသင်းဝင် ရှာရန် (ID / အမည်)"
+                      />
+                      <View style={styles.memberBulkActionRow}>
+                        <Pressable style={styles.memberBulkActionBtn} onPress={handleSelectAllRateMembers}>
+                          <Text style={styles.memberBulkActionText}>Select All</Text>
+                        </Pressable>
+                        <Pressable style={styles.memberBulkActionBtn} onPress={handleDeselectAllRateMembers}>
+                          <Text style={styles.memberBulkActionText}>Deselect All</Text>
+                        </Pressable>
+                        <Text style={styles.memberBulkSelectedText}>ရွေးထားသည်: {newRateMemberIds.length}</Text>
+                      </View>
+                      <ScrollView style={styles.memberMultiSelectList} nestedScrollEnabled>
+                        {filteredRateMemberOptions.length === 0 ? (
+                          <Text style={styles.summaryOnlyNoteText}>ရွေးချယ်ရန် အသင်းဝင် မတွေ့ပါ</Text>
+                        ) : (
+                          filteredRateMemberOptions.map((member: FeePolicyMemberOption) => {
+                            const memberId = String(member.id || "");
+                            const selected = newRateMemberIds.includes(memberId);
+                            return (
+                              <Pressable
+                                key={`fee-rate-member-${memberId}`}
+                                style={[styles.memberOptionRow, styles.memberMultiSelectRow, selected && styles.memberMultiSelectRowActive]}
+                                onPress={() => toggleRateMemberSelection(memberId)}
+                              >
+                                <View style={styles.memberMultiSelectTextWrap}>
+                                  <Text style={styles.memberOptionName}>{member.name || "-"}</Text>
+                                  <Text style={styles.memberOptionId}>{memberId || "-"}</Text>
+                                </View>
+                                <Ionicons
+                                  name={selected ? "checkbox" : "square-outline"}
+                                  size={20}
+                                  color={selected ? Colors.light.tint : Colors.light.textSecondary}
+                                />
+                              </Pressable>
+                            );
+                          })
+                        )}
+                      </ScrollView>
+                    </View>
                   ) : null}
                   <TextInput
                     style={styles.memberSearchInput}
@@ -3762,7 +4007,11 @@ export default function ReportsScreen() {
               {(monthlyFeeReliefRules || []).map((rule) => (
                 <View key={`relief-rule-${rule.id}`} style={styles.registerCard}>
                   <Text style={styles.registerCardTitle}>
-                    {rule.scope === "global" ? "အားလုံး" : rule.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(rule.position || "member")]}` : `အသင်းဝင်: ${rule.memberId || "-"}`}
+                    {rule.scope === "global"
+                      ? "အားလုံး"
+                      : rule.scope === "position"
+                        ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(rule.position || "member")]}`
+                        : `အသင်းဝင်: ${memberNameById.get(String(rule.memberId || "")) || "-"} (${rule.memberId || "-"})`}
                   </Text>
                   <Text style={styles.registerCardMeta}>
                     အမျိုးအစား: {rule.mode === "full" ? "အပြည့်ကင်းလွတ်" : rule.mode === "percent" ? `${Number(rule.value || 0)}% သက်သာ` : `${Number(rule.value || 0).toLocaleString()} KS သက်သာ`}
@@ -3809,12 +4058,50 @@ export default function ReportsScreen() {
                     </View>
                   ) : null}
                   {newReliefScope === "member" ? (
-                    <TextInput
-                      style={styles.memberSearchInput}
-                      value={newReliefMemberId}
-                      onChangeText={setNewReliefMemberId}
-                      placeholder="အသင်းဝင် ID (ဥပမာ - ရဆသ-001)"
-                    />
+                    <View style={styles.memberMultiSelectWrap}>
+                      <TextInput
+                        style={styles.memberSearchInput}
+                        value={newReliefMemberSearch}
+                        onChangeText={setNewReliefMemberSearch}
+                        placeholder="အသင်းဝင် ရှာရန် (ID / အမည်)"
+                      />
+                      <View style={styles.memberBulkActionRow}>
+                        <Pressable style={styles.memberBulkActionBtn} onPress={handleSelectAllReliefMembers}>
+                          <Text style={styles.memberBulkActionText}>Select All</Text>
+                        </Pressable>
+                        <Pressable style={styles.memberBulkActionBtn} onPress={handleDeselectAllReliefMembers}>
+                          <Text style={styles.memberBulkActionText}>Deselect All</Text>
+                        </Pressable>
+                        <Text style={styles.memberBulkSelectedText}>ရွေးထားသည်: {newReliefMemberIds.length}</Text>
+                      </View>
+                      <ScrollView style={styles.memberMultiSelectList} nestedScrollEnabled>
+                        {filteredReliefMemberOptions.length === 0 ? (
+                          <Text style={styles.summaryOnlyNoteText}>ရွေးချယ်ရန် အသင်းဝင် မတွေ့ပါ</Text>
+                        ) : (
+                          filteredReliefMemberOptions.map((member: FeePolicyMemberOption) => {
+                            const memberId = String(member.id || "");
+                            const selected = newReliefMemberIds.includes(memberId);
+                            return (
+                              <Pressable
+                                key={`fee-relief-member-${memberId}`}
+                                style={[styles.memberOptionRow, styles.memberMultiSelectRow, selected && styles.memberMultiSelectRowActive]}
+                                onPress={() => toggleReliefMemberSelection(memberId)}
+                              >
+                                <View style={styles.memberMultiSelectTextWrap}>
+                                  <Text style={styles.memberOptionName}>{member.name || "-"}</Text>
+                                  <Text style={styles.memberOptionId}>{memberId || "-"}</Text>
+                                </View>
+                                <Ionicons
+                                  name={selected ? "checkbox" : "square-outline"}
+                                  size={20}
+                                  color={selected ? Colors.light.tint : Colors.light.textSecondary}
+                                />
+                              </Pressable>
+                            );
+                          })
+                        )}
+                      </ScrollView>
+                    </View>
                   ) : null}
                   <View style={styles.registerModeRow}>
                     {(["full", "percent", "fixed"] as MonthlyFeeReliefMode[]).map((mode) => (
@@ -4272,10 +4559,16 @@ const styles = StyleSheet.create({
   tableHeader: { flexDirection: "row", backgroundColor: Colors.light.tint, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 6, marginBottom: 4 },
   tableHeaderText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#fff", textAlign: "center" },
   tableNameCol: { width: 120, paddingHorizontal: 6, justifyContent: "center" },
+  tableRateCol: { width: 110, paddingHorizontal: 6, justifyContent: "center", alignItems: "center" },
   tableMonthCol: { width: 70, alignItems: "center", justifyContent: "center" },
   tableRow: { flexDirection: "row", backgroundColor: "#F8FAFC", borderRadius: 8, paddingVertical: 10, paddingHorizontal: 6, marginBottom: 4, borderWidth: 1, borderColor: "#E2E8F0" },
   tableName: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   paidBadge: { backgroundColor: Colors.light.success + "15", paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  feeNotEligibleText: {
+    color: "#94A3B8",
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+  },
   auditToolbar: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" },
   exportBtn: {
     flexDirection: "row",
@@ -4415,6 +4708,59 @@ const styles = StyleSheet.create({
   },
   memberOptionName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   memberOptionId: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  memberMultiSelectWrap: {
+    gap: 8,
+    marginBottom: 8,
+  },
+  memberBulkActionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  memberBulkActionBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  memberBulkActionText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+  },
+  memberBulkSelectedText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.textSecondary,
+  },
+  memberMultiSelectList: {
+    maxHeight: 220,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: "white",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  memberMultiSelectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    paddingVertical: 9,
+  },
+  memberMultiSelectRowActive: {
+    backgroundColor: Colors.light.tint + "10",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+  },
+  memberMultiSelectTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
   yearOptionRow: {
     paddingVertical: 10,
     borderBottomWidth: 1,
