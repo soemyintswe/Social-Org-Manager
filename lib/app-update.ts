@@ -143,36 +143,11 @@ function mapPayloadToInfo(payload: Partial<AppUpdateInfo>, currentVersion: strin
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = getCurrentAppVersion();
   const currentBuild = getCurrentBuildNumber();
-  
-  // 1. Try Local Server / LAN Sync URL first
-  try {
-    const settings = await getAccountSettings();
-    const baseUrl = normalizeUrl(settings.syncServerUrl || "");
-    const lanSyncEnabled = settings.syncEnabled !== false && !!baseUrl;
-    if (lanSyncEnabled) {
-      try {
-        const res = await fetchWithTimeout(
-          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}&build=${encodeURIComponent(currentBuild)}`,
-          3000 // Short timeout for LAN check
-        );
-        if (res.ok) {
-          const payload = (await res.json()) as Partial<AppUpdateInfo>;
-          return mapPayloadToInfo(payload, currentVersion, currentBuild);
-        }
-      } catch {
-        // LAN failed, fall through to Cloud / Remote Config
-      }
-    }
-  } catch {
-    // Ignore storage errors
-  }
-
-  // 2. Try Remote Config URL and GitHub fallbacks
-  const candidates = getRemoteUpdateJsonCandidates(getAppUpdateJsonUrl());
   let lastReason = "update_check_failed";
   let bestInfo: AppUpdateInfo | null = null;
 
   const pickBetter = (nextInfo: AppUpdateInfo) => {
+    if (!nextInfo.ok || !nextInfo.latestVersion) return;
     if (!bestInfo) {
       bestInfo = nextInfo;
       return;
@@ -198,6 +173,33 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     }
   };
 
+  // 1) LAN source
+  try {
+    const settings = await getAccountSettings();
+    const baseUrl = normalizeUrl(settings.syncServerUrl || "");
+    const lanSyncEnabled = settings.syncEnabled !== false && !!baseUrl;
+    if (lanSyncEnabled) {
+      try {
+        const res = await fetchWithTimeout(
+          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}&build=${encodeURIComponent(currentBuild)}`,
+          3000 // Short timeout for LAN check
+        );
+        if (res.ok) {
+          const payload = (await res.json()) as Partial<AppUpdateInfo>;
+          pickBetter(mapPayloadToInfo(payload, currentVersion, currentBuild));
+        } else {
+          lastReason = `lan_http_${res.status}`;
+        }
+      } catch (e: any) {
+        lastReason = String(e?.message || "lan_update_check_failed");
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+
+  // 2) Remote config JSON + GitHub fallbacks
+  const candidates = getRemoteUpdateJsonCandidates(getAppUpdateJsonUrl());
   for (const candidate of candidates) {
     try {
       const res = await fetchWithTimeout(withCacheBust(candidate), 10000);
@@ -207,9 +209,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
       }
       const payload = (await res.json()) as Partial<AppUpdateInfo>;
       const mapped = mapPayloadToInfo(payload, currentVersion, currentBuild);
-      if (mapped.ok && mapped.latestVersion) {
-        pickBetter(mapped);
-      }
+      pickBetter(mapped);
     } catch (e: any) {
       lastReason = String(e?.message || "update_check_failed");
     }
