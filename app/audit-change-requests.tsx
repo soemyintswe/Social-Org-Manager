@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import AccessDenied from "@/components/AccessDenied";
 import { useData } from "@/lib/DataContext";
@@ -54,6 +55,7 @@ function fmtDateTime(value: unknown): string {
 }
 
 export default function AuditChangeRequestsScreen() {
+  const { requestId } = useLocalSearchParams<{ requestId?: string }>();
   const insets = useSafeAreaInsets();
   const {
     auditChangeRequests,
@@ -122,6 +124,15 @@ export default function AuditChangeRequestsScreen() {
     const suspended = base.filter((item: any) => item.status === "suspended").length;
     return { total: base.length, pending, approved, rejected, cancelled, suspended };
   }, [allRequests, canView, currentUser?.id]);
+
+  React.useEffect(() => {
+    const targetId = String(requestId || "").trim();
+    if (!targetId) return;
+    const found = visibleRequests.find((item: any) => String(item?.id || "") === targetId);
+    if (!found) return;
+    setSelectedRequestId(targetId);
+    setShowDetailModal(true);
+  }, [requestId, visibleRequests]);
 
   const selectedRequest = useMemo(
     () => allRequests.find((item: any) => String(item.id || "") === String(selectedRequestId || "")) || null,

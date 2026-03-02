@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
+import { resolveNotificationRoute } from "@/lib/notification-routing";
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
@@ -38,6 +39,17 @@ export default function NotificationsScreen() {
     }
   };
 
+  const openNotification = async (item: any) => {
+    await markNotificationRead(String(item?.id || ""), me);
+    const target = resolveNotificationRoute(item);
+    if (target.pathname === "/notifications") return;
+    router.push(
+      target.params
+        ? ({ pathname: target.pathname, params: target.params } as any)
+        : (target.pathname as any)
+    );
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -67,11 +79,14 @@ export default function NotificationsScreen() {
               <Pressable
                 key={String(item?.id || "")}
                 style={[styles.card, unread && styles.cardUnread]}
-                onPress={() => void markNotificationRead(String(item?.id || ""), me)}
+                onPress={() => void openNotification(item)}
               >
                 <View style={styles.row}>
                   <Text style={styles.title}>{String(item?.title || "-")}</Text>
-                  {unread ? <View style={styles.dot} /> : null}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    {unread ? <View style={styles.dot} /> : null}
+                    <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+                  </View>
                 </View>
                 <Text style={styles.desc}>{String(item?.description || "-")}</Text>
                 <Text style={styles.meta}>{new Date(String(item?.createdAt || "")).toLocaleString()}</Text>
@@ -111,4 +126,3 @@ const styles = StyleSheet.create({
   meta: { marginTop: 6, fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#0EA5E9" },
 });
-

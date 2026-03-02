@@ -265,7 +265,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     openingBalanceBank: 0,
     asOfDate: new Date().toISOString(),
     syncServerUrl: DEFAULT_LAN_SYNC_URL,
-    syncEnabled: false,
+    syncEnabled: true,
     cloudSyncEnabled: true,
     cloudSyncProvider: "google_drive_apps_script",
     cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,

@@ -1,10 +1,12 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
+import { useRouter } from "expo-router";
 import AccessDenied from "@/components/AccessDenied";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { isCommitteePosition } from "@/lib/access-control";
 import {
   MonthlyFeePolicyRequest,
   MonthlyFeeRateRule,
@@ -17,7 +19,9 @@ import {
 } from "@/lib/types";
 
 type MemberOption = { id: string; name: string };
-type DateFieldKey = "rateStart" | "rateEnd" | "reliefStart" | "reliefEnd";
+type DateFieldKey = "detailStart" | "detailEnd" | "rateStart" | "rateEnd" | "reliefStart" | "reliefEnd";
+type MonthlyFeesTab = "details" | "policy";
+type ViewScope = "all" | "self" | "member";
 type GroupedRateRuleRow = {
   key: string;
   scope: MonthlyFeeRuleScope;
@@ -27,6 +31,13 @@ type GroupedRateRuleRow = {
   position?: OrgPosition;
   memberIds: string[];
   ruleIds: string[];
+};
+type FeeDetailSummaryRow = {
+  memberId: string;
+  memberName: string;
+  dueTotal: number;
+  paidTotal: number;
+  unpaidTotal: number;
 };
 type GroupedReliefRuleRow = {
   key: string;
@@ -54,6 +65,34 @@ function ymdToDate(value: string | undefined): Date {
   const day = Number(matched[3]);
   const parsed = new Date(year, month - 1, day);
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function parseDateMs(dateValue: unknown): number {
+  const text = String(dateValue || "").trim();
+  if (!text) return 0;
+  const direct = new Date(text).getTime();
+  if (Number.isFinite(direct)) return direct;
+  const dmy = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const yy = Number(dmy[3]);
+    const year = yy < 100 ? 2000 + yy : yy;
+    return new Date(year, month - 1, day).getTime();
+  }
+  return 0;
+}
+
+function monthStart(year: number, monthIdx: number): Date {
+  return new Date(year, monthIdx, 1, 0, 0, 0, 0);
+}
+
+function monthEnd(year: number, monthIdx: number): Date {
+  return new Date(year, monthIdx + 1, 0, 23, 59, 59, 999);
+}
+
+function monthKey(year: number, monthIdx: number): string {
+  return `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
 }
 
 function requestId(prefix: string) {
@@ -99,15 +138,19 @@ function MemberNamesReadMore({
 }
 
 export default function MonthlyFeesScreen() {
-  const { accountSettings, updateAccountSettings, members = [] } = useData() as any;
-  const { can, currentUser, currentMember } = useAuth();
+  const router = useRouter();
+  const { accountSettings, updateAccountSettings, members = [], transactions = [] } = useData() as any;
+  const { currentUser, currentMember } = useAuth();
 
-  const canView = can("reports.view_summary") || can("reports.view_all");
+  const canView =
+    currentUser?.systemRole === "admin" ||
+    isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
   const isAdmin = currentUser?.systemRole === "admin";
   const isTreasurer = isAdmin || role === "treasurer";
   const isChair = isAdmin || role === "chairperson";
   const canEdit = isTreasurer || isChair;
+  const canViewAllDetails = isAdmin || isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
 
   const rateRules = useMemo<MonthlyFeeRateRule[]>(
     () => (Array.isArray(accountSettings?.monthlyFeeRateRules) ? accountSettings.monthlyFeeRateRules : []),
@@ -258,6 +301,13 @@ export default function MonthlyFeesScreen() {
   const [editingReliefRuleIds, setEditingReliefRuleIds] = useState<string[]>([]);
   const [rateDetailRow, setRateDetailRow] = useState<GroupedRateRuleRow | null>(null);
   const [reliefDetailRow, setReliefDetailRow] = useState<GroupedReliefRuleRow | null>(null);
+  const [activeTab, setActiveTab] = useState<MonthlyFeesTab>("details");
+  const [viewScope, setViewScope] = useState<ViewScope>("all");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [detailStart, setDetailStart] = useState("2018-01-01");
+  const [detailEnd, setDetailEnd] = useState(todayYmd());
 
   const filteredRateMembers = useMemo(() => {
     const needle = rateSearch.trim().toLowerCase();
@@ -277,6 +327,202 @@ export default function MonthlyFeesScreen() {
     () => (reliefDetailRow ? reliefRules.filter((row) => reliefDetailRow.ruleIds.includes(String(row.id || ""))) : []),
     [reliefDetailRow, reliefRules]
   );
+  const filteredScopeMembers = useMemo(() => {
+    const needle = memberSearch.trim().toLowerCase();
+    if (!needle) return memberOptions;
+    return memberOptions.filter((m) => m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle));
+  }, [memberOptions, memberSearch]);
+  const scopedMemberId = useMemo(() => {
+    if (viewScope === "all") return null;
+    if (viewScope === "self") return String(currentUser?.memberId || "").trim() || "__none__";
+    return String(selectedMemberId || "").trim() || "__none__";
+  }, [viewScope, currentUser?.memberId, selectedMemberId]);
+  const scopedMembers = useMemo(() => {
+    if (scopedMemberId === null) return members;
+    if (scopedMemberId === "__none__") return [];
+    return (members || []).filter((m: any) => String(m?.id || "") === scopedMemberId);
+  }, [members, scopedMemberId]);
+  const detailTransactions = useMemo(() => {
+    const startMs = parseDateMs(detailStart) || parseDateMs("2018-01-01");
+    const endMs = parseDateMs(detailEnd) || Date.now();
+    const endBoundary = new Date(endMs);
+    endBoundary.setHours(23, 59, 59, 999);
+    return (transactions || [])
+      .filter((t: any) => String(t?.category || "") === "member_fees")
+      .filter((t: any) => {
+        const tDateMs = parseDateMs(String(t?.date || ""));
+        if (!Number.isFinite(tDateMs) || tDateMs <= 0) return false;
+        if (tDateMs < startMs || tDateMs > endBoundary.getTime()) return false;
+        if (scopedMemberId === null) return true;
+        if (scopedMemberId === "__none__") return false;
+        return String(t?.memberId || "").trim() === scopedMemberId;
+      })
+      .sort((a: any, b: any) => parseDateMs(String(b?.date || "")) - parseDateMs(String(a?.date || "")));
+  }, [transactions, detailStart, detailEnd, scopedMemberId]);
+  const memberFeePaidAmountByMonthMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const addAmount = (memberId: string, year: number, monthIdx: number, amount: number) => {
+      if (!memberId || !Number.isFinite(amount) || amount <= 0) return;
+      const key = `${memberId}|${year}|${monthIdx}`;
+      map.set(key, (map.get(key) || 0) + amount);
+    };
+    detailTransactions.forEach((t: any) => {
+      const memberId = String(t?.memberId || "").trim();
+      const amount = Math.max(0, Math.round(Number(t?.amount || 0)));
+      if (!memberId || amount <= 0) return;
+
+      if (t?.feePeriodStart && t?.feePeriodEnd) {
+        const start = ymdToDate(String(t.feePeriodStart));
+        const end = ymdToDate(String(t.feePeriodEnd));
+        const s = start.getTime() <= end.getTime() ? start : end;
+        const e = start.getTime() <= end.getTime() ? end : start;
+        const months: { year: number; monthIdx: number }[] = [];
+        let cursor = monthStart(s.getFullYear(), s.getMonth());
+        const boundary = monthStart(e.getFullYear(), e.getMonth());
+        while (cursor <= boundary) {
+          months.push({ year: cursor.getFullYear(), monthIdx: cursor.getMonth() });
+          cursor = monthStart(cursor.getFullYear(), cursor.getMonth() + 1);
+        }
+        if (months.length > 0) {
+          const perMonth = Math.floor(amount / months.length);
+          let remainder = amount - perMonth * months.length;
+          months.forEach((m) => {
+            const add = perMonth + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) remainder -= 1;
+            addAmount(memberId, m.year, m.monthIdx, add);
+          });
+          return;
+        }
+      }
+
+      const txDate = ymdToDate(String(t?.date || ""));
+      addAmount(memberId, txDate.getFullYear(), txDate.getMonth(), amount);
+    });
+    return map;
+  }, [detailTransactions]);
+  const monthlyFeeSummaryRows = useMemo<FeeDetailSummaryRow[]>(() => {
+    const startMs = parseDateMs(detailStart) || parseDateMs("2018-01-01");
+    const endMs = parseDateMs(detailEnd) || Date.now();
+    const rangeStart = monthStart(new Date(startMs).getFullYear(), new Date(startMs).getMonth());
+    const rangeEnd = monthStart(new Date(endMs).getFullYear(), new Date(endMs).getMonth());
+    const months: { year: number; monthIdx: number; key: string }[] = [];
+    let cursor = new Date(rangeStart);
+    while (cursor <= rangeEnd) {
+      months.push({ year: cursor.getFullYear(), monthIdx: cursor.getMonth(), key: monthKey(cursor.getFullYear(), cursor.getMonth()) });
+      cursor = monthStart(cursor.getFullYear(), cursor.getMonth() + 1);
+    }
+
+    const scopeWeight = (scope: MonthlyFeeRuleScope) => (scope === "member" ? 3 : scope === "position" ? 2 : 1);
+    const defaultRate = 2500;
+
+    const resolvePositionInMonth = (member: any, year: number, monthIdx: number): OrgPosition => {
+      const fallback = normalizeOrgPosition(member?.orgPosition || "member");
+      const monthEndMs = monthEnd(year, monthIdx).getTime();
+      const history = Array.isArray(member?.orgPositionHistory) ? member.orgPositionHistory : [];
+      const candidates = history
+        .map((row: any) => ({
+          position: normalizeOrgPosition(row?.position || fallback),
+          dateMs: parseDateMs(row?.effectiveDate || row?.assignedAt || row?.date || ""),
+        }))
+        .filter((row: any) => Number.isFinite(row.dateMs) && row.dateMs > 0 && row.dateMs <= monthEndMs)
+        .sort((a: any, b: any) => b.dateMs - a.dateMs);
+      return candidates[0]?.position || fallback;
+    };
+
+    const resolveDue = (member: any, year: number, monthIdx: number): number => {
+      const monthStartMs = monthStart(year, monthIdx).getTime();
+      const monthEndMs = monthEnd(year, monthIdx).getTime();
+      const joinMs = parseDateMs(member?.joinDate || member?.createdAt || "2018-01-01") || parseDateMs("2018-01-01");
+      const joinMonthStartMs = monthStart(new Date(joinMs).getFullYear(), new Date(joinMs).getMonth()).getTime();
+      if (monthStartMs < joinMonthStartMs) return 0;
+
+      const status = String(member?.status || "active").toLowerCase();
+      if (["resigned", "deceased", "expelled", "suspended"].includes(status)) {
+        const exitMs = parseDateMs(member?.statusDate || member?.resignDate || "");
+        if (exitMs > 0) {
+          const exitMonthStartMs = monthStart(new Date(exitMs).getFullYear(), new Date(exitMs).getMonth()).getTime();
+          if (monthStartMs > exitMonthStartMs) return 0;
+        }
+      }
+
+      const memberPosition = resolvePositionInMonth(member, year, monthIdx);
+      const applicableRates = (rateRules || [])
+        .filter((rule) => rule.active !== false)
+        .filter((rule) => {
+          const fromMs = parseDateMs(rule.effectiveFrom);
+          const toMs = rule.effectiveTo ? parseDateMs(rule.effectiveTo) : Number.POSITIVE_INFINITY;
+          if (fromMs > monthEndMs) return false;
+          if (Number.isFinite(toMs) && toMs < monthStartMs) return false;
+          if (rule.scope === "member") return String(rule.memberId || "") === String(member?.id || "");
+          if (rule.scope === "position") return !!rule.position && normalizeOrgPosition(rule.position) === memberPosition;
+          return true;
+        })
+        .sort((a, b) => {
+          const scopeDiff = scopeWeight(b.scope) - scopeWeight(a.scope);
+          if (scopeDiff !== 0) return scopeDiff;
+          return parseDateMs(b.effectiveFrom) - parseDateMs(a.effectiveFrom);
+        });
+      const baseRate = Math.max(0, Number(applicableRates[0]?.amount ?? defaultRate));
+      if (baseRate <= 0) return 0;
+
+      const applicableReliefs = (reliefRules || [])
+        .filter((rule) => rule.active !== false)
+        .filter((rule) => {
+          const fromMs = parseDateMs(rule.effectiveFrom);
+          const toMs = rule.effectiveTo ? parseDateMs(rule.effectiveTo) : Number.POSITIVE_INFINITY;
+          if (fromMs > monthEndMs) return false;
+          if (Number.isFinite(toMs) && toMs < monthStartMs) return false;
+          if (rule.scope === "member") return String(rule.memberId || "") === String(member?.id || "");
+          if (rule.scope === "position") return !!rule.position && normalizeOrgPosition(rule.position) === memberPosition;
+          return true;
+        })
+        .sort((a, b) => {
+          const scopeDiff = scopeWeight(b.scope) - scopeWeight(a.scope);
+          if (scopeDiff !== 0) return scopeDiff;
+          return parseDateMs(b.effectiveFrom) - parseDateMs(a.effectiveFrom);
+        });
+
+      const relief = applicableReliefs[0];
+      if (!relief) return Math.round(baseRate);
+      if (relief.mode === "full") return 0;
+      if (relief.mode === "percent") {
+        const percent = Math.min(100, Math.max(0, Number(relief.value || 0)));
+        return Math.max(0, Math.round(baseRate * (1 - percent / 100)));
+      }
+      const fixed = Math.max(0, Number(relief.value || 0));
+      return Math.max(0, Math.round(baseRate - fixed));
+    };
+
+    const rows: FeeDetailSummaryRow[] = (scopedMembers || []).map((member: any) => {
+      let dueTotal = 0;
+      let paidTotal = 0;
+      months.forEach((m) => {
+        const due = resolveDue(member, m.year, m.monthIdx);
+        dueTotal += due;
+        paidTotal += Number(memberFeePaidAmountByMonthMap.get(`${member.id}|${m.year}|${m.monthIdx}`) || 0);
+      });
+      return {
+        memberId: String(member?.id || ""),
+        memberName: String(member?.name || "-"),
+        dueTotal,
+        paidTotal,
+        unpaidTotal: Math.max(0, dueTotal - paidTotal),
+      };
+    });
+
+    return rows
+      .filter((row: FeeDetailSummaryRow) => row.dueTotal > 0 || row.paidTotal > 0)
+      .sort((a: FeeDetailSummaryRow, b: FeeDetailSummaryRow) => Number(b.unpaidTotal || 0) - Number(a.unpaidTotal || 0));
+  }, [detailStart, detailEnd, scopedMembers, memberFeePaidAmountByMonthMap, rateRules, reliefRules]);
+  const totalOutstanding = useMemo(
+    () => monthlyFeeSummaryRows.reduce((sum, row) => sum + Number(row.unpaidTotal || 0), 0),
+    [monthlyFeeSummaryRows]
+  );
+  const outstandingRows = useMemo(
+    () => monthlyFeeSummaryRows.filter((row) => row.unpaidTotal > 0).slice(0, 40),
+    [monthlyFeeSummaryRows]
+  );
+  const displayTransactions = useMemo(() => detailTransactions.slice(0, 120), [detailTransactions]);
 
   const resetRateEditor = useCallback(() => {
     setEditingRateRuleIds([]);
@@ -345,6 +591,8 @@ export default function MonthlyFeesScreen() {
 
   const applyDateToField = useCallback((key: DateFieldKey, date: Date) => {
     const ymd = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    if (key === "detailStart") setDetailStart(ymd);
+    if (key === "detailEnd") setDetailEnd(ymd);
     if (key === "rateStart") setRateStart(ymd);
     if (key === "rateEnd") setRateEnd(ymd);
     if (key === "reliefStart") setReliefStart(ymd);
@@ -578,9 +826,168 @@ export default function MonthlyFeesScreen() {
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>လစဉ်ကြေး</Text>
-        <Text style={styles.sub}>ပြင်ဆင်ခွင့်: ဘဏ္ဍာရေးမှူး + ဥက္ကဌ | ဘဏ္ဍာရေးမှူးပြင်ဆင်မှုများသည် ဥက္ကဌအတည်ပြုမှ အသက်ဝင်မည်။</Text>
+        <Text style={styles.sub}>ကြည့်ရှုခွင့်: ကော်မတီဝင်များ | ပြင်ဆင်ခွင့်: ဘဏ္ဍာရေးမှူး + ဥက္ကဌ | ဘဏ္ဍာရေးမှူးပြင်ဆင်မှုများသည် ဥက္ကဌအတည်ပြုမှ အသက်ဝင်မည်။</Text>
 
-        {pendingRequests.length > 0 && isChair ? (
+        <View style={styles.inlineBtns}>
+          <Pressable style={[styles.chipBtn, activeTab === "details" && styles.chipBtnActive]} onPress={() => setActiveTab("details")}>
+            <Text style={[styles.chipBtnText, activeTab === "details" && styles.chipBtnTextActive]}>လစဉ်ကြေး အသေးစိတ်</Text>
+          </Pressable>
+          <Pressable style={[styles.chipBtn, activeTab === "policy" && styles.chipBtnActive]} onPress={() => setActiveTab("policy")}>
+            <Text style={[styles.chipBtnText, activeTab === "policy" && styles.chipBtnTextActive]}>သတ်မှတ်ချက် စည်းမျဉ်း</Text>
+          </Pressable>
+        </View>
+
+        {activeTab === "details" ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>လစဉ်ကြေး ပေးဆောင်မှု အသေးစိတ်</Text>
+            <View style={styles.inlineBtns}>
+              <Pressable style={[styles.chipBtn, viewScope === "all" && styles.chipBtnActive]} onPress={() => setViewScope("all")}>
+                <Text style={[styles.chipBtnText, viewScope === "all" && styles.chipBtnTextActive]}>အားလုံး</Text>
+              </Pressable>
+              <Pressable style={[styles.chipBtn, viewScope === "self" && styles.chipBtnActive]} onPress={() => setViewScope("self")}>
+                <Text style={[styles.chipBtnText, viewScope === "self" && styles.chipBtnTextActive]}>ကိုယ်တိုင်</Text>
+              </Pressable>
+              <Pressable style={[styles.chipBtn, viewScope === "member" && styles.chipBtnActive]} onPress={() => setViewScope("member")}>
+                <Text style={[styles.chipBtnText, viewScope === "member" && styles.chipBtnTextActive]}>အခြားသူ</Text>
+              </Pressable>
+            </View>
+            {viewScope === "member" ? (
+              <View style={styles.selectorWrap}>
+                <TextInput
+                  style={styles.input}
+                  value={memberSearch}
+                  onChangeText={setMemberSearch}
+                  placeholder="Member ID / Full Name ရိုက်ရှာပါ"
+                />
+                <View style={styles.inlineBtns}>
+                  {filteredScopeMembers.slice(0, 8).map((m) => (
+                    <Pressable
+                      key={`scoped-${m.id}`}
+                      style={[styles.chipBtn, selectedMemberId === m.id && styles.chipBtnActive]}
+                      onPress={() => {
+                        setSelectedMemberId(m.id);
+                        setShowMemberPicker(false);
+                      }}
+                    >
+                      <Text style={[styles.chipBtnText, selectedMemberId === m.id && styles.chipBtnTextActive]}>{m.name} ({m.id})</Text>
+                    </Pressable>
+                  ))}
+                  <Pressable style={styles.chipBtn} onPress={() => setShowMemberPicker(true)}>
+                    <Text style={styles.chipBtnText}>Dropdown မှ Member ရွေးမည်</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+            <View style={styles.dateRow}>
+              <Pressable style={styles.dateBtn} onPress={() => openDatePicker("detailStart", detailStart)}>
+                <Text style={styles.dateBtnLabel}>စတင်နေ့</Text>
+                <Text style={styles.dateBtnValue}>{detailStart || "-"}</Text>
+              </Pressable>
+              <Pressable style={styles.dateBtn} onPress={() => openDatePicker("detailEnd", detailEnd || todayYmd())}>
+                <Text style={styles.dateBtnLabel}>ပြီးဆုံးနေ့</Text>
+                <Text style={styles.dateBtnValue}>{detailEnd || "-"}</Text>
+              </Pressable>
+            </View>
+            <View style={styles.summaryMiniRow}>
+              <View style={styles.summaryMiniBox}>
+                <Text style={styles.summaryMiniLabel}>လစဉ်ကြေးရငွေ</Text>
+                <Text style={[styles.summaryMiniValue, { color: "#10B981" }]}>
+                  {detailTransactions.reduce((sum: number, t: any) => sum + Number(t?.amount || 0), 0).toLocaleString()} KS
+                </Text>
+              </View>
+              <View style={styles.summaryMiniBox}>
+                <Text style={styles.summaryMiniLabel}>ပေးရန်ကျန်</Text>
+                <Text style={[styles.summaryMiniValue, { color: "#EF4444" }]}>{totalOutstanding.toLocaleString()} KS</Text>
+              </View>
+            </View>
+
+            <Text style={styles.cardTitle}>လစဉ်ကြေး ကြွေးကျန် စာရင်း</Text>
+            {outstandingRows.length === 0 ? (
+              <Text style={styles.meta}>ရွေးချယ်ထားသောကာလအတွက် ကြွေးကျန်မရှိပါ။</Text>
+            ) : (
+              <View style={styles.tableWrap}>
+                <ScrollView horizontal showsHorizontalScrollIndicator>
+                  <View style={styles.tableContainer}>
+                    <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                      <Text style={[styles.tableHeaderText, { width: 52 }]}>စဉ်</Text>
+                      <Text style={[styles.tableHeaderText, { width: 200 }]}>အသင်းဝင်</Text>
+                      <Text style={[styles.tableHeaderText, { width: 120 }]}>အသင်းဝင် ID</Text>
+                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ကျသင့်ငွေ</Text>
+                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ပေးပြီးငွေ</Text>
+                      <Text style={[styles.tableHeaderText, { width: 140 }]}>ပေးရန်ကျန်</Text>
+                    </View>
+                    {outstandingRows.map((row, idx) => (
+                      <View key={`out-${row.memberId}-${idx}`} style={[styles.tableRow, idx % 2 === 1 && styles.tableAltRow]}>
+                        <Text style={[styles.tableCellText, { width: 52 }]}>{idx + 1}</Text>
+                        <Text style={[styles.tableCellText, { width: 200 }]} numberOfLines={1}>{row.memberName}</Text>
+                        <Text style={[styles.tableCellText, { width: 120 }]}>{row.memberId}</Text>
+                        <Text style={[styles.tableCellText, styles.tableAmountText, { width: 130 }]}>{row.dueTotal.toLocaleString()} KS</Text>
+                        <Text style={[styles.tableCellText, styles.tableAmountText, { width: 130, color: "#059669" }]}>{row.paidTotal.toLocaleString()} KS</Text>
+                        <Text style={[styles.tableCellText, styles.tableAmountText, { width: 140, color: "#DC2626" }]}>{row.unpaidTotal.toLocaleString()} KS</Text>
+                      </View>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+            )}
+
+            <Text style={styles.cardTitle}>လစဉ်ကြေး ပေးသွင်းမှတ်တမ်း</Text>
+            {displayTransactions.length === 0 ? (
+              <Text style={styles.meta}>ရွေးချယ်ထားသော filter အတွက် လစဉ်ကြေး မှတ်တမ်းမရှိပါ။</Text>
+            ) : (
+              <View style={styles.tableWrap}>
+                <ScrollView horizontal showsHorizontalScrollIndicator>
+                  <View style={styles.tableContainer}>
+                    <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                      <Text style={[styles.tableHeaderText, { width: 52 }]}>စဉ်</Text>
+                      <Text style={[styles.tableHeaderText, { width: 120 }]}>ရက်စွဲ</Text>
+                      <Text style={[styles.tableHeaderText, { width: 200 }]}>အသင်းဝင်</Text>
+                      <Text style={[styles.tableHeaderText, { width: 120 }]}>အသင်းဝင် ID</Text>
+                      <Text style={[styles.tableHeaderText, { width: 220 }]}>လစဉ်ကြေးကာလ</Text>
+                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ပြေစာ</Text>
+                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ပမာဏ</Text>
+                    </View>
+                    {displayTransactions.map((t: any, idx: number) => {
+                      const rowUi = (
+                        <View style={[styles.tableRow, idx % 2 === 1 && styles.tableAltRow]}>
+                          <Text style={[styles.tableCellText, { width: 52 }]}>{idx + 1}</Text>
+                          <Text style={[styles.tableCellText, { width: 120 }]}>{String(t?.date || "-")}</Text>
+                          <Text style={[styles.tableCellText, { width: 200 }]} numberOfLines={1}>
+                            {memberNameById.get(String(t?.memberId || "")) || t?.payerPayee || "-"}
+                          </Text>
+                          <Text style={[styles.tableCellText, { width: 120 }]}>{String(t?.memberId || "-")}</Text>
+                          <Text style={[styles.tableCellText, { width: 220 }]} numberOfLines={1}>
+                            {String(t?.feePeriodStart || "-")} ~ {String(t?.feePeriodEnd || "-")}
+                          </Text>
+                          <Text style={[styles.tableCellText, { width: 130 }]}>{String(t?.receiptNumber || "-")}</Text>
+                          <Text style={[styles.tableCellText, styles.tableAmountText, { width: 130, color: "#0F766E" }]}>
+                            {Number(t?.amount || 0).toLocaleString()} KS
+                          </Text>
+                        </View>
+                      );
+                      if (!isTreasurer || !canViewAllDetails) {
+                        return <View key={`fee-txn-${t.id || idx}`}>{rowUi}</View>;
+                      }
+                      return (
+                        <Pressable
+                          key={`fee-txn-${t.id || idx}`}
+                          onPress={() => {
+                            router.push("/finance" as any);
+                          }}
+                        >
+                          {rowUi}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+                {isTreasurer && canViewAllDetails ? <Text style={styles.meta}>ဇယားအတန်းကိုနှိပ်ပါက Finance Page ဖွင့်ပါမည်။</Text> : null}
+              </View>
+            )}
+          </View>
+        ) : null}
+
+        {activeTab === "policy" && pendingRequests.length > 0 && isChair ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>ဥက္ကဌ အတည်ပြုရန်</Text>
             {pendingRequests.map((req) => (
@@ -595,6 +1002,7 @@ export default function MonthlyFeesScreen() {
           </View>
         ) : null}
 
+        {activeTab === "policy" ? (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>နှုန်းထား စည်းမျဉ်းများ ({rateRules.length})</Text>
           {groupedRateRules.map((r) => (
@@ -611,8 +1019,9 @@ export default function MonthlyFeesScreen() {
             </Pressable>
           ))}
         </View>
+        ) : null}
 
-        {canEdit ? (
+        {activeTab === "policy" && canEdit ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{editingRateRuleIds.length > 0 ? "နှုန်းထား ပြင်ဆင်ရန်" : "နှုန်းထားအသစ် ထည့်ရန်"}</Text>
             {editingRateRuleIds.length > 0 ? <Text style={styles.meta}>Edit Mode ({editingRateRuleIds.length}) - ပြင်ပြီး Update နှိပ်ပါ။</Text> : null}
@@ -686,6 +1095,7 @@ export default function MonthlyFeesScreen() {
           </View>
         ) : null}
 
+        {activeTab === "policy" ? (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>ကင်းလွတ်/သက်သာ စည်းမျဉ်းများ ({reliefRules.length})</Text>
           {groupedReliefRules.map((r) => (
@@ -702,8 +1112,9 @@ export default function MonthlyFeesScreen() {
             </Pressable>
           ))}
         </View>
+        ) : null}
 
-        {canEdit ? (
+        {activeTab === "policy" && canEdit ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{editingReliefRuleIds.length > 0 ? "ကင်းလွတ်/သက်သာ ပြင်ဆင်ရန်" : "ကင်းလွတ်/သက်သာ အသစ်ထည့်ရန်"}</Text>
             {editingReliefRuleIds.length > 0 ? <Text style={styles.meta}>Edit Mode ({editingReliefRuleIds.length}) - ပြင်ပြီး Update နှိပ်ပါ။</Text> : null}
@@ -791,6 +1202,36 @@ export default function MonthlyFeesScreen() {
         ) : null}
 
       </ScrollView>
+
+      <Modal visible={showMemberPicker} transparent animationType="fade" onRequestClose={() => setShowMemberPicker(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>အသင်းဝင်ရွေးချယ်ရန်</Text>
+            <TextInput style={styles.input} value={memberSearch} onChangeText={setMemberSearch} placeholder="ရှာရန် (ID / အမည်)" />
+            <View style={styles.inlineBtns}>
+              <Pressable style={styles.chipBtn} onPress={() => setSelectedMemberId("")}><Text style={styles.chipBtnText}>ရွေးချယ်မှုဖျက်မည်</Text></Pressable>
+              <Pressable style={styles.chipBtn} onPress={() => setShowMemberPicker(false)}><Text style={styles.chipBtnText}>ပိတ်မည်</Text></Pressable>
+            </View>
+            <ScrollView style={styles.memberListScroll}>
+              {filteredScopeMembers.map((m) => {
+                const selected = selectedMemberId === m.id;
+                return (
+                  <Pressable
+                    key={`scope-m-${m.id}`}
+                    style={styles.memberRow}
+                    onPress={() => {
+                      setSelectedMemberId(m.id);
+                      setShowMemberPicker(false);
+                    }}
+                  >
+                    <Text style={styles.meta}>{selected ? "☑" : "☐"} {m.name} ({m.id})</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={rateShowList} transparent animationType="fade" onRequestClose={() => setRateShowList(false)}>
         <View style={styles.modalOverlay}>
@@ -972,6 +1413,53 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 17, fontWeight: "800", color: Colors.light.text },
   meta: { color: Colors.light.textSecondary, fontSize: 12, fontWeight: "600" },
   row: { borderWidth: 1, borderColor: "#FDE68A", backgroundColor: "#FFFBEB", borderRadius: 10, padding: 8, gap: 6 },
+  summaryMiniRow: { flexDirection: "row", gap: 8 },
+  summaryMiniBox: { flex: 1, borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10, backgroundColor: "#F8FAFC" },
+  summaryMiniLabel: { fontSize: 12, fontWeight: "700", color: Colors.light.textSecondary },
+  summaryMiniValue: { marginTop: 4, fontSize: 16, fontWeight: "800" },
+  tableWrap: {
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#FFFFFF",
+  },
+  tableContainer: {
+    minWidth: 760,
+  },
+  tableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F7",
+    minHeight: 40,
+  },
+  tableHeaderRow: {
+    backgroundColor: "#0F766E",
+    borderBottomColor: "#0F766E",
+    minHeight: 42,
+  },
+  tableAltRow: {
+    backgroundColor: "#F8FAFC",
+  },
+  tableHeaderText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+  },
+  tableCellText: {
+    color: Colors.light.text,
+    fontSize: 12,
+    fontWeight: "600",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
+  tableAmountText: {
+    textAlign: "right",
+    fontWeight: "800",
+  },
   inlineBtns: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   smallAction: { borderRadius: 8, paddingVertical: 7, paddingHorizontal: 12 },
   smallActionText: { color: "white", fontSize: 12, fontWeight: "700" },

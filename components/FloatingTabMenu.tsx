@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
+import { isCommitteePosition } from "@/lib/access-control";
 
 type FloatingTabMenuProps = {
   mode?: "floating" | "topbar";
@@ -22,7 +23,7 @@ export default function FloatingTabMenu({
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const { can, signOut, isAuthenticated } = useAuth();
+  const { can, signOut, isAuthenticated, currentUser, currentMember } = useAuth();
   const isTopBar = mode === "topbar";
   const isPhoneNarrow = windowWidth <= 430;
   const gridColumnCount = isPhoneNarrow ? 2 : 1;
@@ -75,18 +76,6 @@ export default function FloatingTabMenu({
         enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
       },
       {
-        name: "ငွေပေးသွင်းတောင်းခံမှု",
-        icon: "phone-portrait-outline",
-        route: "/member-payment-requests",
-        enabled: true,
-      },
-      {
-        name: "ငွေတောင်းခံလွှာ",
-        icon: "document-text-outline",
-        route: "/expense-claims",
-        enabled: can("finance.view_detail") || can("finance.view_summary") || can("finance.view_self") || can("finance.view_all"),
-      },
-      {
         name: "အစီရင်ခံစာ",
         icon: "bar-chart-outline",
         route: "/reports",
@@ -96,7 +85,9 @@ export default function FloatingTabMenu({
         name: "လစဉ်ကြေး",
         icon: "calendar-number-outline",
         route: "/monthly-fees",
-        enabled: can("reports.view_all") || can("reports.view_summary") || can("finance.view_summary") || can("finance.view_detail"),
+        enabled:
+          currentUser?.systemRole === "admin" ||
+          isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition),
       },
       {
         name: "System Information",
@@ -110,7 +101,7 @@ export default function FloatingTabMenu({
         route: "/account-settings",
       },
     ].filter((item) => item.enabled !== false);
-  }, [can]);
+  }, [can, currentMember?.orgPosition, currentUser?.orgPosition, currentUser?.systemRole]);
 
   const handleNavigate = (route: string) => {
     setIsOpen(false);

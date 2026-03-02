@@ -219,7 +219,7 @@ const toDisplayDateTime = (date?: string, time?: string, fallbackIso?: string) =
 export default function MemberPaymentRequestsScreen() {
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
-  const { kind, openCreate: openCreateParam } = useLocalSearchParams<{ kind?: string; openCreate?: string }>();
+  const { kind, openCreate: openCreateParam, requestId } = useLocalSearchParams<{ kind?: string; openCreate?: string; requestId?: string }>();
   const {
     memberPaymentRequests = [],
     members = [],
@@ -293,6 +293,13 @@ export default function MemberPaymentRequestsScreen() {
     if (canReview) return sorted;
     return sorted.filter((item: any) => item.createdByUserId === currentUser?.id);
   }, [memberPaymentRequests, canReview, currentUser?.id]);
+
+  useEffect(() => {
+    const targetId = String(requestId || "").trim();
+    if (!targetId) return;
+    const found = visibleRequests.find((item: any) => String(item?.id || "") === targetId);
+    if (found) setReviewModalId(targetId);
+  }, [requestId, visibleRequests]);
 
   const pendingCount = useMemo(
     () => visibleRequests.filter((item: any) => item.status === "pending_treasurer_review").length,

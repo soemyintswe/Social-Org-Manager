@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as Crypto from "expo-crypto";
@@ -2787,14 +2788,15 @@ export async function deleteLoan(id: string) {
 
 // --- Settings ---
 export async function getAccountSettings(): Promise<AccountSettings> {
+  const runtimeDefaultSyncServerUrl = getRuntimeDefaultSyncServerUrl();
   const defaults: AccountSettings = {
     orgName: "My Organization",
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     currency: "MMK",
     asOfDate: new Date().toISOString(),
-    syncServerUrl: DEFAULT_SYNC_SERVER_URL,
-    syncEnabled: false,
+    syncServerUrl: runtimeDefaultSyncServerUrl,
+    syncEnabled: true,
     cloudSyncEnabled: true,
     cloudSyncProvider: "google_drive_apps_script",
     cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,
@@ -2827,6 +2829,14 @@ export async function getAccountSettings(): Promise<AccountSettings> {
 
   if (!String(stored.syncServerUrl || "").trim()) {
     merged.syncServerUrl = defaults.syncServerUrl;
+  }
+  const normalizedStoredSyncUrl = normalizeSyncServerUrl(String(stored.syncServerUrl || ""));
+  const legacyLanDefaults = new Set([
+    normalizeSyncServerUrl("http://192.168.99.9:5000"),
+    normalizeSyncServerUrl("http://192.168.99.114:5000"),
+  ]);
+  if (!normalizedStoredSyncUrl || legacyLanDefaults.has(normalizedStoredSyncUrl)) {
+    merged.syncServerUrl = runtimeDefaultSyncServerUrl || defaults.syncServerUrl;
   }
   if (stored.syncEnabled === undefined || stored.syncEnabled === null) {
     merged.syncEnabled = defaults.syncEnabled;
@@ -2861,6 +2871,61 @@ function normalizeSyncServerUrl(raw: string): string {
   if (!trimmed) return "";
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   return withProtocol.replace(/\/+$/, "");
+}
+
+function extractHost(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `http://${value}`;
+  try {
+    return String(new URL(withProtocol).hostname || "").trim();
+  } catch {
+    const fallback = value.split("/")[0] || "";
+    return String(fallback.split(":")[0] || "").trim();
+  }
+}
+
+function inferRuntimeLanHost(): string {
+  if (Platform.OS === "web") {
+    try {
+      const host = String((globalThis as any)?.location?.hostname || "").trim();
+      if (host && host !== "localhost") return host;
+    } catch {}
+  }
+
+  const constantCandidates = [
+    String((Constants as any)?.expoConfig?.hostUri || ""),
+    String((Constants as any)?.expoGoConfig?.debuggerHost || ""),
+    String((Constants as any)?.manifest?.debuggerHost || ""),
+    String((Constants as any)?.manifest2?.extra?.expoClient?.hostUri || ""),
+  ]
+    .map((value) => extractHost(value))
+    .filter(Boolean);
+
+  for (const host of constantCandidates) {
+    if (host === "localhost" || host === "127.0.0.1") continue;
+    return host;
+  }
+  return "";
+}
+
+function getRuntimeDefaultSyncServerUrl(): string {
+  const fromEnv = normalizeSyncServerUrl(String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || ""));
+  if (fromEnv) return fromEnv;
+
+  const inferredHost = inferRuntimeLanHost();
+  if (inferredHost) {
+    return normalizeSyncServerUrl(`http://${inferredHost}:5000`);
+  }
+
+  if (Platform.OS === "web") {
+    try {
+      const host = String((globalThis as any)?.location?.hostname || "").trim();
+      if (host) return normalizeSyncServerUrl(`http://${host}:5000`);
+    } catch {}
+  }
+
+  return normalizeSyncServerUrl(DEFAULT_SYNC_SERVER_URL);
 }
 
 function normalizeCloudSyncEndpoint(raw: string): string {
@@ -2962,7 +3027,9 @@ async function compressImageDataUrl(value: string): Promise<string> {
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
   const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
-  const url = normalizeSyncServerUrl(remoteUrl || settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL);
+  const url = normalizeSyncServerUrl(
+    remoteUrl || settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL
+  );
   const managedEnabled = getManagedLanSyncEnabled();
   const enabled = (managedEnabled === null ? settings.syncEnabled !== false : managedEnabled === true) && !!url;
   return { url, enabled };
@@ -2979,7 +3046,7 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
 }> {
   const settings = await getAccountSettings();
   const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
-  const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL);
+  const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
   const lan = await resolveSyncServerUrl();
   const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanUrl
     ? "managed_remote_config"
@@ -3263,7 +3330,9 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
     } catch {}
     try {
       const settings = await getAccountSettings();
-      const configuredUrl = normalizeSyncServerUrl(String(settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL));
+      const configuredUrl = normalizeSyncServerUrl(
+        String(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
+      );
       if (configuredUrl) candidates.push(configuredUrl);
     } catch {}
 

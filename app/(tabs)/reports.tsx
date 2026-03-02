@@ -440,6 +440,11 @@ export default function ReportsScreen() {
   const effectiveScope: ReportViewScope = canChooseScope ? viewScope : "self";
   const showDetailRows = canViewAllReports || effectiveScope !== "all";
   const useInlineYearPicker = width >= 768;
+  const shouldComputeMembers = reportTab === "members" || showPrintPicker || printing;
+  const shouldComputeFees = reportTab === "fees" || showPrintPicker || printing;
+  const shouldComputeRegisters = reportTab === "registers" || showPrintPicker || printing;
+  const shouldComputeCashBook = reportTab === "cash_book" || showPrintPicker || printing;
+  const shouldComputeAudit = reportTab === "audit_flags" || showPrintPicker || printing;
   const startDateMs = startDate.getTime();
   const endDateMs = endDate.getTime();
   const transactionCount = transactions?.length ?? 0;
@@ -613,6 +618,7 @@ export default function ReportsScreen() {
   );
 
   const memberRowsWithMetrics = useMemo(() => {
+    if (!shouldComputeMembers) return [];
     const refDate = endDate;
     return (reportMembers || []).map((member: any) => {
       const status = normalizeMemberStatus(member?.status);
@@ -642,9 +648,10 @@ export default function ReportsScreen() {
         __refDateMs: getMemberReferenceDateMs(member),
       };
     });
-  }, [reportMembers, endDate, getMemberReferenceDateMs]);
+  }, [reportMembers, endDate, getMemberReferenceDateMs, shouldComputeMembers]);
 
   const memberFlowStats = useMemo(() => {
+    if (!shouldComputeMembers) return { opening: 0, joined: 0, exited: 0, closing: 0 };
     const start = new Date(startDate);
     const end = new Date(endDate);
     start.setHours(0, 0, 0, 0);
@@ -674,9 +681,10 @@ export default function ReportsScreen() {
     });
 
     return { opening, joined, exited, closing };
-  }, [memberRowsWithMetrics, startDate, endDate]);
+  }, [memberRowsWithMetrics, startDate, endDate, shouldComputeMembers]);
 
   const filteredMemberRows = useMemo(() => {
+    if (!shouldComputeMembers) return [];
     const start = new Date(startDate);
     const end = new Date(endDate);
     start.setHours(0, 0, 0, 0);
@@ -724,11 +732,13 @@ export default function ReportsScreen() {
     memberPositionFilter,
     startDate,
     endDate,
+    shouldComputeMembers,
   ]);
 
   const executiveMembers = useMemo(
-    () =>
-      filteredMemberRows
+    () => {
+      if (!shouldComputeMembers) return [];
+      return filteredMemberRows
         .filter((member: any) => {
           const positionsInRange: OrgPosition[] = Array.isArray(member?.__positionsInRange) ? member.__positionsInRange : [];
           return positionsInRange.some((position) => isExecutivePosition(position));
@@ -742,11 +752,22 @@ export default function ReportsScreen() {
           const rb = rank(b.__positionPrimary || b.__defaultPosition || "member");
           if (ra !== rb) return ra - rb;
           return String(a?.id || "").localeCompare(String(b?.id || ""));
-        }),
-    [filteredMemberRows]
+        });
+    },
+    [filteredMemberRows, shouldComputeMembers]
   );
 
   const memberSummaryStats = useMemo(() => {
+    if (!shouldComputeMembers) {
+      return {
+        total: 0,
+        statusCounts: { active: 0, resigned: 0, deceased: 0, expelled: 0, suspended: 0, applicant: 0 } as Record<MemberStatus, number>,
+        genderCounts: { male: 0, female: 0, other: 0 } as Record<"male" | "female" | "other", number>,
+        ageCounts: { under18: 0, "18_35": 0, "36_60": 0, "61_75": 0, over75: 0, unknown: 0 } as Record<"under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown", number>,
+        topPositions: [] as { position: string; count: number }[],
+        executiveCount: 0,
+      };
+    }
     const statusCounts: Record<MemberStatus, number> = {
       active: 0,
       resigned: 0,
@@ -789,7 +810,7 @@ export default function ReportsScreen() {
       topPositions,
       executiveCount: executiveMembers.length,
     };
-  }, [filteredMemberRows, executiveMembers.length]);
+  }, [filteredMemberRows, executiveMembers.length, shouldComputeMembers]);
 
   const reportTransactions = useMemo(() => {
     if (scopedMemberId === null) return transactions;
@@ -945,6 +966,7 @@ export default function ReportsScreen() {
   }, [startDate, endDate, getBalancesAt]);
 
   const cashBookRows = useMemo(() => {
+    if (!shouldComputeCashBook) return [];
     const startBoundary = new Date(startDate);
     startBoundary.setHours(0, 0, 0, 0);
     const openingRefDate = new Date(startBoundary);
@@ -1081,9 +1103,21 @@ export default function ReportsScreen() {
 
     pushDailyTotal(currentDay);
     return rows;
-  }, [filteredTxns, getBalancesAt, startDate]);
+  }, [filteredTxns, getBalancesAt, startDate, shouldComputeCashBook]);
 
   const cashBookSummary = useMemo(() => {
+    if (!shouldComputeCashBook) {
+      return {
+        openingCash: 0,
+        openingBank: 0,
+        closingCash: 0,
+        closingBank: 0,
+        cashIn: 0,
+        cashOut: 0,
+        bankIn: 0,
+        bankOut: 0,
+      };
+    }
     const openingRow = cashBookRows.find((r) => r.rowType === "opening");
     const lastRow = cashBookRows[cashBookRows.length - 1];
     const entryRows = cashBookRows.filter((r) => r.rowType === "entry");
@@ -1104,7 +1138,7 @@ export default function ReportsScreen() {
       closingBank: lastRow?.bankBalance || 0,
       ...totals,
     };
-  }, [cashBookRows]);
+  }, [cashBookRows, shouldComputeCashBook]);
 
   const defaultMonthlyFeeRate = useMemo(() => {
     const monthlyRule = (standardAmountRules || []).find((row: any) => String(row?.key || "") === "monthly_fee_rate");
@@ -1184,6 +1218,7 @@ export default function ReportsScreen() {
   }, [accountSettings?.monthlyFeeReliefRules]);
 
   const memberFeePaidAmountByMonthMap = useMemo(() => {
+    if (!shouldComputeFees) return new Map<string, number>();
     const map = new Map<string, number>();
     const addMonthAmount = (memberId: string, year: number, monthIdx: number, amount: number) => {
       if (!memberId || !Number.isFinite(amount) || amount <= 0) return;
@@ -1231,9 +1266,10 @@ export default function ReportsScreen() {
     });
 
     return map;
-  }, [reportTransactions]);
+  }, [reportTransactions, shouldComputeFees]);
 
   const memberFeeTotalsByMemberId = useMemo(() => {
+    if (!shouldComputeFees) return new Map<string, number>();
     const map = new Map<string, number>();
     filteredTxns.forEach((t: any) => {
       if (String(t?.category || "") !== "member_fees") return;
@@ -1242,9 +1278,10 @@ export default function ReportsScreen() {
       map.set(memberId, (map.get(memberId) || 0) + Number(t?.amount || 0));
     });
     return map;
-  }, [filteredTxns]);
+  }, [filteredTxns, shouldComputeFees]);
 
   const feeYearSummaries = useMemo<FeeYearSummary[]>(() => {
+    if (!shouldComputeFees) return [];
     const startBoundary = new Date(startDate.getFullYear(), startDate.getMonth(), 1).getTime();
     const endBoundary = new Date(endDate.getFullYear(), endDate.getMonth(), 1).getTime();
     const years: number[] = [];
@@ -1458,6 +1495,7 @@ export default function ReportsScreen() {
     monthlyFeeRateRules,
     monthlyFeeReliefRules,
     defaultMonthlyFeeRate,
+    shouldComputeFees,
   ]);
 
   const feeOutstandingRows = useMemo(() => {
@@ -1604,11 +1642,12 @@ export default function ReportsScreen() {
   }, [incomeTransactions, memberNameById]);
 
   const activeRegisterRows = useMemo(() => {
+    if (!shouldComputeRegisters) return [];
     if (registerView === "received") return receivedRegisterRows;
     if (registerView === "expenditure") return expenditureRegisterRows;
     if (registerView === "loan_out") return expenseLoanRegisterRows;
     return receivedLoanRegisterRows;
-  }, [registerView, receivedRegisterRows, expenditureRegisterRows, expenseLoanRegisterRows, receivedLoanRegisterRows]);
+  }, [registerView, receivedRegisterRows, expenditureRegisterRows, expenseLoanRegisterRows, receivedLoanRegisterRows, shouldComputeRegisters]);
 
   const activeRegisterTitle = useMemo(() => {
     if (registerView === "received") return "ရငွေမှတ်ပုံတင်စာရင်း";
@@ -1637,6 +1676,7 @@ export default function ReportsScreen() {
   }, [activeRegisterRows]);
 
   const scopedAuditRows = useMemo(() => {
+    if (!shouldComputeAudit) return [];
     const needle = auditSearch.trim().toLowerCase();
     return filteredTxns.filter((t: any) => {
       if (auditOnlyFlagged && !t.auditFlagged) return false;
@@ -1649,7 +1689,7 @@ export default function ReportsScreen() {
         String(categoryLabel).toLowerCase().includes(needle)
       );
     });
-  }, [filteredTxns, auditSearch, auditOnlyFlagged]);
+  }, [filteredTxns, auditSearch, auditOnlyFlagged, shouldComputeAudit]);
 
   const compareDateWithReceipt = useCallback(
     (a: any, b: any) => {

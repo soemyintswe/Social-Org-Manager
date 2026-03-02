@@ -34,6 +34,7 @@ import {
 } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
+import { resolveNotificationRoute } from "@/lib/notification-routing";
 
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
 
@@ -143,7 +144,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
@@ -455,6 +456,46 @@ export default function DashboardScreen() {
       return !readBy.includes(me);
     }).length;
   }, [notifications, currentUser?.id]);
+
+  const requestNotificationItems = useMemo(() => {
+    const me = String(currentUser?.id || "").trim();
+    if (!me) return [];
+    const rows = (notifications || [])
+      .filter((item: any) => {
+        const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+        if (!targets.includes(me)) return false;
+        const category = String(item?.category || "").trim().toLowerCase();
+        const relatedType = String(item?.relatedType || "").trim().toLowerCase();
+        return (
+          category === "payment_request" ||
+          category === "expense_claim" ||
+          category === "audit_change" ||
+          category === "delete_request" ||
+          relatedType === "member_payment_request" ||
+          relatedType === "expense_claim" ||
+          relatedType === "audit_change_request"
+        );
+      })
+      .sort((a: any, b: any) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime());
+    return rows.slice(0, 5);
+  }, [notifications, currentUser?.id]);
+
+  const openRequestNotification = useCallback(async (item: any) => {
+    const me = String(currentUser?.id || "").trim();
+    if (me) {
+      await markNotificationRead(String(item?.id || ""), me);
+    }
+    const target = resolveNotificationRoute(item);
+    if (target.pathname === "/notifications") {
+      router.push("/notifications" as any);
+      return;
+    }
+    router.push(
+      target.params
+        ? ({ pathname: target.pathname, params: target.params } as any)
+        : (target.pathname as any)
+    );
+  }, [currentUser?.id, markNotificationRead]);
 
   const unreadMessageCount = useMemo(() => {
     if (!currentUser?.id) return 0;
@@ -1024,6 +1065,25 @@ export default function DashboardScreen() {
         </Pressable>
       </View>
 
+      {requestNotificationItems.length > 0 ? (
+        <View style={styles.noticeListWrap}>
+          <Text style={styles.noticeListTitle}>🔔 အသိပေးချက်များ</Text>
+          {requestNotificationItems.map((item: any, index: number) => (
+            <Pressable
+              key={String(item?.id || `notice-${index}`)}
+              style={styles.noticeListItem}
+              onPress={() => void openRequestNotification(item)}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.noticeListItemTitle} numberOfLines={1}>{String(item?.title || "အသိပေးချက်")}</Text>
+                <Text style={styles.noticeListItemDesc} numberOfLines={2}>{String(item?.description || "-")}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
       {(canApproveMemberChanges || canProposeMemberChanges) && (
         <Pressable style={styles.requestInboxCard} onPress={() => router.push("/member-change-approvals" as any)}>
           <View style={styles.requestInboxHeader}>
@@ -1197,6 +1257,30 @@ const styles = StyleSheet.create({
   noticeCard: { flex: 1, backgroundColor: "white", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 12 },
   noticeTitle: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   noticeCount: { fontSize: 20, color: Colors.light.text, fontFamily: "Inter_700Bold", marginTop: 4 },
+  noticeListWrap: {
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 14,
+    marginHorizontal: 20,
+    padding: 12,
+    marginBottom: 18,
+    gap: 8,
+  },
+  noticeListTitle: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_700Bold" },
+  noticeListItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "#F8FAFC",
+  },
+  noticeListItemTitle: { fontSize: 12.5, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  noticeListItemDesc: { marginTop: 2, fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   statCard: { width: "48%", marginBottom: 10, backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
   statIconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 10 },
   statValue: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
