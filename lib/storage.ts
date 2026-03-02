@@ -54,6 +54,7 @@ import {
   getManagedCloudSyncEnabled,
   getManagedLanSyncEnabled,
   getManagedLanSyncUrl,
+  getManagedSyncLockdownEnabled,
 } from "./remote-config";
 
 const KEYS = {
@@ -87,11 +88,16 @@ const EXTRA_SHARED_KEYS = [
   "@org_notice_custom_conditions",
 ] as const;
 
+const APP_STORAGE_PREFIX = "@orghub_";
+const SHARED_EXTRA_KEY_PREFIXES = ["@org_notice_custom_"] as const;
+
 const BACKUP_EXCLUDED_KEYS = new Set<string>([
   "@orghub_auth_session",
+  "@orghub_auth_background_marked",
   "@orghub_login_guard",
   "@orghub_sync_last_server_updated_at",
   "@orghub_expense_claim_draft",
+  MEMBER_JOIN_DATE_MIGRATION_V1_KEY,
   "@member_change_last_seen_at",
   "@auto_backup_enabled",
   "@last_birthday_notification",
@@ -100,14 +106,50 @@ const BACKUP_EXCLUDED_KEYS = new Set<string>([
   "@orghub_cloud_sync_last_remote_updated_at",
 ]);
 
+const RESET_ONLY_PREFIXES = [
+  "@event_notification_seen_ids_",
+  "@comment_notification_seen_ids_",
+  "@chat_notification_seen_ids_",
+  "@request_notification_seen_ids_",
+  "@app_update_",
+] as const;
+
+const RESET_ONLY_KEYS = new Set<string>([
+  ...Array.from(BACKUP_EXCLUDED_KEYS),
+  "@orghub_auth_background_marked",
+  MEMBER_JOIN_DATE_MIGRATION_V1_KEY,
+]);
+
+function hasAnyPrefix(key: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => key.startsWith(prefix));
+}
+
+function isNotificationSeenKey(key: string): boolean {
+  return hasAnyPrefix(key, [
+    "@event_notification_seen_ids_",
+    "@comment_notification_seen_ids_",
+    "@chat_notification_seen_ids_",
+    "@request_notification_seen_ids_",
+  ]);
+}
+
+function isOrgOwnedStorageKey(key: string): boolean {
+  if (!key) return false;
+  if (key.startsWith(APP_STORAGE_PREFIX)) return true;
+  if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
+  if (hasAnyPrefix(key, SHARED_EXTRA_KEY_PREFIXES)) return true;
+  if (hasAnyPrefix(key, RESET_ONLY_PREFIXES)) return true;
+  if (RESET_ONLY_KEYS.has(key)) return true;
+  return false;
+}
+
 function isSharedBackupKey(key: string): boolean {
   if (!key) return false;
   if (BACKUP_EXCLUDED_KEYS.has(key)) return false;
-  if (key.startsWith("@event_notification_seen_ids_")) return false;
-  if (key.startsWith("@comment_notification_seen_ids_")) return false;
-  if (key.startsWith("@chat_notification_seen_ids_")) return false;
-  if (Object.values(KEYS).includes(key as any)) return true;
+  if (isNotificationSeenKey(key)) return false;
+  if (key.startsWith(APP_STORAGE_PREFIX)) return true;
   if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
+  if (hasAnyPrefix(key, SHARED_EXTRA_KEY_PREFIXES)) return true;
   return false;
 }
 
@@ -1015,7 +1057,20 @@ export async function clearAllMembers(): Promise<void> {
 }
 
 export async function clearAllData(): Promise<void> {
-  const keys = await getAllSharedBackupKeys();
+  const [sharedKeys, allKeys] = await Promise.all([
+    getAllSharedBackupKeys(),
+    AsyncStorage.getAllKeys().catch(() => [] as string[]),
+  ]);
+  const resetKeys = (allKeys || []).filter((key) => isOrgOwnedStorageKey(String(key || "")));
+  const keys = Array.from(
+    new Set([
+      ...sharedKeys,
+      ...resetKeys,
+      ...Object.values(KEYS),
+      ...EXTRA_SHARED_KEYS,
+      ...Array.from(RESET_ONLY_KEYS),
+    ])
+  );
   if (keys.length > 0) {
     await AsyncStorage.multiRemove(keys);
   }
@@ -2961,19 +3016,26 @@ async function resolveCloudSyncConfig(): Promise<{
   folderName: string;
 }> {
   const settings = await getAccountSettings();
+  const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const remoteEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
   const legacyEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const endpoint = remoteEndpoint || legacyEndpoint;
+  const endpoint = managedLockdownEnabled ? remoteEndpoint : (remoteEndpoint || legacyEndpoint);
   const managedEnabled = getManagedCloudSyncEnabled();
   const remoteApiKey = sanitizeCloudApiKey(getRemoteCloudSyncApiKey() || "");
   const legacyApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
-  const apiKey = remoteApiKey || legacyApiKey;
+  const apiKey = managedLockdownEnabled ? remoteApiKey : (remoteApiKey || legacyApiKey);
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
   const remoteAccountEmail = String(getRemoteCloudSyncAccountEmail() || "").trim();
-  const accountEmail = remoteAccountEmail || String(settings.cloudSyncGoogleAccountEmail || "").trim();
+  const accountEmail = managedLockdownEnabled
+    ? remoteAccountEmail
+    : (remoteAccountEmail || String(settings.cloudSyncGoogleAccountEmail || "").trim());
   const remoteFolderName = String(getRemoteCloudSyncFolderName() || "").trim();
-  const folderName = remoteFolderName || String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
-  const enabled = (managedEnabled === null ? settings.cloudSyncEnabled === true : managedEnabled === true) && !!endpoint;
+  const folderName = managedLockdownEnabled
+    ? (remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
+    : (remoteFolderName || String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
+  const enabled = managedLockdownEnabled
+    ? (managedEnabled === true && !!endpoint)
+    : ((managedEnabled === null ? settings.cloudSyncEnabled === true : managedEnabled === true) && !!endpoint);
   return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
 }
 
@@ -3026,12 +3088,17 @@ async function compressImageDataUrl(value: string): Promise<string> {
 
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
+  const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
   const url = normalizeSyncServerUrl(
-    remoteUrl || settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL
+    managedLockdownEnabled
+      ? remoteUrl
+      : (remoteUrl || settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
   );
   const managedEnabled = getManagedLanSyncEnabled();
-  const enabled = (managedEnabled === null ? settings.syncEnabled !== false : managedEnabled === true) && !!url;
+  const enabled = managedLockdownEnabled
+    ? (managedEnabled === true && !!url)
+    : ((managedEnabled === null ? settings.syncEnabled !== false : managedEnabled === true) && !!url);
   return { url, enabled };
 }
 
@@ -3045,12 +3112,13 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
   };
 }> {
   const settings = await getAccountSettings();
+  const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
   const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
   const lan = await resolveSyncServerUrl();
   const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanUrl
     ? "managed_remote_config"
-    : String(settings.syncServerUrl || "").trim()
+    : !managedLockdownEnabled && String(settings.syncServerUrl || "").trim()
       ? "local_settings"
       : "default";
 
@@ -3059,7 +3127,7 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
   const cloud = await resolveCloudSyncConfig();
   const cloudSource: "managed_remote_config" | "local_settings" | "default" = managedCloudEndpoint
     ? "managed_remote_config"
-    : localCloudEndpoint
+    : !managedLockdownEnabled && localCloudEndpoint
       ? "local_settings"
       : "default";
 
