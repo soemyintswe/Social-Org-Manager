@@ -108,6 +108,11 @@ export default function LoansScreen() {
       return id.includes(needle) || name.includes(needle);
     });
   }, [members, memberSearch]);
+  const showInlineMemberResults = useMemo(
+    () => viewScope === "member" && memberSearch.trim().length > 0,
+    [viewScope, memberSearch]
+  );
+  const inlineMemberOptions = useMemo(() => memberOptions.slice(0, 10), [memberOptions]);
 
   const scopeLabel = useMemo(() => {
     if (effectiveScope === "all") return "အားလုံး";
@@ -302,6 +307,24 @@ export default function LoansScreen() {
           {viewScope === "member" && (
             <View style={styles.memberPickerWrap}>
               <TextInput style={styles.memberSearchInput} value={memberSearch} onChangeText={setMemberSearch} placeholder="Member ID / Full Name ရိုက်ရှာပါ" />
+              {showInlineMemberResults ? (
+                <View style={styles.memberQuickList}>
+                  {inlineMemberOptions.length > 0 ? (
+                    inlineMemberOptions.map((item: any) => (
+                      <Pressable
+                        key={`quick-member-${String(item.id || "")}`}
+                        style={styles.memberQuickRow}
+                        onPress={() => setSelectedMemberId(String(item.id || ""))}
+                      >
+                        <Text style={styles.memberQuickName} numberOfLines={1}>{item.name || "-"}</Text>
+                        <Text style={styles.memberQuickId}>{item.id || "-"}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <Text style={styles.memberQuickEmpty}>ရှာဖွေတွေ့ရှိသော Member မရှိပါ</Text>
+                  )}
+                </View>
+              ) : null}
               <Pressable style={styles.memberPickerBtn} onPress={() => setShowMemberPicker(true)}>
                 <Text style={styles.memberPickerBtnText} numberOfLines={1}>
                   {selectedMemberId === "" ? "Dropdown မှ Member ရွေးမည်" : `${members.find((x: any) => x.id === selectedMemberId)?.name || ""} (${selectedMemberId})`}
@@ -477,6 +500,11 @@ const styles = StyleSheet.create({
   scopeChipTextActive: { color: "#fff" },
   memberPickerWrap: { gap: 8, marginTop: 8 },
   memberSearchInput: { backgroundColor: "#F8FAFC", borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: Colors.light.text },
+  memberQuickList: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, backgroundColor: "#fff", overflow: "hidden" },
+  memberQuickRow: { paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#EEF2F7" },
+  memberQuickName: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  memberQuickId: { fontSize: 11.5, color: Colors.light.textSecondary, marginTop: 1, fontFamily: "Inter_500Medium" },
+  memberQuickEmpty: { paddingHorizontal: 12, paddingVertical: 10, color: Colors.light.textSecondary, fontSize: 12.5, fontFamily: "Inter_500Medium" },
   memberPickerBtn: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: "#F8FAFC" },
   memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
   filterContainer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: 14, marginBottom: 8, marginTop: 2 },

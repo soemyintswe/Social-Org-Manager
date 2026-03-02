@@ -18,6 +18,27 @@ import {
 
 type MemberOption = { id: string; name: string };
 type DateFieldKey = "rateStart" | "rateEnd" | "reliefStart" | "reliefEnd";
+type GroupedRateRuleRow = {
+  key: string;
+  scope: MonthlyFeeRuleScope;
+  amount: number;
+  effectiveFrom: string;
+  effectiveTo?: string;
+  position?: OrgPosition;
+  memberIds: string[];
+  ruleIds: string[];
+};
+type GroupedReliefRuleRow = {
+  key: string;
+  scope: MonthlyFeeRuleScope;
+  mode: MonthlyFeeReliefMode;
+  value?: number;
+  effectiveFrom: string;
+  effectiveTo?: string;
+  position?: OrgPosition;
+  memberIds: string[];
+  ruleIds: string[];
+};
 
 function todayYmd() {
   const d = new Date();
@@ -37,6 +58,44 @@ function ymdToDate(value: string | undefined): Date {
 
 function requestId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function MemberNamesReadMore({
+  memberIds,
+  memberNameById,
+  prefix = "",
+}: {
+  memberIds: string[];
+  memberNameById: Map<string, string>;
+  prefix?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const labels = useMemo(
+    () =>
+      memberIds
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+        .map((id) => `${memberNameById.get(id) || "-"} (${id})`),
+    [memberIds, memberNameById]
+  );
+  const maxCollapsed = 4;
+  const visible = expanded ? labels : labels.slice(0, maxCollapsed);
+  const remaining = Math.max(0, labels.length - visible.length);
+
+  return (
+    <View style={styles.readMoreWrap}>
+      <Text style={styles.meta}>
+        {prefix}
+        {visible.join(", ") || "-"}
+        {!expanded && remaining > 0 ? ` ... (+${remaining} ဦး)` : ""}
+      </Text>
+      {labels.length > maxCollapsed ? (
+        <Pressable onPress={() => setExpanded((prev) => !prev)} style={styles.readMoreBtn}>
+          <Text style={styles.readMoreText}>{expanded ? "Show less" : "Read more..."}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
 }
 
 export default function MonthlyFeesScreen() {
@@ -79,6 +138,97 @@ export default function MonthlyFeesScreen() {
     memberOptions.forEach((m) => map.set(m.id, m.name));
     return map;
   }, [memberOptions]);
+  const groupedRateRules = useMemo<GroupedRateRuleRow[]>(() => {
+    const map = new Map<string, GroupedRateRuleRow>();
+    rateRules.forEach((row) => {
+      const scope = row.scope === "member" || row.scope === "position" || row.scope === "global" ? row.scope : "global";
+      if (scope !== "member") {
+        map.set(`single-${row.id}`, {
+          key: `single-${row.id}`,
+          scope,
+          amount: Number(row.amount || 0),
+          effectiveFrom: String(row.effectiveFrom || ""),
+          effectiveTo: row.effectiveTo,
+          position: row.position,
+          memberIds: [],
+          ruleIds: [String(row.id || "")],
+        });
+        return;
+      }
+      const key = [
+        scope,
+        Number(row.amount || 0),
+        String(row.effectiveFrom || ""),
+        String(row.effectiveTo || ""),
+        String(row.position || ""),
+      ].join("|");
+      const memberId = String(row.memberId || "").trim();
+      const existing = map.get(key);
+      if (existing) {
+        if (memberId && !existing.memberIds.includes(memberId)) existing.memberIds.push(memberId);
+        if (row.id && !existing.ruleIds.includes(String(row.id))) existing.ruleIds.push(String(row.id));
+      } else {
+        map.set(key, {
+          key,
+          scope,
+          amount: Number(row.amount || 0),
+          effectiveFrom: String(row.effectiveFrom || ""),
+          effectiveTo: row.effectiveTo,
+          position: row.position,
+          memberIds: memberId ? [memberId] : [],
+          ruleIds: row.id ? [String(row.id)] : [],
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [rateRules]);
+  const groupedReliefRules = useMemo<GroupedReliefRuleRow[]>(() => {
+    const map = new Map<string, GroupedReliefRuleRow>();
+    reliefRules.forEach((row) => {
+      const scope = row.scope === "member" || row.scope === "position" || row.scope === "global" ? row.scope : "global";
+      if (scope !== "member") {
+        map.set(`single-${row.id}`, {
+          key: `single-${row.id}`,
+          scope,
+          mode: row.mode,
+          value: row.value,
+          effectiveFrom: String(row.effectiveFrom || ""),
+          effectiveTo: row.effectiveTo,
+          position: row.position,
+          memberIds: [],
+          ruleIds: [String(row.id || "")],
+        });
+        return;
+      }
+      const key = [
+        scope,
+        String(row.mode || ""),
+        Number(row.value || 0),
+        String(row.effectiveFrom || ""),
+        String(row.effectiveTo || ""),
+        String(row.position || ""),
+      ].join("|");
+      const memberId = String(row.memberId || "").trim();
+      const existing = map.get(key);
+      if (existing) {
+        if (memberId && !existing.memberIds.includes(memberId)) existing.memberIds.push(memberId);
+        if (row.id && !existing.ruleIds.includes(String(row.id))) existing.ruleIds.push(String(row.id));
+      } else {
+        map.set(key, {
+          key,
+          scope,
+          mode: row.mode,
+          value: row.value,
+          effectiveFrom: String(row.effectiveFrom || ""),
+          effectiveTo: row.effectiveTo,
+          position: row.position,
+          memberIds: memberId ? [memberId] : [],
+          ruleIds: row.id ? [String(row.id)] : [],
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [reliefRules]);
 
   const [rateScope, setRateScope] = useState<MonthlyFeeRuleScope>("global");
   const [ratePosition, setRatePosition] = useState<OrgPosition>("patron");
@@ -104,6 +254,10 @@ export default function MonthlyFeesScreen() {
   const [datePickerValue, setDatePickerValue] = useState<Date>(new Date());
   const [webDateEditorVisible, setWebDateEditorVisible] = useState(false);
   const [webDateEditorValue, setWebDateEditorValue] = useState("");
+  const [editingRateRuleIds, setEditingRateRuleIds] = useState<string[]>([]);
+  const [editingReliefRuleIds, setEditingReliefRuleIds] = useState<string[]>([]);
+  const [rateDetailRow, setRateDetailRow] = useState<GroupedRateRuleRow | null>(null);
+  const [reliefDetailRow, setReliefDetailRow] = useState<GroupedReliefRuleRow | null>(null);
 
   const filteredRateMembers = useMemo(() => {
     const needle = rateSearch.trim().toLowerCase();
@@ -115,6 +269,68 @@ export default function MonthlyFeesScreen() {
     if (!needle) return memberOptions;
     return memberOptions.filter((m) => m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle));
   }, [memberOptions, reliefSearch]);
+  const detailRateRules = useMemo(
+    () => (rateDetailRow ? rateRules.filter((row) => rateDetailRow.ruleIds.includes(String(row.id || ""))) : []),
+    [rateDetailRow, rateRules]
+  );
+  const detailReliefRules = useMemo(
+    () => (reliefDetailRow ? reliefRules.filter((row) => reliefDetailRow.ruleIds.includes(String(row.id || ""))) : []),
+    [reliefDetailRow, reliefRules]
+  );
+
+  const resetRateEditor = useCallback(() => {
+    setEditingRateRuleIds([]);
+    setRateScope("global");
+    setRatePosition("patron");
+    setRateMemberIds([]);
+    setRateAmount("");
+    setRateStart(todayYmd());
+    setRateEnd("");
+    setRateReason("");
+  }, []);
+
+  const resetReliefEditor = useCallback(() => {
+    setEditingReliefRuleIds([]);
+    setReliefScope("global");
+    setReliefPosition("patron");
+    setReliefMemberIds([]);
+    setReliefMode("full");
+    setReliefValue("");
+    setReliefStart(todayYmd());
+    setReliefEnd("");
+    setReliefReason("");
+  }, []);
+
+  const beginEditRateGroup = useCallback((group: GroupedRateRuleRow) => {
+    const first = rateRules.find((row) => group.ruleIds.includes(String(row.id || "")));
+    if (!first) return;
+    setEditingRateRuleIds(group.ruleIds);
+    setRateScope(group.scope);
+    setRatePosition(normalizeOrgPosition(group.position || first.position || "patron"));
+    setRateMemberIds(group.scope === "member" ? group.memberIds : []);
+    setRateAmount(String(Number(group.amount || 0)));
+    setRateStart(String(group.effectiveFrom || ""));
+    setRateEnd(String(group.effectiveTo || ""));
+    setRateReason(String(first.reason || ""));
+    setRateDetailRow(null);
+    Alert.alert("ပြင်ဆင်မည်", "အောက်က နှုန်းထား form တွင်ပြင်ပြီး Update နှိပ်ပါ။");
+  }, [rateRules]);
+
+  const beginEditReliefGroup = useCallback((group: GroupedReliefRuleRow) => {
+    const first = reliefRules.find((row) => group.ruleIds.includes(String(row.id || "")));
+    if (!first) return;
+    setEditingReliefRuleIds(group.ruleIds);
+    setReliefScope(group.scope);
+    setReliefPosition(normalizeOrgPosition(group.position || first.position || "patron"));
+    setReliefMemberIds(group.scope === "member" ? group.memberIds : []);
+    setReliefMode(group.mode);
+    setReliefValue(group.mode === "full" ? "" : String(Number(group.value || 0)));
+    setReliefStart(String(group.effectiveFrom || ""));
+    setReliefEnd(String(group.effectiveTo || ""));
+    setReliefReason(String(first.reason || ""));
+    setReliefDetailRow(null);
+    Alert.alert("ပြင်ဆင်မည်", "အောက်က ကင်းလွတ်/သက်သာ form တွင်ပြင်ပြီး Update နှိပ်ပါ။");
+  }, [reliefRules]);
 
   const openDatePicker = useCallback((key: DateFieldKey, currentValue: string) => {
     if (Platform.OS === "web") {
@@ -176,13 +392,19 @@ export default function MonthlyFeesScreen() {
 
   const addRate = useCallback(async () => {
     if (!canEdit || !currentUser?.id) return;
+    const isEditing = editingRateRuleIds.length > 0;
     const amount = Math.max(0, Number(rateAmount || 0));
     if (!amount || !rateStart.trim()) return Alert.alert("လိုအပ်ချက်", "နှုန်းထားနှင့် စတင်နေ့ ထည့်ပါ။");
     const targets = rateScope === "member" ? rateMemberIds : [""];
     if (rateScope === "member" && targets.length === 0) return Alert.alert("လိုအပ်ချက်", "အသင်းဝင်ရွေးချယ်ပါ။");
     const now = new Date().toISOString();
+    const editableRules = rateRules.filter((row) => editingRateRuleIds.includes(String(row.id || "")));
+    const editableByMember = new Map<string, string>();
+    editableRules.forEach((row) => editableByMember.set(String(row.memberId || ""), String(row.id || "")));
     const rules = targets.map((id) => ({
-      id: requestId("fee-rate"),
+      id:
+        editableByMember.get(String(id || "")) ||
+        (editingRateRuleIds[0] && targets.length === 1 ? editingRateRuleIds[0] : requestId("fee-rate")),
       scope: rateScope,
       amount,
       effectiveFrom: rateStart.trim(),
@@ -196,6 +418,9 @@ export default function MonthlyFeesScreen() {
     })) as MonthlyFeeRateRule[];
 
     if (isChair) {
+      const keptRates = isEditing
+        ? rateRules.filter((row) => !editingRateRuleIds.includes(String(row.id || "")))
+        : rateRules;
       const approved = rules.map((payload) => ({
         id: requestId("fee-policy-req"),
         policyType: "rate_rule",
@@ -211,8 +436,22 @@ export default function MonthlyFeesScreen() {
         reviewedAt: now,
         appliedAt: now,
       })) as MonthlyFeePolicyRequest[];
-      await persist([...rateRules, ...rules], reliefRules, [...policyRequests, ...approved]);
+      await persist([...keptRates, ...rules], reliefRules, [...policyRequests, ...approved]);
     } else {
+      const pendingDeletes = isEditing
+        ? editingRateRuleIds.map((targetRuleId) => ({
+            id: requestId("fee-policy-req"),
+            policyType: "rate_rule" as const,
+            action: "delete" as const,
+            targetRuleId,
+            payload: editableRules.find((row) => String(row.id || "") === String(targetRuleId)) || rules[0],
+            status: "pending_chair_approval" as const,
+            createdByUserId: String(currentUser.id),
+            createdByMemberId: String(currentUser.memberId || "") || undefined,
+            createdByRole: role,
+            createdAt: now,
+          }))
+        : [];
       const pending = rules.map((payload) => ({
         id: requestId("fee-policy-req"),
         policyType: "rate_rule",
@@ -224,24 +463,27 @@ export default function MonthlyFeesScreen() {
         createdByRole: role,
         createdAt: now,
       })) as MonthlyFeePolicyRequest[];
-      await persist(rateRules, reliefRules, [...policyRequests, ...pending]);
-      Alert.alert("တင်ပြပြီးပါပြီ", "ဥက္ကဌ အတည်ပြုချက်ရပြီးမှ အသက်ဝင်ပါမည်။");
+      await persist(rateRules, reliefRules, [...policyRequests, ...pendingDeletes, ...pending]);
+      Alert.alert("တင်ပြပြီးပါပြီ", isEditing ? "ပြင်ဆင်ချက်ကို ဥက္ကဌအတည်ပြုပြီးမှ အသက်ဝင်ပါမည်။" : "ဥက္ကဌ အတည်ပြုချက်ရပြီးမှ အသက်ဝင်ပါမည်။");
     }
-    setRateMemberIds([]);
-    setRateAmount("");
-    setRateEnd("");
-    setRateReason("");
-  }, [canEdit, currentUser, rateAmount, rateStart, rateScope, rateMemberIds, rateEnd, ratePosition, rateReason, isChair, role, persist, rateRules, reliefRules, policyRequests]);
+    resetRateEditor();
+  }, [canEdit, currentUser, editingRateRuleIds, rateAmount, rateStart, rateScope, rateMemberIds, rateEnd, ratePosition, rateReason, isChair, role, persist, rateRules, reliefRules, policyRequests, resetRateEditor]);
 
   const addRelief = useCallback(async () => {
     if (!canEdit || !currentUser?.id) return;
+    const isEditing = editingReliefRuleIds.length > 0;
     if (!reliefStart.trim()) return Alert.alert("လိုအပ်ချက်", "စတင်နေ့ ထည့်ပါ။");
     if (reliefMode !== "full" && Math.max(0, Number(reliefValue || 0)) <= 0) return Alert.alert("လိုအပ်ချက်", "ကင်းလွတ်/သက်သာတန်ဖိုး ထည့်ပါ။");
     const targets = reliefScope === "member" ? reliefMemberIds : [""];
     if (reliefScope === "member" && targets.length === 0) return Alert.alert("လိုအပ်ချက်", "အသင်းဝင်ရွေးချယ်ပါ။");
     const now = new Date().toISOString();
+    const editableRules = reliefRules.filter((row) => editingReliefRuleIds.includes(String(row.id || "")));
+    const editableByMember = new Map<string, string>();
+    editableRules.forEach((row) => editableByMember.set(String(row.memberId || ""), String(row.id || "")));
     const rules = targets.map((id) => ({
-      id: requestId("fee-relief"),
+      id:
+        editableByMember.get(String(id || "")) ||
+        (editingReliefRuleIds[0] && targets.length === 1 ? editingReliefRuleIds[0] : requestId("fee-relief")),
       scope: reliefScope,
       mode: reliefMode,
       value: reliefMode === "full" ? undefined : Math.max(0, Number(reliefValue || 0)),
@@ -256,6 +498,9 @@ export default function MonthlyFeesScreen() {
     })) as MonthlyFeeReliefRule[];
 
     if (isChair) {
+      const keptReliefs = isEditing
+        ? reliefRules.filter((row) => !editingReliefRuleIds.includes(String(row.id || "")))
+        : reliefRules;
       const approved = rules.map((payload) => ({
         id: requestId("fee-policy-req"),
         policyType: "relief_rule",
@@ -271,8 +516,22 @@ export default function MonthlyFeesScreen() {
         reviewedAt: now,
         appliedAt: now,
       })) as MonthlyFeePolicyRequest[];
-      await persist(rateRules, [...reliefRules, ...rules], [...policyRequests, ...approved]);
+      await persist(rateRules, [...keptReliefs, ...rules], [...policyRequests, ...approved]);
     } else {
+      const pendingDeletes = isEditing
+        ? editingReliefRuleIds.map((targetRuleId) => ({
+            id: requestId("fee-policy-req"),
+            policyType: "relief_rule" as const,
+            action: "delete" as const,
+            targetRuleId,
+            payload: editableRules.find((row) => String(row.id || "") === String(targetRuleId)) || rules[0],
+            status: "pending_chair_approval" as const,
+            createdByUserId: String(currentUser.id),
+            createdByMemberId: String(currentUser.memberId || "") || undefined,
+            createdByRole: role,
+            createdAt: now,
+          }))
+        : [];
       const pending = rules.map((payload) => ({
         id: requestId("fee-policy-req"),
         policyType: "relief_rule",
@@ -284,21 +543,30 @@ export default function MonthlyFeesScreen() {
         createdByRole: role,
         createdAt: now,
       })) as MonthlyFeePolicyRequest[];
-      await persist(rateRules, reliefRules, [...policyRequests, ...pending]);
-      Alert.alert("တင်ပြပြီးပါပြီ", "ဥက္ကဌ အတည်ပြုချက်ရပြီးမှ အသက်ဝင်ပါမည်။");
+      await persist(rateRules, reliefRules, [...policyRequests, ...pendingDeletes, ...pending]);
+      Alert.alert("တင်ပြပြီးပါပြီ", isEditing ? "ပြင်ဆင်ချက်ကို ဥက္ကဌအတည်ပြုပြီးမှ အသက်ဝင်ပါမည်။" : "ဥက္ကဌ အတည်ပြုချက်ရပြီးမှ အသက်ဝင်ပါမည်။");
     }
-    setReliefMemberIds([]);
-    setReliefValue("");
-    setReliefEnd("");
-    setReliefReason("");
-  }, [canEdit, currentUser, reliefStart, reliefMode, reliefValue, reliefScope, reliefMemberIds, reliefEnd, reliefPosition, reliefReason, isChair, role, persist, rateRules, reliefRules, policyRequests]);
+    resetReliefEditor();
+  }, [canEdit, currentUser, editingReliefRuleIds, reliefStart, reliefMode, reliefValue, reliefScope, reliefMemberIds, reliefEnd, reliefPosition, reliefReason, isChair, role, persist, rateRules, reliefRules, policyRequests, resetReliefEditor]);
 
   const approvePending = useCallback(async (req: MonthlyFeePolicyRequest, approve: boolean) => {
     if (!isChair || !currentUser?.id) return;
     let nextRates = [...rateRules];
     let nextReliefs = [...reliefRules];
-    if (approve && req.policyType === "rate_rule") nextRates = [...nextRates, req.payload as MonthlyFeeRateRule];
-    if (approve && req.policyType === "relief_rule") nextReliefs = [...nextReliefs, req.payload as MonthlyFeeReliefRule];
+    if (approve && req.policyType === "rate_rule" && req.action === "create") {
+      const payload = req.payload as MonthlyFeeRateRule;
+      nextRates = [...nextRates.filter((row) => String(row.id || "") !== String(payload.id || "")), payload];
+    }
+    if (approve && req.policyType === "rate_rule" && req.action === "delete" && req.targetRuleId) {
+      nextRates = nextRates.filter((row) => String(row.id || "") !== String(req.targetRuleId || ""));
+    }
+    if (approve && req.policyType === "relief_rule" && req.action === "create") {
+      const payload = req.payload as MonthlyFeeReliefRule;
+      nextReliefs = [...nextReliefs.filter((row) => String(row.id || "") !== String(payload.id || "")), payload];
+    }
+    if (approve && req.policyType === "relief_rule" && req.action === "delete" && req.targetRuleId) {
+      nextReliefs = nextReliefs.filter((row) => String(row.id || "") !== String(req.targetRuleId || ""));
+    }
     const now = new Date().toISOString();
     const nextRequests = policyRequests.map((row) => (row.id === req.id ? { ...row, status: approve ? "approved" : "rejected", reviewedByUserId: currentUser.id, reviewedAt: now, appliedAt: approve ? now : row.appliedAt } : row));
     await persist(nextRates, nextReliefs, nextRequests as MonthlyFeePolicyRequest[]);
@@ -329,12 +597,25 @@ export default function MonthlyFeesScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>နှုန်းထား စည်းမျဉ်းများ ({rateRules.length})</Text>
-          {rateRules.map((r) => <Text key={r.id} style={styles.meta}>- {r.scope === "member" ? `${memberNameById.get(String(r.memberId || "")) || "-"} (${r.memberId || "-"})` : r.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(r.position || "member")]}` : "အားလုံး"} | {Number(r.amount || 0).toLocaleString()} KS | {r.effectiveFrom} ~ {r.effectiveTo || "-"}</Text>)}
+          {groupedRateRules.map((r) => (
+            <Pressable key={r.key} style={styles.ruleRowPressable} onPress={() => setRateDetailRow(r)}>
+              <Text style={styles.meta}>
+                - {r.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(r.position || "member")]}` : r.scope === "global" ? "အားလုံး" : `အသင်းဝင် (${r.memberIds.length})`}
+                {" | "}
+                {Number(r.amount || 0).toLocaleString()} KS
+                {" | "}
+                {r.effectiveFrom} ~ {r.effectiveTo || "-"}
+              </Text>
+              {r.scope === "member" ? <MemberNamesReadMore prefix="  အသင်းဝင်: " memberIds={r.memberIds} memberNameById={memberNameById} /> : null}
+              <Text style={styles.ruleTapHint}>အသေးစိတ်ကြည့်ရန် / ပြင်ဆင်ရန်</Text>
+            </Pressable>
+          ))}
         </View>
 
         {canEdit ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>နှုန်းထားအသစ် ထည့်ရန်</Text>
+            <Text style={styles.cardTitle}>{editingRateRuleIds.length > 0 ? "နှုန်းထား ပြင်ဆင်ရန်" : "နှုန်းထားအသစ် ထည့်ရန်"}</Text>
+            {editingRateRuleIds.length > 0 ? <Text style={styles.meta}>Edit Mode ({editingRateRuleIds.length}) - ပြင်ပြီး Update နှိပ်ပါ။</Text> : null}
             <View style={styles.inlineBtns}>
               {(["global", "position", "member"] as MonthlyFeeRuleScope[]).map((scope) => (
                 <Pressable
@@ -368,8 +649,9 @@ export default function MonthlyFeesScreen() {
                   <Text style={styles.toggleBtnText}>Member List ရွေးချယ်ရန် (Popup)</Text>
                 </Pressable>
                 <Text style={styles.meta}>
-                  ရွေးထားသည်: {rateMemberIds.map((id) => `${memberNameById.get(id) || "-"} (${id})`).join(", ") || "-"}
+                  ရွေးထားသည် ({rateMemberIds.length})
                 </Text>
+                <MemberNamesReadMore memberIds={rateMemberIds} memberNameById={memberNameById} />
               </View>
             ) : null}
             <TextInput style={styles.input} value={rateAmount} onChangeText={setRateAmount} placeholder="နှုန်းထား (KS/လ)" keyboardType="numeric" />
@@ -393,18 +675,38 @@ export default function MonthlyFeesScreen() {
               </Pressable>
             </View>
             <TextInput style={styles.input} value={rateReason} onChangeText={setRateReason} placeholder="အကြောင်းအရာ" />
-            <Pressable style={styles.saveBtn} onPress={() => void addRate()}><Text style={styles.saveBtnText}>Save</Text></Pressable>
+            <View style={styles.inlineBtns}>
+              <Pressable style={styles.saveBtn} onPress={() => void addRate()}><Text style={styles.saveBtnText}>{editingRateRuleIds.length > 0 ? "Update" : "Save"}</Text></Pressable>
+              {editingRateRuleIds.length > 0 ? (
+                <Pressable style={styles.cancelBtn} onPress={resetRateEditor}>
+                  <Text style={styles.cancelBtnText}>Cancel Edit</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         ) : null}
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>ကင်းလွတ်/သက်သာ စည်းမျဉ်းများ ({reliefRules.length})</Text>
-          {reliefRules.map((r) => <Text key={r.id} style={styles.meta}>- {r.scope === "member" ? `${memberNameById.get(String(r.memberId || "")) || "-"} (${r.memberId || "-"})` : r.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(r.position || "member")]}` : "အားလုံး"} | {r.mode} | {r.effectiveFrom} ~ {r.effectiveTo || "-"}</Text>)}
+          {groupedReliefRules.map((r) => (
+            <Pressable key={r.key} style={styles.ruleRowPressable} onPress={() => setReliefDetailRow(r)}>
+              <Text style={styles.meta}>
+                - {r.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(r.position || "member")]}` : r.scope === "global" ? "အားလုံး" : `အသင်းဝင် (${r.memberIds.length})`}
+                {" | "}
+                {r.mode === "full" ? "ကင်းလွတ်" : r.mode === "percent" ? `${Number(r.value || 0)}% သက်သာ` : `${Number(r.value || 0).toLocaleString()} KS သက်သာ`}
+                {" | "}
+                {r.effectiveFrom} ~ {r.effectiveTo || "-"}
+              </Text>
+              {r.scope === "member" ? <MemberNamesReadMore prefix="  အသင်းဝင်: " memberIds={r.memberIds} memberNameById={memberNameById} /> : null}
+              <Text style={styles.ruleTapHint}>အသေးစိတ်ကြည့်ရန် / ပြင်ဆင်ရန်</Text>
+            </Pressable>
+          ))}
         </View>
 
         {canEdit ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>ကင်းလွတ်/သက်သာ အသစ်ထည့်ရန်</Text>
+            <Text style={styles.cardTitle}>{editingReliefRuleIds.length > 0 ? "ကင်းလွတ်/သက်သာ ပြင်ဆင်ရန်" : "ကင်းလွတ်/သက်သာ အသစ်ထည့်ရန်"}</Text>
+            {editingReliefRuleIds.length > 0 ? <Text style={styles.meta}>Edit Mode ({editingReliefRuleIds.length}) - ပြင်ပြီး Update နှိပ်ပါ။</Text> : null}
             <View style={styles.inlineBtns}>
               {(["global", "position", "member"] as MonthlyFeeRuleScope[]).map((scope) => (
                 <Pressable
@@ -451,8 +753,9 @@ export default function MonthlyFeesScreen() {
                   <Text style={styles.toggleBtnText}>Member List ရွေးချယ်ရန် (Popup)</Text>
                 </Pressable>
                 <Text style={styles.meta}>
-                  ရွေးထားသည်: {reliefMemberIds.map((id) => `${memberNameById.get(id) || "-"} (${id})`).join(", ") || "-"}
+                  ရွေးထားသည် ({reliefMemberIds.length})
                 </Text>
+                <MemberNamesReadMore memberIds={reliefMemberIds} memberNameById={memberNameById} />
               </View>
             ) : null}
             <TextInput style={styles.input} value={reliefValue} onChangeText={setReliefValue} placeholder="တန်ဖိုး (full မဟုတ်လျှင်)" keyboardType="numeric" />
@@ -476,7 +779,14 @@ export default function MonthlyFeesScreen() {
               </Pressable>
             </View>
             <TextInput style={styles.input} value={reliefReason} onChangeText={setReliefReason} placeholder="အကြောင်းအရာ" />
-            <Pressable style={styles.saveBtn} onPress={() => void addRelief()}><Text style={styles.saveBtnText}>Save</Text></Pressable>
+            <View style={styles.inlineBtns}>
+              <Pressable style={styles.saveBtn} onPress={() => void addRelief()}><Text style={styles.saveBtnText}>{editingReliefRuleIds.length > 0 ? "Update" : "Save"}</Text></Pressable>
+              {editingReliefRuleIds.length > 0 ? (
+                <Pressable style={styles.cancelBtn} onPress={resetReliefEditor}>
+                  <Text style={styles.cancelBtnText}>Cancel Edit</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         ) : null}
 
@@ -526,6 +836,62 @@ export default function MonthlyFeesScreen() {
                 );
               })}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!rateDetailRow} transparent animationType="fade" onRequestClose={() => setRateDetailRow(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>နှုန်းထား စည်းမျဉ်း အသေးစိတ်</Text>
+            <ScrollView style={styles.memberListScroll}>
+              {detailRateRules.map((row, idx) => (
+                <View key={`dr-${row.id}-${idx}`} style={styles.ruleDetailItem}>
+                  <Text style={styles.meta}>{idx + 1}. {row.scope === "member" ? `${memberNameById.get(String(row.memberId || "")) || "-"} (${row.memberId || "-"})` : row.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(row.position || "member")]}` : "အားလုံး"}</Text>
+                  <Text style={styles.meta}>နှုန်းထား: {Number(row.amount || 0).toLocaleString()} KS</Text>
+                  <Text style={styles.meta}>ကာလ: {row.effectiveFrom} ~ {row.effectiveTo || "-"}</Text>
+                  {row.reason ? <Text style={styles.meta}>အကြောင်းအရာ: {row.reason}</Text> : null}
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.inlineBtns}>
+              {canEdit ? (
+                <Pressable style={[styles.chipBtn, styles.chipBtnActive]} onPress={() => rateDetailRow && beginEditRateGroup(rateDetailRow)}>
+                  <Text style={[styles.chipBtnText, styles.chipBtnTextActive]}>ပြင်ဆင်ရန်</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.chipBtn} onPress={() => setRateDetailRow(null)}>
+                <Text style={styles.chipBtnText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!reliefDetailRow} transparent animationType="fade" onRequestClose={() => setReliefDetailRow(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>ကင်းလွတ်/သက်သာ စည်းမျဉ်း အသေးစိတ်</Text>
+            <ScrollView style={styles.memberListScroll}>
+              {detailReliefRules.map((row, idx) => (
+                <View key={`drl-${row.id}-${idx}`} style={styles.ruleDetailItem}>
+                  <Text style={styles.meta}>{idx + 1}. {row.scope === "member" ? `${memberNameById.get(String(row.memberId || "")) || "-"} (${row.memberId || "-"})` : row.scope === "position" ? `ရာထူး: ${ORG_POSITION_LABELS[normalizeOrgPosition(row.position || "member")]}` : "အားလုံး"}</Text>
+                  <Text style={styles.meta}>အမျိုးအစား: {row.mode === "full" ? "ကင်းလွတ်" : row.mode === "percent" ? `${Number(row.value || 0)}% သက်သာ` : `${Number(row.value || 0).toLocaleString()} KS သက်သာ`}</Text>
+                  <Text style={styles.meta}>ကာလ: {row.effectiveFrom} ~ {row.effectiveTo || "-"}</Text>
+                  {row.reason ? <Text style={styles.meta}>အကြောင်းအရာ: {row.reason}</Text> : null}
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.inlineBtns}>
+              {canEdit ? (
+                <Pressable style={[styles.chipBtn, styles.chipBtnActive]} onPress={() => reliefDetailRow && beginEditReliefGroup(reliefDetailRow)}>
+                  <Text style={[styles.chipBtnText, styles.chipBtnTextActive]}>ပြင်ဆင်ရန်</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.chipBtn} onPress={() => setReliefDetailRow(null)}>
+                <Text style={styles.chipBtnText}>Close</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -611,8 +977,17 @@ const styles = StyleSheet.create({
   smallActionText: { color: "white", fontSize: 12, fontWeight: "700" },
   saveBtn: { backgroundColor: Colors.light.tint, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
   saveBtnText: { color: "white", fontWeight: "800" },
+  cancelBtn: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingVertical: 11, paddingHorizontal: 14, alignItems: "center", backgroundColor: "white" },
+  cancelBtnText: { color: Colors.light.textSecondary, fontWeight: "700" },
   input: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, color: Colors.light.text, backgroundColor: "white" },
   selectorWrap: { gap: 6 },
+  ruleRow: { gap: 4 },
+  ruleRowPressable: { gap: 4, borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 8, backgroundColor: "#F8FAFC" },
+  ruleTapHint: { color: Colors.light.tint, fontSize: 11, fontWeight: "700" },
+  ruleDetailItem: { borderBottomWidth: 1, borderBottomColor: "#EEF2F7", paddingVertical: 8, gap: 2 },
+  readMoreWrap: { gap: 4 },
+  readMoreBtn: { alignSelf: "flex-start" },
+  readMoreText: { color: Colors.light.tint, fontSize: 12, fontWeight: "700" },
   dateRow: { flexDirection: "row", gap: 8 },
   dateBtn: { flex: 1, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "white" },
   dateBtnLabel: { fontSize: 11, fontWeight: "700", color: Colors.light.textSecondary },
