@@ -63,6 +63,7 @@ export default function AuditChangeRequestsScreen() {
     loans,
     members,
     users,
+    createAuditChangeRequest,
     addAuditChangeRequestMessage,
     changeAuditChangeRequestStatus,
     applyAuditChangeRequestPatch,
@@ -87,6 +88,12 @@ export default function AuditChangeRequestsScreen() {
   const [fixDate, setFixDate] = useState("");
   const [fixReceipt, setFixReceipt] = useState("");
   const [fixNotes, setFixNotes] = useState("");
+  const [showCreateDeleteModal, setShowCreateDeleteModal] = useState(false);
+  const [createDeleteTargetType, setCreateDeleteTargetType] = useState<"transaction" | "loan">("transaction");
+  const [createDeleteTargetId, setCreateDeleteTargetId] = useState("");
+  const [createDeleteSearch, setCreateDeleteSearch] = useState("");
+  const [createDeleteNote, setCreateDeleteNote] = useState("");
+  const [showCreateTargetPicker, setShowCreateTargetPicker] = useState(false);
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
   const isAdmin = currentUser?.systemRole === "admin";
@@ -124,6 +131,76 @@ export default function AuditChangeRequestsScreen() {
     const suspended = base.filter((item: any) => item.status === "suspended").length;
     return { total: base.length, pending, approved, rejected, cancelled, suspended };
   }, [allRequests, canView, currentUser?.id]);
+
+  const memberNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    (Array.isArray(members) ? members : []).forEach((m: any) => {
+      const id = String(m?.id || "").trim();
+      if (id) map.set(id, String(m?.name || id));
+    });
+    return map;
+  }, [members]);
+
+  const createTargetOptions = useMemo(() => {
+    const search = createDeleteSearch.trim().toLowerCase();
+    if (createDeleteTargetType === "loan") {
+      const rows = (Array.isArray(loans) ? loans : [])
+        .map((loan: any) => {
+          const id = String(loan?.id || "").trim();
+          const memberId = String(loan?.memberId || "").trim();
+          const memberName = memberNameById.get(memberId) || memberId || "-";
+          const amount = Number(loan?.principal || loan?.amount || 0);
+          const issueDate = String(loan?.issueDate || "-");
+          const label = `${id} • ${memberName} • ${amount.toLocaleString()} KS • ${issueDate}`;
+          return { id, label };
+        })
+        .filter((row) => row.id);
+      if (!search) return rows;
+      return rows.filter((row) => row.label.toLowerCase().includes(search) || row.id.toLowerCase().includes(search));
+    }
+
+    const rows = (Array.isArray(transactions) ? transactions : [])
+      .map((txn: any) => {
+        const id = String(txn?.id || "").trim();
+        const memberId = String(txn?.memberId || "").trim();
+        const memberName = memberNameById.get(memberId) || String(txn?.payerPayee || memberId || "-");
+        const amount = Number(txn?.amount || 0);
+        const date = String(txn?.date || "-");
+        const category = String(txn?.categoryLabel || txn?.category || "-");
+        const label = `${id} • ${memberName} • ${category} • ${amount.toLocaleString()} KS • ${date}`;
+        return { id, label };
+      })
+      .filter((row) => row.id);
+    if (!search) return rows;
+    return rows.filter((row) => row.label.toLowerCase().includes(search) || row.id.toLowerCase().includes(search));
+  }, [createDeleteSearch, createDeleteTargetType, loans, memberNameById, transactions]);
+
+  const selectedCreateTarget = useMemo(
+    () => createTargetOptions.find((row) => String(row.id || "") === String(createDeleteTargetId || "")) || null,
+    [createTargetOptions, createDeleteTargetId]
+  );
+
+  const updateAppliedRows = useMemo(
+    () =>
+      allRequests.filter(
+        (row: any) =>
+          String(row?.requestKind || "") === "update" &&
+          Array.isArray(row?.revisions) &&
+          row.revisions.length > 0 &&
+          String(row?.status || "") === "approved"
+      ),
+    [allRequests]
+  );
+
+  const deleteExecutedRows = useMemo(
+    () =>
+      allRequests.filter((row: any) => {
+        if (String(row?.requestKind || "") !== "delete") return false;
+        if (String(row?.status || "") !== "approved" || String(row?.workflowStage || "") !== "completed") return false;
+        return Array.isArray(row?.revisions) && row.revisions.some((rev: any) => String(rev?.patch?.__action || "") === "delete");
+      }),
+    [allRequests]
+  );
 
   React.useEffect(() => {
     const targetId = String(requestId || "").trim();
@@ -212,6 +289,60 @@ export default function AuditChangeRequestsScreen() {
     setFixReceipt(String((selectedTxn as any)?.receiptNumber || ""));
     setFixNotes(String((selectedTxn as any)?.notes || ""));
     setShowFixModal(true);
+  };
+
+  const openCreateDeleteRequestModal = () => {
+    setCreateDeleteTargetType("transaction");
+    setCreateDeleteTargetId("");
+    setCreateDeleteSearch("");
+    setCreateDeleteNote("");
+    setShowCreateDeleteModal(true);
+  };
+
+  const submitCreateDeleteRequest = async () => {
+    if (!currentUser?.id) return;
+    const note = createDeleteNote.trim();
+    if (!note) return Alert.alert("လိုအပ်ချက်", "Delete Request မှတ်ချက်ဖြည့်ပါ။");
+    const targetId = String(createDeleteTargetId || "").trim();
+    if (!targetId) return Alert.alert("လိုအပ်ချက်", "ဖျက်သိမ်းလိုသော စာရင်းကို ရွေးချယ်ပါ။");
+
+    try {
+      if (createDeleteTargetType === "loan") {
+        await createAuditChangeRequest({
+          requestKind: "delete",
+          targetType: "loan",
+          targetId,
+          relatedLoanId: targetId,
+          auditNote: note,
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+          createdByDisplayName: currentUser.displayName,
+        });
+      } else {
+        await createAuditChangeRequest({
+          requestKind: "delete",
+          targetType: "transaction",
+          targetId,
+          transactionId: targetId,
+          auditNote: note,
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+          createdByDisplayName: currentUser.displayName,
+        });
+      }
+      setShowCreateDeleteModal(false);
+      setCreateDeleteTargetId("");
+      setCreateDeleteSearch("");
+      setCreateDeleteNote("");
+      Alert.alert("အောင်မြင်ပါသည်", "Delete Request ကို Audit workflow သို့ တင်သွင်းပြီးပါပြီ။");
+    } catch (error: any) {
+      const msg = String(error?.message || "");
+      if (msg.includes("request_conflict_in_progress")) {
+        Alert.alert("တားဆီးထားပါသည်", "ဤစာရင်းအတွက် Request တစ်ခု ဆောင်ရွက်နေပြီးဖြစ်ပါသည်။");
+        return;
+      }
+      Alert.alert("အမှား", "Delete Request တင်သွင်းရာတွင် အဆင်မပြေပါ။");
+    }
   };
 
   const resolveReplyTarget = () => {
@@ -420,6 +551,15 @@ export default function AuditChangeRequestsScreen() {
           <Ionicons name="flag-outline" size={20} color={Colors.light.textSecondary} />
         </View>
 
+        {isAuditor ? (
+          <View style={styles.inlineActionWrap}>
+            <Pressable style={styles.inlineCreateDeleteBtn} onPress={openCreateDeleteRequestModal}>
+              <Ionicons name="trash-outline" size={16} color="#fff" />
+              <Text style={styles.inlineCreateDeleteBtnText}>Audit မှ Delete Request အသစ်တင်မည်</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.countCard}>
           <Text style={styles.countLine}>Total: {counts.total}</Text>
           <Text style={styles.countLine}>Pending: {counts.pending}</Text>
@@ -443,6 +583,59 @@ export default function AuditChangeRequestsScreen() {
             </Pressable>
           ))}
         </ScrollView>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>ပြင်ဆင်ပြီး ငွေစာရင်းအသေးစိတ် ({updateAppliedRows.length})</Text>
+          {updateAppliedRows.length === 0 ? (
+            <Text style={styles.sectionEmptyText}>ပြင်ဆင်ပြီးမှတ်တမ်း မရှိသေးပါ။</Text>
+          ) : (
+            updateAppliedRows.slice(0, 12).map((row: any) => {
+              const latestRev = Array.isArray(row?.revisions) ? row.revisions[row.revisions.length - 1] : null;
+              const changedFields = latestRev ? Object.keys(latestRev.patch || {}).filter((key) => !key.startsWith("__")) : [];
+              const beforeAmount = Number(latestRev?.before?.amount || 0);
+              const afterAmount = Number(latestRev?.after?.amount || 0);
+              const memberId = String(latestRev?.after?.memberId || latestRev?.before?.memberId || "").trim();
+              const memberName = memberNameById.get(memberId) || memberId || "-";
+              return (
+                <Pressable key={`upd-${row.id}`} style={styles.auditHistoryCard} onPress={() => openDetail(String(row.id || ""))}>
+                  <Text style={styles.auditHistoryTitle}>{row.requestNumber || row.id}</Text>
+                  <Text style={styles.auditHistoryMeta}>အသင်းဝင်: {memberName}</Text>
+                  <Text style={styles.auditHistoryMeta}>Target: {String(row.targetType || "transaction")} / {String(row.targetId || row.transactionId || "-")}</Text>
+                  <Text style={styles.auditHistoryMeta}>ပြင်ဆင်ကွက်: {changedFields.length > 0 ? changedFields.join(", ") : "-"}</Text>
+                  <Text style={styles.auditHistoryMeta}>ပမာဏ: {beforeAmount.toLocaleString()} KS → {afterAmount.toLocaleString()} KS</Text>
+                  <Text style={styles.auditHistoryMeta}>ပြင်ဆင်ချိန်: {fmtDateTime(latestRev?.createdAt || row.reviewedAt || row.updatedAt)}</Text>
+                </Pressable>
+              );
+            })
+          )}
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>ပယ်ဖျက်ပြီး ငွေစာရင်းအသေးစိတ် ({deleteExecutedRows.length})</Text>
+          {deleteExecutedRows.length === 0 ? (
+            <Text style={styles.sectionEmptyText}>ပယ်ဖျက်ပြီးမှတ်တမ်း မရှိသေးပါ။</Text>
+          ) : (
+            deleteExecutedRows.slice(0, 12).map((row: any) => {
+              const latestRev = Array.isArray(row?.revisions) ? row.revisions[row.revisions.length - 1] : null;
+              const memberId = String(latestRev?.before?.memberId || "").trim();
+              const memberName = memberNameById.get(memberId) || memberId || "-";
+              const deletedAmount = Number(
+                latestRev?.before?.amount ?? latestRev?.before?.principal ?? latestRev?.before?.__linkedTransactions?.[0]?.amount ?? 0
+              );
+              const linkedCount = Number(latestRev?.patch?.__removedLinkedTransactionIds?.length || 0);
+              return (
+                <Pressable key={`del-${row.id}`} style={styles.auditHistoryCard} onPress={() => openDetail(String(row.id || ""))}>
+                  <Text style={styles.auditHistoryTitle}>{row.requestNumber || row.id}</Text>
+                  <Text style={styles.auditHistoryMeta}>အသင်းဝင်: {memberName}</Text>
+                  <Text style={styles.auditHistoryMeta}>Target: {String(row.targetType || "-")} / {String(row.targetId || "-")}</Text>
+                  <Text style={styles.auditHistoryMeta}>ပယ်ဖျက်ပမာဏ: {deletedAmount.toLocaleString()} KS</Text>
+                  <Text style={styles.auditHistoryMeta}>Linked ဖျက်သိမ်းစာရင်း: {linkedCount.toLocaleString()} ခု</Text>
+                  <Text style={styles.auditHistoryMeta}>ပယ်ဖျက်ချိန်: {fmtDateTime(latestRev?.createdAt || row.updatedAt)}</Text>
+                </Pressable>
+              );
+            })
+          )}
+        </View>
 
         {visibleRequests.length === 0 ? (
           <View style={styles.emptyWrap}>
@@ -688,6 +881,110 @@ export default function AuditChangeRequestsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      <Modal animationType="slide" transparent visible={showCreateDeleteModal} onRequestClose={() => setShowCreateDeleteModal(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          style={styles.modalOverlay}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCreateDeleteModal(false)} />
+          <ScrollView style={styles.modalCard} contentContainerStyle={{ paddingBottom: insets.bottom + 16 }} keyboardShouldPersistTaps="handled">
+            <Text style={styles.modalTitle}>Delete Request အသစ်</Text>
+            <Text style={styles.modalMeta}>Audit Change Requests ထဲမှ တိုက်ရိုက်တင်သွင်းနိုင်ပါသည်။</Text>
+
+            <Text style={styles.sectionLabel}>Target Type</Text>
+            <View style={styles.actionRow}>
+              <Pressable
+                style={[styles.actionBtn, { backgroundColor: createDeleteTargetType === "transaction" ? Colors.light.tint : "#64748B" }]}
+                onPress={() => {
+                  setCreateDeleteTargetType("transaction");
+                  setCreateDeleteTargetId("");
+                  setCreateDeleteSearch("");
+                }}
+              >
+                <Text style={styles.actionBtnText}>Transaction</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.actionBtn, { backgroundColor: createDeleteTargetType === "loan" ? Colors.light.tint : "#64748B" }]}
+                onPress={() => {
+                  setCreateDeleteTargetType("loan");
+                  setCreateDeleteTargetId("");
+                  setCreateDeleteSearch("");
+                }}
+              >
+                <Text style={styles.actionBtnText}>Loan</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.sectionLabel}>Target စာရင်းရှာရန်</Text>
+            <TextInput
+              style={styles.input}
+              value={createDeleteSearch}
+              onChangeText={setCreateDeleteSearch}
+              placeholder="ID / အမည် / ခေါင်းစဉ် / ရက်စွဲ"
+            />
+            <Pressable style={styles.selectionInput} onPress={() => setShowCreateTargetPicker(true)}>
+              <Text style={[styles.selectionInputText, !selectedCreateTarget && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                {selectedCreateTarget ? selectedCreateTarget.label : "ဖျက်သိမ်းလိုသော စာရင်းကိုရွေးပါ"}
+              </Text>
+              <Ionicons name="chevron-down" size={18} color={Colors.light.textSecondary} />
+            </Pressable>
+            <Text style={styles.modalMeta}>တွေ့ရှိသောစာရင်း: {createTargetOptions.length.toLocaleString()} ခု</Text>
+
+            <Text style={styles.sectionLabel}>Delete Request မှတ်ချက်</Text>
+            <TextInput
+              style={[styles.input, styles.noteInput]}
+              value={createDeleteNote}
+              onChangeText={setCreateDeleteNote}
+              placeholder="ပယ်ဖျက်ရန် အကြောင်းပြချက်ကို အသေးစိတ်ရေးပါ"
+              multiline
+            />
+
+            <Pressable style={[styles.actionBtn, { backgroundColor: "#D97706", marginTop: 8 }]} onPress={() => void submitCreateDeleteRequest()}>
+              <Text style={styles.actionBtnText}>Delete Request တင်သွင်းမည်</Text>
+            </Pressable>
+            <Pressable style={styles.closeBtn} onPress={() => setShowCreateDeleteModal(false)}>
+              <Text style={styles.closeBtnText}>Cancel</Text>
+            </Pressable>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal animationType="fade" transparent visible={showCreateTargetPicker} onRequestClose={() => setShowCreateTargetPicker(false)}>
+        <View style={styles.pickerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCreateTargetPicker(false)} />
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle}>ဖျက်သိမ်းမည့် စာရင်းရွေးပါ</Text>
+            <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
+              {createTargetOptions.map((row) => {
+                const selected = String(row.id || "") === String(createDeleteTargetId || "");
+                return (
+                  <Pressable
+                    key={String(row.id || "")}
+                    style={[styles.pickerItem, selected && styles.pickerItemActive]}
+                    onPress={() => {
+                      setCreateDeleteTargetId(String(row.id || ""));
+                      setShowCreateTargetPicker(false);
+                    }}
+                  >
+                    <Text style={[styles.pickerItemText, selected && styles.pickerItemTextActive]}>{row.label}</Text>
+                  </Pressable>
+                );
+              })}
+              {createTargetOptions.length === 0 ? (
+                <View style={styles.emptyWrap}>
+                  <Ionicons name="search-outline" size={24} color={Colors.light.textSecondary} />
+                  <Text style={styles.emptyText}>ရွေးချယ်ရန် စာရင်းမတွေ့ပါ</Text>
+                </View>
+              ) : null}
+            </ScrollView>
+            <Pressable style={styles.closeBtn} onPress={() => setShowCreateTargetPicker(false)}>
+              <Text style={styles.closeBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <Modal animationType="fade" transparent visible={showForwardPicker} onRequestClose={() => setShowForwardPicker(false)}>
         <View style={styles.pickerOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowForwardPicker(false)} />
@@ -761,6 +1058,25 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   countLine: { color: Colors.light.text, fontFamily: "Inter_500Medium", fontSize: 13 },
+  inlineActionWrap: {
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  inlineCreateDeleteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#D97706",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  inlineCreateDeleteBtnText: {
+    color: "#fff",
+    fontFamily: "Inter_700Bold",
+    fontSize: 12.5,
+  },
   filterRow: { paddingHorizontal: 16, gap: 8, paddingBottom: 10 },
   filterChip: {
     paddingHorizontal: 12,
@@ -790,6 +1106,45 @@ const styles = StyleSheet.create({
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
   statusBadgeText: { fontSize: 11.5, fontFamily: "Inter_700Bold" },
   requestMeta: { fontSize: 12.5, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  sectionCard: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    color: Colors.light.text,
+    fontFamily: "Inter_700Bold",
+    marginBottom: 8,
+  },
+  sectionEmptyText: {
+    fontSize: 12.5,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+  },
+  auditHistoryCard: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+    gap: 2,
+  },
+  auditHistoryTitle: {
+    color: Colors.light.text,
+    fontFamily: "Inter_700Bold",
+    fontSize: 12.5,
+  },
+  auditHistoryMeta: {
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+  },
   modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.45)" },
   modalCard: { backgroundColor: "#fff", borderTopLeftRadius: 18, borderTopRightRadius: 18, maxHeight: "90%", padding: 16 },
   modalTitle: { fontSize: 22, color: Colors.light.text, fontFamily: "Inter_700Bold", marginBottom: 8 },

@@ -921,7 +921,7 @@ export default function ReportsScreen() {
       .filter((t: any) => t.category === "loan_repayment")
       .reduce((sum: number, t: any) => sum + t.amount, 0);
     const interest = filteredTxns
-      .filter((t: any) => t.category === "interest_income" || t.category === "bank_interest")
+      .filter((t: any) => t.category === "interest_income")
       .reduce((sum: number, t: any) => sum + t.amount, 0);
     
     // Business rule: principal outstanding = total disbursed - total repaid (within selected filter scope)
@@ -1530,7 +1530,7 @@ export default function ReportsScreen() {
 
   const transferTransactions = useMemo(() => {
     return [...filteredTxns]
-      .filter((t: any) => t.type === "transfer" || t.category === "bank_deposit" || t.category === "bank_withdraw")
+      .filter((t: any) => t.type === "transfer" || t.category === "bank_deposit" || t.category === "bank_withdraw" || t.category === "bank_interest")
       .sort((a: any, b: any) => {
         const da = new Date(a.date).getTime();
         const db = new Date(b.date).getTime();
@@ -1542,6 +1542,7 @@ export default function ReportsScreen() {
   const incomeByCategory = useMemo(() => {
     const map = new Map<string, { amount: number; count: number }>();
     incomeTransactions.forEach((t: any) => {
+      if (String(t.category || "") === "bank_interest") return;
       const key = String(t.category || "other_income");
       const prev = map.get(key) || { amount: 0, count: 0 };
       map.set(key, { amount: prev.amount + Number(t.amount || 0), count: prev.count + 1 });
@@ -1762,6 +1763,47 @@ export default function ReportsScreen() {
           {hasPeriod ? <Text style={styles.registerCardMeta}>ကာလ: {fromDate} မှ {toDate}</Text> : null}
           {memberIdText ? <Text style={styles.registerCardMeta}>အသင်းဝင်အမှတ်: {memberIdText}</Text> : null}
           {notes ? <Text style={styles.registerCardNote}>မှတ်ချက်: {notes}</Text> : null}
+        </View>
+      );
+    },
+    [memberNameById]
+  );
+
+  const renderIncomeExpenseTableRow = useCallback(
+    (t: any, index: number) => {
+      const memberName = String(
+        t?.payerPayee ||
+          memberNameById.get(String(t?.memberId || "")) ||
+          t?.memberId ||
+          "-"
+      );
+      const amount = Number(t?.amount || 0);
+      const isExpense = String(t?.type || "") === "expense";
+      const notes = getReadableNotes(t?.notes);
+      const detailBase = `${getCategoryLabel(t?.category)} - ${memberName}`;
+      const detailText = notes ? `${detailBase} | ${notes}` : detailBase;
+      const incomeText = isExpense ? "-" : `${amount.toLocaleString()} KS`;
+      const expenseText = isExpense ? `${amount.toLocaleString()} KS` : "-";
+
+      return (
+        <View key={`income-expense-row-${t?.id || index}`} style={styles.incomeExpenseTableRow}>
+          <View style={[styles.incomeExpenseCell, styles.incomeExpenseColDate]}>
+            <Text style={styles.incomeExpenseCellText}>{formatDateForRegister(t?.date)}</Text>
+          </View>
+          <View style={[styles.incomeExpenseCell, styles.incomeExpenseColReceipt]}>
+            <Text style={styles.incomeExpenseCellText}>{String(t?.receiptNumber || "-")}</Text>
+          </View>
+          <View style={[styles.incomeExpenseCell, styles.incomeExpenseColDetail]}>
+            <Text style={styles.incomeExpenseDetailText} numberOfLines={2}>
+              {detailText}
+            </Text>
+          </View>
+          <View style={[styles.incomeExpenseCell, styles.incomeExpenseColAmount]}>
+            <Text style={[styles.incomeExpenseAmountText, { color: "#10B981" }]}>{incomeText}</Text>
+          </View>
+          <View style={[styles.incomeExpenseCell, styles.incomeExpenseColAmount, styles.incomeExpenseCellLast]}>
+            <Text style={[styles.incomeExpenseAmountText, { color: "#F43F5E" }]}>{expenseText}</Text>
+          </View>
         </View>
       );
     },
@@ -2072,7 +2114,8 @@ export default function ReportsScreen() {
         if (type === "expense") row.expense += amount;
         if (category === "loan_disbursement") row.loanDisbursed += amount;
         if (category === "loan_repayment") row.loanRepaid += amount;
-        if (category === "interest_income" || category === "bank_interest") row.interestIncome += amount;
+        if (category === "interest_income") row.interestIncome += amount;
+        if (category === "bank_interest" && type === "income") row.transferIn += amount;
         if (type === "transfer" && category === "bank_withdraw") row.transferIn += amount;
         if (type === "transfer" && category === "bank_deposit") row.transferOut += amount;
 
@@ -3090,7 +3133,28 @@ export default function ReportsScreen() {
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>အသေးစိတ် စာရင်းများ</Text>
                 {renderDetailSortToggle()}
-                {pagedNonTransferRows.map((t: any, index: number) => renderTransactionDetailCard(t, index, "income-expense"))}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.incomeExpenseTableScroll}>
+                  <View style={styles.incomeExpenseTable}>
+                    <View style={styles.incomeExpenseTableHeader}>
+                      <View style={[styles.incomeExpenseCell, styles.incomeExpenseColDate]}>
+                        <Text style={styles.incomeExpenseHeaderText}>ရက်စွဲ</Text>
+                      </View>
+                      <View style={[styles.incomeExpenseCell, styles.incomeExpenseColReceipt]}>
+                        <Text style={styles.incomeExpenseHeaderText}>ပြေစာ</Text>
+                      </View>
+                      <View style={[styles.incomeExpenseCell, styles.incomeExpenseColDetail]}>
+                        <Text style={styles.incomeExpenseHeaderText}>အကြောင်းအရာ</Text>
+                      </View>
+                      <View style={[styles.incomeExpenseCell, styles.incomeExpenseColAmount]}>
+                        <Text style={styles.incomeExpenseHeaderText}>ရငွေ</Text>
+                      </View>
+                      <View style={[styles.incomeExpenseCell, styles.incomeExpenseColAmount, styles.incomeExpenseCellLast]}>
+                        <Text style={styles.incomeExpenseHeaderText}>အသုံးစရိတ်</Text>
+                      </View>
+                    </View>
+                    {pagedNonTransferRows.map((t: any, index: number) => renderIncomeExpenseTableRow(t, index))}
+                  </View>
+                </ScrollView>
                 {hasMoreNonTransferRows ? (
                   <View style={styles.loadMoreWrap}>
                     <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleTxnDetailCount((prev) => prev + REPORT_TXN_PAGE_SIZE)}>
@@ -4634,6 +4698,70 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: "#F8FAFC",
     gap: 4,
+  },
+  incomeExpenseTableScroll: {
+    marginBottom: 8,
+  },
+  incomeExpenseTable: {
+    minWidth: 760,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+  },
+  incomeExpenseTableHeader: {
+    flexDirection: "row",
+    backgroundColor: Colors.light.tint,
+  },
+  incomeExpenseTableRow: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+  incomeExpenseCell: {
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+    borderRightWidth: 1,
+    borderRightColor: "#E2E8F0",
+    justifyContent: "center",
+  },
+  incomeExpenseCellLast: {
+    borderRightWidth: 0,
+  },
+  incomeExpenseColDate: {
+    width: 100,
+  },
+  incomeExpenseColReceipt: {
+    width: 120,
+  },
+  incomeExpenseColDetail: {
+    width: 280,
+  },
+  incomeExpenseColAmount: {
+    width: 130,
+    alignItems: "flex-end",
+  },
+  incomeExpenseHeaderText: {
+    color: "#fff",
+    fontSize: 11.5,
+    fontFamily: "Inter_700Bold",
+  },
+  incomeExpenseCellText: {
+    fontSize: 12,
+    color: Colors.light.text,
+    fontFamily: "Inter_500Medium",
+  },
+  incomeExpenseDetailText: {
+    fontSize: 12,
+    color: Colors.light.text,
+    fontFamily: "Inter_500Medium",
+    lineHeight: 17,
+  },
+  incomeExpenseAmountText: {
+    fontSize: 12.5,
+    fontFamily: "Inter_700Bold",
+    textAlign: "right",
   },
   tableHeader: { flexDirection: "row", backgroundColor: Colors.light.tint, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 6, marginBottom: 4 },
   tableHeaderText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#fff", textAlign: "center" },

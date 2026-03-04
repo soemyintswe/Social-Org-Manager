@@ -1779,6 +1779,8 @@ export async function applyAuditChangeRequestPatch(input: {
   requests[reqIdx] = {
     ...req,
     status: "approved",
+    workflowStage: "completed",
+    assignedRole: undefined,
     reviewedByUserId: input.byUserId,
     reviewedAt: now,
     reviewNote: String(input.note || "").trim() || undefined,
