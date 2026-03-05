@@ -18,6 +18,7 @@ import type {
   UserAccount,
   MemberChangeRequest,
   AuditChangeRequest,
+  AuditExecutionLog,
   AuditChangeRequestStatus,
   AuditChangeMessageType,
   ExpenseClaim,
@@ -38,6 +39,7 @@ import {
   DEFAULT_CLOUD_SYNC_FOLDER_NAME,
   DEFAULT_LAN_SYNC_URL,
 } from "./sync-defaults";
+import { syncQueue } from "./sync-queue";
 
 interface DataContextValue {
   members: Member[];
@@ -49,6 +51,7 @@ interface DataContextValue {
   users: UserAccount[];
   memberChangeRequests: MemberChangeRequest[];
   auditChangeRequests: AuditChangeRequest[];
+  auditExecutionLogs: AuditExecutionLog[];
   expenseClaims: ExpenseClaim[];
   memberPaymentRequests: MemberPaymentRequest[];
   standardAmountRules: StandardAmountRule[];
@@ -251,6 +254,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [memberChangeRequests, setMemberChangeRequests] = useState<MemberChangeRequest[]>([]);
   const [auditChangeRequests, setAuditChangeRequests] = useState<AuditChangeRequest[]>([]);
+  const [auditExecutionLogs, setAuditExecutionLogs] = useState<AuditExecutionLog[]>([]);
   const [expenseClaims, setExpenseClaims] = useState<ExpenseClaim[]>([]);
   const [memberPaymentRequests, setMemberPaymentRequests] = useState<MemberPaymentRequest[]>([]);
   const [standardAmountRules, setStandardAmountRules] = useState<StandardAmountRule[]>([]);
@@ -296,20 +300,53 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const AUTO_PULL_INTERVAL_MS = 15000;
 
   const pushAllSyncTargets = useCallback(async () => {
-    await Promise.allSettled([
-      store.pushLanSnapshotFromLocal(),
-      store.pushCloudSnapshotFromLocal(),
-    ]);
+    try {
+      await syncQueue.enqueue(async () => {
+        const results = await Promise.allSettled([
+          store.pushLanSnapshotFromLocalDetailed(),
+          store.pushCloudSnapshotFromLocalDetailed(),
+        ]);
+        const hasHealthyResult = results.some((row) => {
+          if (row.status !== "fulfilled") return false;
+          if (row.value?.ok) return true;
+          const reason = String(row.value?.reason || "");
+          return (
+            reason === "disabled_or_empty_url" ||
+            reason === "cloud_disabled_or_empty_endpoint"
+          );
+        });
+        if (!hasHealthyResult) {
+          throw new Error("sync_push_all_failed");
+        }
+      });
+    } catch (error) {
+      console.warn("pushAllSyncTargets failed:", error);
+    }
   }, []);
 
   const pullAllSyncTargets = useCallback(async (): Promise<boolean> => {
-    const [lanChanged, cloudChanged] = await Promise.allSettled([
-      store.pullLanSnapshotToLocal(),
-      store.pullCloudSnapshotToLocal(),
-    ]);
-    const changedFromLan = lanChanged.status === "fulfilled" && lanChanged.value === true;
-    const changedFromCloud = cloudChanged.status === "fulfilled" && cloudChanged.value === true;
-    return changedFromLan || changedFromCloud;
+    try {
+      return await syncQueue.enqueue(async () => {
+        const [lanChanged, cloudChanged] = await Promise.allSettled([
+          store.pullLanSnapshotToLocalDetailed(),
+          store.pullCloudSnapshotToLocalDetailed(),
+        ]);
+        const changedFromLan = lanChanged.status === "fulfilled" && lanChanged.value.ok && lanChanged.value.changed === true;
+        const changedFromCloud = cloudChanged.status === "fulfilled" && cloudChanged.value.ok && cloudChanged.value.changed === true;
+        const hasHealthyResult =
+          (lanChanged.status === "fulfilled" &&
+            (lanChanged.value.ok || String(lanChanged.value.reason || "") === "disabled_or_empty_url")) ||
+          (cloudChanged.status === "fulfilled" &&
+            (cloudChanged.value.ok || String(cloudChanged.value.reason || "") === "cloud_disabled_or_empty_endpoint"));
+        if (!hasHealthyResult) {
+          throw new Error("sync_pull_all_failed");
+        }
+        return changedFromLan || changedFromCloud;
+      });
+    } catch (error) {
+      console.warn("pullAllSyncTargets failed:", error);
+      return false;
+    }
   }, []);
 
   const refreshData = useCallback(async (options?: { skipPull?: boolean; markLocalMutation?: boolean }) => {
@@ -322,7 +359,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
       }
       await store.seedDefaultAdminUser();
-      const [m, e, g, a, t, l, u, r, acr, ec, mpr, sar, sacr, cth, ctm, n, s] = await Promise.all([
+      const [m, e, g, a, t, l, u, r, acr, ael, ec, mpr, sar, sacr, cth, ctm, n, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -332,6 +369,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getUsers(),
         store.getMemberChangeRequests(),
         store.getAuditChangeRequests(),
+        store.getAuditExecutionLogs(),
         store.getExpenseClaims(),
         store.getMemberPaymentRequests(),
         store.getStandardAmountRules(),
@@ -350,6 +388,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setUsers(u);
       setMemberChangeRequests(r);
       setAuditChangeRequests(acr);
+      setAuditExecutionLogs(ael);
       setExpenseClaims(ec);
       setMemberPaymentRequests(mpr);
       setStandardAmountRules(sar);
@@ -889,7 +928,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const value: DataContextValue = {
-    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, auditChangeRequests, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, notifications, accountSettings, loading,
+    members, events, groups, attendance, transactions, loans, users, memberChangeRequests, auditChangeRequests, auditExecutionLogs, expenseClaims, memberPaymentRequests, standardAmountRules, standardAmountChangeRequests, chatThreads, chatMessages, notifications, accountSettings, loading,
     refreshData, addMember, updateMember, deleteMember,
     addEvent, editEvent, removeEvent,
     addGroup, editGroup, removeGroup,

@@ -386,6 +386,31 @@ export interface AuditChangeRevision {
   createdAt: string;
 }
 
+export type AuditExecutionAction = "update_applied" | "delete_executed";
+
+export interface AuditExecutionLog {
+  id: string;
+  requestId: string;
+  requestNumber?: string;
+  requestKind: AuditChangeRequestKind;
+  action: AuditExecutionAction;
+  targetType: AuditChangeTargetType;
+  targetId: string;
+  transactionId?: string;
+  relatedLoanId?: string;
+  statusAtExecution: AuditChangeRequestStatus;
+  workflowStageAtExecution?: AuditChangeWorkflowStage;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note?: string;
+  before?: Record<string, any>;
+  patch?: Record<string, any>;
+  after?: Record<string, any>;
+  affectedTransactionIds?: string[];
+  createdAt: string;
+}
+
 export interface AuditChangeRequest {
   id: string;
   requestNumber: string;

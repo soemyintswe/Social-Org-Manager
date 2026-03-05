@@ -31,6 +31,7 @@ import { AuthProvider, useAuth } from "@/lib/AuthContext";
 import Colors from "@/constants/colors";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "@/lib/app-update";
 import { initializeRemoteConfig } from "@/lib/remote-config";
+import { verifyDeviceAuthorization } from "@/lib/device-authorization";
 import {
   useFonts,
   Inter_400Regular,
@@ -49,6 +50,36 @@ const UPDATE_INITIAL_CHECK_DELAY_MS = 4500;
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 const FLAG_GRANT_WRITE_URI_PERMISSION = 2;
 const FLAG_ACTIVITY_NEW_TASK = 268435456;
+
+function logTaskError(label: string, error: unknown): void {
+  const reason = String((error as any)?.message || error || "unknown");
+  console.log(`Error running ${label} task:`, reason);
+}
+
+function scheduleDeferredTask(input: {
+  label: string;
+  delayMs: number;
+  run: () => Promise<void> | void;
+}): () => void {
+  let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let interactionTask: { cancel?: () => void } | null = null;
+
+  interactionTask = InteractionManager.runAfterInteractions(() => {
+    timer = setTimeout(() => {
+      if (disposed) return;
+      Promise.resolve(input.run()).catch((error) => {
+        if (!disposed) logTaskError(input.label, error);
+      });
+    }, Math.max(0, Number(input.delayMs) || 0));
+  });
+
+  return () => {
+    disposed = true;
+    if (timer) clearTimeout(timer);
+    if (interactionTask?.cancel) interactionTask.cancel();
+  };
+}
 
 function getUpdateSkipToken(info: Pick<AppUpdateInfo, "latestVersion" | "latestBuildNumber" | "publishedAt">): string {
   const version = String(info.latestVersion || "").trim();
@@ -180,6 +211,10 @@ function RootLayoutNav() {
   const [updatingNow, setUpdatingNow] = useState(false);
   const [updateProgressText, setUpdateProgressText] = useState("");
   const [updateProgressRatio, setUpdateProgressRatio] = useState<number>(0);
+  const [deviceAuthChecked, setDeviceAuthChecked] = useState(false);
+  const [deviceAuthorized, setDeviceAuthorized] = useState(true);
+  const [deviceAuthReason, setDeviceAuthReason] = useState("");
+  const [deviceAuthHash, setDeviceAuthHash] = useState("");
   const updateCheckInFlightRef = useRef(false);
   const lastActiveCheckAtRef = useRef(0);
 
@@ -220,6 +255,8 @@ function RootLayoutNav() {
 
         setUpdateInfo(info);
         setShowUpdateModal(true);
+      } catch (error) {
+        logTaskError("app update check", error);
       } finally {
         updateCheckInFlightRef.current = false;
       }
@@ -257,9 +294,6 @@ function RootLayoutNav() {
   }, [loading, isAuthenticated, inLogin]);
 
   useEffect(() => {
-    let disposed = false;
-    let initTimer: ReturnType<typeof setTimeout> | null = null;
-    let interactionTask: { cancel?: () => void } | null = null;
     const initRemoteConfig = async () => {
       const result = await initializeRemoteConfig(__DEV__ ? 0 : 3600000);
       if (!result.ok) {
@@ -270,16 +304,32 @@ function RootLayoutNav() {
       }
       console.log(result.fetched ? "Firebase Remote Config fetched and activated" : "Firebase Remote Config already activated");
     };
-    interactionTask = InteractionManager.runAfterInteractions(() => {
-      initTimer = setTimeout(() => {
-        if (disposed) return;
-        void initRemoteConfig();
-      }, 3000);
+    const cleanup = scheduleDeferredTask({
+      label: "remote config",
+      delayMs: 3000,
+      run: initRemoteConfig,
+    });
+    return cleanup;
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const runDeviceAuthorizationCheck = async () => {
+      const result = await verifyDeviceAuthorization();
+      if (disposed) return;
+      setDeviceAuthChecked(true);
+      setDeviceAuthorized(result.authorized);
+      setDeviceAuthReason(String(result.reason || ""));
+      setDeviceAuthHash(String(result.deviceHash || ""));
+    };
+    const cleanup = scheduleDeferredTask({
+      label: "device authorization",
+      delayMs: 6000,
+      run: runDeviceAuthorizationCheck,
     });
     return () => {
       disposed = true;
-      if (initTimer) clearTimeout(initTimer);
-      if (interactionTask?.cancel) interactionTask.cancel();
+      cleanup();
     };
   }, []);
 
@@ -567,6 +617,26 @@ function RootLayoutNav() {
                 <Text style={styles.btnPrimaryText}>{updatingNow ? "Updating..." : "Update Now"}</Text>
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal transparent animationType="fade" visible={deviceAuthChecked && !deviceAuthorized}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Device Authorization Required</Text>
+            <Text style={styles.modalText}>
+              This device is not authorized to use this app.
+            </Text>
+            {deviceAuthReason ? (
+              <Text style={styles.modalText}>Reason: {deviceAuthReason}</Text>
+            ) : null}
+            {deviceAuthHash ? (
+              <Text style={styles.modalNotes}>Device Hash: {deviceAuthHash}</Text>
+            ) : null}
+            <Text style={styles.modalNotes}>
+              Share the device hash with the app owner to approve this device.
+            </Text>
           </View>
         </View>
       </Modal>

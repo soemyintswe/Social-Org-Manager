@@ -9,6 +9,7 @@ import {
   Platform,
   Alert,
   KeyboardAvoidingView,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -34,6 +35,7 @@ import {
   DEFAULT_LAN_SYNC_URL,
 } from "@/lib/sync-defaults";
 import { getManagedSyncLockdownEnabled } from "@/lib/remote-config";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -75,6 +77,7 @@ export default function AccountSettingsScreen() {
   const [receivingAyaPayAccountName, setReceivingAyaPayAccountName] = useState(accountSettings.receivingAyaPayAccountName || "");
   const [receivingAyaPayMmqr, setReceivingAyaPayMmqr] = useState(accountSettings.receivingAyaPayMmqr || "");
   const [syncing, setSyncing] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [syncConfigSummary, setSyncConfigSummary] = useState<{
     lanSource: "managed_remote_config" | "local_settings" | "default";
     cloudSource: "managed_remote_config" | "local_settings" | "default";
@@ -475,6 +478,52 @@ export default function AccountSettingsScreen() {
     }
   };
 
+  const handleCheckForUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const currentVersion = getCurrentAppVersion();
+      const currentBuild = getCurrentBuildNumber() || "-";
+      const info = await checkForAppUpdate();
+      if (!info.ok) {
+        Alert.alert(
+          "Check for Update",
+          `Update စစ်ဆေးမရပါ။\nReason: ${info.reason || "unknown"}`
+        );
+        return;
+      }
+
+      if (!info.hasUpdate || !info.downloadUrl) {
+        Alert.alert(
+          "Latest Version",
+          `Current: ${currentVersion} (${currentBuild})\nဒီဗားရှင်းသည် နောက်ဆုံးဖြစ်ပါသည်။`
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Update Available",
+        `Current: ${currentVersion} (${currentBuild})\nLatest: ${info.latestVersion || "-"} (${info.latestBuildNumber || "-"})`,
+        [
+          { text: "Later", style: "cancel" },
+          {
+            text: "Update Now",
+            onPress: () => {
+              void Linking.openURL(String(info.downloadUrl || "").trim());
+            },
+          },
+        ]
+      );
+    } catch (error: any) {
+      Alert.alert(
+        "Check for Update",
+        `Update စစ်ဆေးမရပါ။\nReason: ${String(error?.message || "unknown")}`
+      );
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -513,6 +562,12 @@ export default function AccountSettingsScreen() {
               LAN Sync သို့မဟုတ် Google Drive Cloud Sync ကို Enable လုပ်ပါက အချက်အလက်များ မျှဝေညှိနှိုင်းနိုင်ပါမည်။
             </Text>
           </View>
+        </View>
+        <View style={styles.syncRow}>
+          <Pressable style={styles.checkUpdateBtn} onPress={() => void handleCheckForUpdate()} disabled={checkingUpdate}>
+            <Ionicons name={checkingUpdate ? "time-outline" : "download-outline"} size={18} color="#fff" />
+            <Text style={styles.checkUpdateText}>{checkingUpdate ? "Checking..." : "Check for Update"}</Text>
+          </Pressable>
         </View>
         {canManageSystem && (
           <>
@@ -1059,6 +1114,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   syncNowText: {
+    color: "#fff",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+  },
+  checkUpdateBtn: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: "#0EA5E9",
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  checkUpdateText: {
     color: "#fff",
     fontFamily: "Inter_600SemiBold",
     fontSize: 13,

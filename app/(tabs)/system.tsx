@@ -7,7 +7,7 @@ import * as Linking from "expo-linking";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { clearAllData } from "@/lib/storage";
+import { clearAllLocalDataKeepSystemConfig } from "@/lib/storage";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
 
 export default function SystemScreen() {
@@ -28,7 +28,7 @@ export default function SystemScreen() {
     if (Platform.OS === "web") {
       if (window.confirm("System Reset သတိပေးချက်\n\nဤလုပ်ဆောင်ချက်သည် အသင်းဝင်များ၊ ငွေစာရင်းများ၊ မှတ်တမ်းများ အားလုံးကို အပြီးတိုင် ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ ဆက်လုပ်မည်လား။")) {
         if (window.confirm("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း\n\nတကယ်ဖျက်မည်မှာ သေချာပါသလား။")) {
-          clearAllData().then(async () => {
+          clearAllLocalDataKeepSystemConfig().then(async () => {
             window.alert("အောင်မြင်ပါသည်\nSystem Reset ပြုလုပ်ပြီးပါပြီ။");
             window.location.href = "/";
           });
@@ -52,7 +52,7 @@ export default function SystemScreen() {
                 text: "ဖျက်မည်",
                 style: "destructive",
                 onPress: async () => {
-                  await clearAllData();
+                  await clearAllLocalDataKeepSystemConfig();
                   if (refreshData) await refreshData();
                   setTimeout(() => {
                     Alert.alert("အောင်မြင်ပါသည်", "System Reset ပြုလုပ်ပြီးပါပြီ။");

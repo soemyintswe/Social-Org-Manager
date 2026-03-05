@@ -22,6 +22,7 @@ import {
   AuditChangeRequestStatus,
   AuditChangeMessageType,
   AuditChangeRevision,
+  AuditExecutionLog,
   AuditChangeRequestKind,
   AuditChangeTargetType,
   AuditChangeWorkflowStage,
@@ -55,7 +56,11 @@ import {
   getManagedLanSyncEnabled,
   getManagedLanSyncUrl,
   getManagedSyncLockdownEnabled,
+  getSyncRetryBaseDelayMs,
+  getSyncRetryMaxAttempts,
 } from "./remote-config";
+import { computeSnapshotHash, verifySnapshotHash } from "./sync-integrity";
+import { runWithRetry } from "./sync-queue";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -69,6 +74,7 @@ const KEYS = {
   USER_PASSWORDS: "@orghub_user_passwords",
   MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
   AUDIT_CHANGE_REQUESTS: "@orghub_audit_change_requests",
+  AUDIT_EXECUTION_LOGS: "@orghub_audit_execution_logs",
   EXPENSE_CLAIMS: "@orghub_expense_claims",
   MEMBER_PAYMENT_REQUESTS: "@orghub_member_payment_requests",
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
@@ -119,6 +125,7 @@ const RESET_ONLY_KEYS = new Set<string>([
   "@orghub_auth_background_marked",
   MEMBER_JOIN_DATE_MIGRATION_V1_KEY,
 ]);
+const EMPTY_ORG_STATE_KEY = "@orghub_empty_org_state_v1";
 
 function hasAnyPrefix(key: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => key.startsWith(prefix));
@@ -1076,6 +1083,82 @@ export async function clearAllData(): Promise<void> {
   }
 }
 
+type PreservedSystemConfig = Pick<
+  AccountSettings,
+  | "orgName"
+  | "currency"
+  | "syncServerUrl"
+  | "syncEnabled"
+  | "cloudSyncEnabled"
+  | "cloudSyncProvider"
+  | "cloudSyncEndpoint"
+  | "cloudSyncApiKey"
+  | "cloudSyncGoogleAccountEmail"
+  | "cloudSyncFolderName"
+  | "receivingBankName"
+  | "receivingBankAccountNumber"
+  | "receivingBankAccountName"
+  | "receivingKbzPayPhone"
+  | "receivingKbzPayAccountName"
+  | "receivingKbzPayMmqr"
+  | "receivingWavePayPhone"
+  | "receivingWavePayAccountName"
+  | "receivingWavePayMmqr"
+  | "receivingAyaPayPhone"
+  | "receivingAyaPayAccountName"
+  | "receivingAyaPayMmqr"
+>;
+
+function pickPreservedSystemConfig(settings: AccountSettings): PreservedSystemConfig {
+  return {
+    orgName: settings.orgName,
+    currency: settings.currency,
+    syncServerUrl: settings.syncServerUrl,
+    syncEnabled: settings.syncEnabled,
+    cloudSyncEnabled: settings.cloudSyncEnabled,
+    cloudSyncProvider: settings.cloudSyncProvider,
+    cloudSyncEndpoint: settings.cloudSyncEndpoint,
+    cloudSyncApiKey: settings.cloudSyncApiKey,
+    cloudSyncGoogleAccountEmail: settings.cloudSyncGoogleAccountEmail,
+    cloudSyncFolderName: settings.cloudSyncFolderName,
+    receivingBankName: settings.receivingBankName,
+    receivingBankAccountNumber: settings.receivingBankAccountNumber,
+    receivingBankAccountName: settings.receivingBankAccountName,
+    receivingKbzPayPhone: settings.receivingKbzPayPhone,
+    receivingKbzPayAccountName: settings.receivingKbzPayAccountName,
+    receivingKbzPayMmqr: settings.receivingKbzPayMmqr,
+    receivingWavePayPhone: settings.receivingWavePayPhone,
+    receivingWavePayAccountName: settings.receivingWavePayAccountName,
+    receivingWavePayMmqr: settings.receivingWavePayMmqr,
+    receivingAyaPayPhone: settings.receivingAyaPayPhone,
+    receivingAyaPayAccountName: settings.receivingAyaPayAccountName,
+    receivingAyaPayMmqr: settings.receivingAyaPayMmqr,
+  };
+}
+
+export async function clearAllLocalDataKeepSystemConfig(): Promise<void> {
+  const currentSettings = await getAccountSettings();
+  const preserved = pickPreservedSystemConfig(currentSettings);
+  await clearAllData();
+  const defaults = await getAccountSettings();
+  await saveAccountSettings({
+    ...defaults,
+    ...preserved,
+    monthlyFeeRateRules: [],
+    monthlyFeeReliefRules: [],
+    monthlyFeePolicyRequests: [],
+  });
+  await AsyncStorage.setItem(EMPTY_ORG_STATE_KEY, "1");
+}
+
+export async function setEmptyOrgState(enabled: boolean): Promise<void> {
+  if (enabled) {
+    await AsyncStorage.setItem(EMPTY_ORG_STATE_KEY, "1");
+    return;
+  }
+  await AsyncStorage.removeItem(EMPTY_ORG_STATE_KEY);
+}
+
 function toYmd(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -1242,6 +1325,43 @@ export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
 
 async function saveAuditChangeRequests(rows: AuditChangeRequest[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(rows));
+}
+
+export async function getAuditExecutionLogs(): Promise<AuditExecutionLog[]> {
+  const rows = await safeGet<AuditExecutionLog[]>(KEYS.AUDIT_EXECUTION_LOGS, []);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item: any) => ({
+      ...item,
+      id: String(item?.id || generateId()),
+      requestId: String(item?.requestId || ""),
+      requestNumber: String(item?.requestNumber || "").trim() || undefined,
+      requestKind: normalizeAuditRequestKind(item?.requestKind),
+      action: String(item?.action || "") === "delete_executed" ? "delete_executed" : "update_applied",
+      targetType: normalizeAuditTargetType(item?.targetType, String(item?.targetId || ""), String(item?.transactionId || "")),
+      targetId: String(item?.targetId || item?.transactionId || item?.relatedLoanId || ""),
+      transactionId: String(item?.transactionId || "").trim() || undefined,
+      relatedLoanId: String(item?.relatedLoanId || "").trim() || undefined,
+      statusAtExecution: (item?.statusAtExecution || "approved") as AuditChangeRequestStatus,
+      workflowStageAtExecution: normalizeAuditWorkflowStage(
+        item?.workflowStageAtExecution,
+        normalizeAuditRequestKind(item?.requestKind),
+        (item?.statusAtExecution || "approved") as AuditChangeRequestStatus
+      ),
+      byUserId: String(item?.byUserId || ""),
+      byMemberId: String(item?.byMemberId || "").trim() || undefined,
+      byDisplayName: String(item?.byDisplayName || "").trim() || undefined,
+      note: String(item?.note || "").trim() || undefined,
+      before: item?.before && typeof item.before === "object" ? item.before : undefined,
+      patch: item?.patch && typeof item.patch === "object" ? item.patch : undefined,
+      after: item?.after && typeof item.after === "object" ? item.after : undefined,
+      affectedTransactionIds: Array.isArray(item?.affectedTransactionIds)
+        ? item.affectedTransactionIds.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [],
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+    }))
+    .filter((row) => String(row.requestId || "").trim().length > 0)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 }
 
 async function getAuditRequestTargetMemberId(req: AuditChangeRequest): Promise<string> {
@@ -1615,7 +1735,12 @@ export async function confirmDeleteAuditRequestExecution(input: {
   byDisplayName?: string;
   note?: string;
 }): Promise<void> {
-  const [requests, txns, loans] = await Promise.all([getAuditChangeRequests(), getTransactions(), getLoans()]);
+  const [requests, txns, loans, executionLogs] = await Promise.all([
+    getAuditChangeRequests(),
+    getTransactions(),
+    getLoans(),
+    getAuditExecutionLogs(),
+  ]);
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
   if (idx === -1) throw new Error("request_not_found");
   const req = requests[idx];
@@ -1671,6 +1796,36 @@ export async function confirmDeleteAuditRequestExecution(input: {
     createdAt: now,
   };
 
+  const executionLog: AuditExecutionLog = {
+    id: generateId(),
+    requestId: req.id,
+    requestNumber: req.requestNumber,
+    requestKind: "delete",
+    action: "delete_executed",
+    targetType: req.targetType,
+    targetId: String(req.targetId || req.transactionId || ""),
+    transactionId: req.transactionId,
+    relatedLoanId: req.relatedLoanId,
+    statusAtExecution: "approved",
+    workflowStageAtExecution: "completed",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    note: String(input.note || "").trim() || "စာရင်းကို ပယ်ဖျက်ပြီး အတည်ပြုပြီးပါပြီ။",
+    before: snapshotBefore,
+    patch: {
+      __action: "delete",
+      __removedLinkedTransactionIds: removedLinkedTransactionIds,
+    },
+    after: {
+      deleted: true,
+      deletedAt: now,
+      removedLinkedTransactionCount: removedLinkedTransactionIds.length,
+    },
+    affectedTransactionIds: removedLinkedTransactionIds,
+    createdAt: now,
+  };
+
   const msg: AuditChangeRequestMessage = {
     id: generateId(),
     requestId: req.id,
@@ -1697,10 +1852,13 @@ export async function confirmDeleteAuditRequestExecution(input: {
     messages: [...(req.messages || []), msg],
   };
 
+  const nextExecutionLogs = [executionLog, ...(executionLogs || [])].slice(0, 4000);
+
   await AsyncStorage.multiSet([
     [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
     [KEYS.TRANSACTIONS, JSON.stringify(txns)],
     [KEYS.LOANS, JSON.stringify(loans)],
+    [KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(nextExecutionLogs)],
   ]);
   const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
@@ -1726,7 +1884,11 @@ export async function applyAuditChangeRequestPatch(input: {
   patch: Record<string, any>;
   note?: string;
 }): Promise<void> {
-  const [requests, txns] = await Promise.all([getAuditChangeRequests(), getTransactions()]);
+  const [requests, txns, executionLogs] = await Promise.all([
+    getAuditChangeRequests(),
+    getTransactions(),
+    getAuditExecutionLogs(),
+  ]);
   const reqIdx = requests.findIndex((row: any) => row.id === input.requestId);
   if (reqIdx === -1) throw new Error("request_not_found");
   const req = requests[reqIdx];
@@ -1765,6 +1927,28 @@ export async function applyAuditChangeRequestPatch(input: {
     createdAt: now,
   };
 
+  const executionLog: AuditExecutionLog = {
+    id: generateId(),
+    requestId: req.id,
+    requestNumber: req.requestNumber,
+    requestKind: "update",
+    action: "update_applied",
+    targetType: req.targetType || "transaction",
+    targetId: String(req.targetId || req.transactionId || ""),
+    transactionId: req.transactionId,
+    relatedLoanId: req.relatedLoanId,
+    statusAtExecution: "approved",
+    workflowStageAtExecution: "completed",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    note: String(input.note || "").trim() || "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။",
+    before,
+    patch: sanitizedPatch,
+    after,
+    createdAt: now,
+  };
+
   const decisionMessage: AuditChangeRequestMessage = {
     id: generateId(),
     requestId: req.id,
@@ -1790,9 +1974,12 @@ export async function applyAuditChangeRequestPatch(input: {
     messages: [...(req.messages || []), decisionMessage],
   };
 
+  const nextExecutionLogs = [executionLog, ...(executionLogs || [])].slice(0, 4000);
+
   await AsyncStorage.multiSet([
     [KEYS.TRANSACTIONS, JSON.stringify(txns)],
     [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
+    [KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(nextExecutionLogs)],
   ]);
   const targetMemberId = String((afterTxn as any)?.memberId || "").trim();
   await pushSystemEvent({
@@ -3021,20 +3208,20 @@ async function resolveCloudSyncConfig(): Promise<{
   const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const remoteEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
   const legacyEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const endpoint = managedLockdownEnabled ? remoteEndpoint : (remoteEndpoint || legacyEndpoint);
+  const endpoint = managedLockdownEnabled ? remoteEndpoint : (legacyEndpoint || remoteEndpoint);
   const managedEnabled = getManagedCloudSyncEnabled();
   const remoteApiKey = sanitizeCloudApiKey(getRemoteCloudSyncApiKey() || "");
   const legacyApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
-  const apiKey = managedLockdownEnabled ? remoteApiKey : (remoteApiKey || legacyApiKey);
+  const apiKey = managedLockdownEnabled ? remoteApiKey : (legacyApiKey || remoteApiKey);
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
   const remoteAccountEmail = String(getRemoteCloudSyncAccountEmail() || "").trim();
   const accountEmail = managedLockdownEnabled
     ? remoteAccountEmail
-    : (remoteAccountEmail || String(settings.cloudSyncGoogleAccountEmail || "").trim());
+    : (String(settings.cloudSyncGoogleAccountEmail || "").trim() || remoteAccountEmail);
   const remoteFolderName = String(getRemoteCloudSyncFolderName() || "").trim();
   const folderName = managedLockdownEnabled
     ? (remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
-    : (remoteFolderName || String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
+    : (String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
   const enabled = managedLockdownEnabled
     ? (managedEnabled === true && !!endpoint)
     : ((managedEnabled === null ? settings.cloudSyncEnabled === true : managedEnabled === true) && !!endpoint);
@@ -3095,7 +3282,7 @@ async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }
   const url = normalizeSyncServerUrl(
     managedLockdownEnabled
       ? remoteUrl
-      : (remoteUrl || settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
+      : (settings.syncServerUrl || remoteUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
   );
   const managedEnabled = getManagedLanSyncEnabled();
   const enabled = managedLockdownEnabled
@@ -3118,19 +3305,21 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
   const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
   const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
   const lan = await resolveSyncServerUrl();
-  const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanUrl
-    ? "managed_remote_config"
-    : !managedLockdownEnabled && String(settings.syncServerUrl || "").trim()
-      ? "local_settings"
+  const hasLocalLanSetting = !managedLockdownEnabled && !!String(settings.syncServerUrl || "").trim();
+  const lanSource: "managed_remote_config" | "local_settings" | "default" = hasLocalLanSetting
+    ? "local_settings"
+    : managedLanUrl
+      ? "managed_remote_config"
       : "default";
 
   const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
   const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
   const cloud = await resolveCloudSyncConfig();
-  const cloudSource: "managed_remote_config" | "local_settings" | "default" = managedCloudEndpoint
-    ? "managed_remote_config"
-    : !managedLockdownEnabled && localCloudEndpoint
-      ? "local_settings"
+  const hasLocalCloudSetting = !managedLockdownEnabled && !!localCloudEndpoint;
+  const cloudSource: "managed_remote_config" | "local_settings" | "default" = hasLocalCloudSetting
+    ? "local_settings"
+    : managedCloudEndpoint
+      ? "managed_remote_config"
       : "default";
 
   return {
@@ -3158,6 +3347,30 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, ti
       }, timeoutMs);
     }),
   ]);
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
+}
+
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 8000,
+  attempts = getSyncRetryMaxAttempts(),
+  baseDelayMs = getSyncRetryBaseDelayMs()
+): Promise<Response> {
+  return await runWithRetry(async () => {
+    const res = await fetchWithTimeout(input, init, timeoutMs);
+    if (isRetryableHttpStatus(res.status)) {
+      throw new Error(`http_${res.status}`);
+    }
+    return res;
+  }, {
+    attempts,
+    baseDelayMs,
+    maxDelayMs: Math.max(baseDelayMs * 8, 12_000),
+  });
 }
 
 async function compressLargeDataUrlDeep(input: unknown): Promise<unknown> {
@@ -3196,7 +3409,7 @@ export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string;
   try {
     const { url, enabled } = await resolveSyncServerUrl();
     if (!enabled) return { ok: false, url, reason: "disabled_or_empty_url" };
-    const res = await fetchWithTimeout(`${url}/api/sync/health`, { method: "GET" }, 12000);
+    const res = await fetchWithRetry(`${url}/api/sync/health`, { method: "GET" }, 12000);
     if (!res.ok) return { ok: false, url, status: res.status, reason: "health_http_error" };
     return { ok: true, url, status: res.status };
   } catch (e: any) {
@@ -3216,6 +3429,7 @@ type CloudSnapshotPayload = {
   updatedAt?: string;
   source?: string;
   data?: Record<string, string>;
+  snapshotHash?: string;
 };
 
 type CloudApiPayload = {
@@ -3306,6 +3520,7 @@ function extractCloudSnapshot(payload: unknown): CloudSnapshotPayload | null {
       updatedAt: String(snapshotLike.updatedAt || candidate.updatedAt || root.updatedAt || ""),
       source: String(snapshotLike.source || candidate.source || root.source || "cloud"),
       data,
+      snapshotHash: String(snapshotLike.snapshotHash || candidate.snapshotHash || root.snapshotHash || ""),
     };
   }
 
@@ -3409,7 +3624,7 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
     const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
     for (const baseUrl of uniqueCandidates) {
       try {
-        const res = await fetchWithTimeout(
+        const res = await fetchWithRetry(
           `${baseUrl}/api/cloud-sync/proxy`,
           {
             method: "POST",
@@ -3427,7 +3642,7 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
     }
   }
 
-  return await fetchWithTimeout(
+  return await fetchWithRetry(
     endpoint,
     {
       method: "POST",
@@ -3452,12 +3667,14 @@ export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult>
     if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
     const raw = await exportData();
     const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const snapshotHash = await computeSnapshotHash(data);
     const payload = {
       updatedAt: new Date().toISOString(),
       source: "mobile",
       data,
+      snapshotHash,
     };
-    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, {
+    const res = await fetchWithRetry(`${url}/api/sync/snapshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -3475,6 +3692,7 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
     const raw = await exportData();
     const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const snapshotHash = await computeSnapshotHash(data);
     const payload = {
       action: "pushSnapshot",
       provider,
@@ -3484,6 +3702,7 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
         updatedAt: new Date().toISOString(),
         source: "mobile_cloud_sync",
         data,
+        snapshotHash,
       },
     };
     const result = await postCloudSyncWithApiKeyFallback(
@@ -3512,14 +3731,18 @@ export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
   try {
     const { url, enabled } = await resolveSyncServerUrl();
     if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
-    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
+    const res = await fetchWithRetry(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
     if (res.status === 404) {
       return { ok: true, changed: false, reason: "snapshot_not_found", status: res.status, url };
     }
     if (!res.ok) return { ok: false, reason: "pull_http_error", status: res.status, url };
-    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string> };
+    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string>; snapshotHash?: string };
     if (!payload || typeof payload !== "object" || !payload.data) {
       return { ok: false, reason: "invalid_snapshot_payload", url };
+    }
+    const verify = await verifySnapshotHash({ snapshotData: payload.data, expectedHash: payload.snapshotHash });
+    if (!verify.ok) {
+      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", url };
     }
 
     const incomingUpdatedAt = String(payload.updatedAt || "");
@@ -3588,6 +3811,10 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
     if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
       return { ok: true, changed: false, reason: "already_applied", endpoint };
     }
+    const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
+    if (!verify.ok) {
+      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
+    }
 
     const merged = await mergeData(JSON.stringify(snapshot.data));
     if (incomingUpdatedAt) {
@@ -3623,10 +3850,12 @@ export async function pullCloudSnapshotToLocal(): Promise<boolean> {
 export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
 export const saveUsers = (data: UserAccount[]) => AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
 
-export async function seedDefaultAdminUser() {
+export async function seedDefaultAdminUser(options?: { allowDefaultDataSeed?: boolean }) {
+  const allowDefaultDataSeed = options?.allowDefaultDataSeed !== false;
+  const emptyStateMode = String((await AsyncStorage.getItem(EMPTY_ORG_STATE_KEY)) || "") === "1";
   // 1. Seeding: If no members exist, try to load from default-data.json
   const existingMembers = await getMembers();
-  if (existingMembers.length === 0) {
+  if (existingMembers.length === 0 && allowDefaultDataSeed && !emptyStateMode) {
     try {
       // Expo Go တွင် Data များပါလာစေရန် require ကိုအသုံးပြု၍ Bundle လုပ်ပါသည်
       // @ts-ignore
@@ -3663,6 +3892,9 @@ export async function seedDefaultAdminUser() {
 
   // Sync existing members to user accounts
   const members = await getMembers();
+  if (members.length > 0 && emptyStateMode) {
+    await AsyncStorage.removeItem(EMPTY_ORG_STATE_KEY);
+  }
   await syncUsersWithMembers(members);
   const syncedUsers = await getUsers();
   await ensureDefaultPasswordsForUsers(syncedUsers, members);
@@ -3719,6 +3951,10 @@ export async function restoreData(jsonString: string): Promise<boolean> {
       await AsyncStorage.multiRemove(allSharedKeys);
     }
     await AsyncStorage.multiSet(pairs);
+    const importedMembers = parseJsonSafe<any[]>(exportObj?.[KEYS.MEMBERS], []);
+    if (Array.isArray(importedMembers) && importedMembers.length > 0) {
+      await setEmptyOrgState(false);
+    }
     return true;
   } catch (error) {
     console.error("Restore failed:", error);
@@ -3852,6 +4088,11 @@ export async function mergeData(jsonString: string): Promise<boolean> {
         await AsyncStorage.setItem(key, mergedSerialized);
         changed = true;
       }
+    }
+
+    const mergedMembers = await getMembers();
+    if (mergedMembers.length > 0) {
+      await setEmptyOrgState(false);
     }
 
     return changed;

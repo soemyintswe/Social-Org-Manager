@@ -24,7 +24,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
-import { clearAllData, exportData, mergeData, restoreData } from "@/lib/storage";
+import { clearAllLocalDataKeepSystemConfig, exportData, mergeData, restoreData } from "@/lib/storage";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
@@ -338,7 +338,7 @@ export default function DataManagementScreen() {
     const msg = "အချက်အလက်အားလုံးကို ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ သေချာပါသလား။";
     if (Platform.OS === 'web') {
       if (confirm(msg)) {
-        clearAllData().then(() => {
+        clearAllLocalDataKeepSystemConfig().then(() => {
           alert("Reset ပြီးပါပြီ။");
           router.replace("/");
         });
@@ -347,7 +347,7 @@ export default function DataManagementScreen() {
       Alert.alert("Warning", msg, [
         { text: "Cancel", style: "cancel" },
         { text: "Delete All", style: "destructive", onPress: async () => {
-          await clearAllData();
+          await clearAllLocalDataKeepSystemConfig();
           if (refreshData) await refreshData();
           router.replace("/");
         }}

@@ -59,6 +59,7 @@ export default function AuditChangeRequestsScreen() {
   const insets = useSafeAreaInsets();
   const {
     auditChangeRequests,
+    auditExecutionLogs,
     transactions,
     loans,
     members,
@@ -94,6 +95,7 @@ export default function AuditChangeRequestsScreen() {
   const [createDeleteSearch, setCreateDeleteSearch] = useState("");
   const [createDeleteNote, setCreateDeleteNote] = useState("");
   const [showCreateTargetPicker, setShowCreateTargetPicker] = useState(false);
+  const [visibleExecutionLogCount, setVisibleExecutionLogCount] = useState(20);
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
   const isAdmin = currentUser?.systemRole === "admin";
@@ -201,6 +203,79 @@ export default function AuditChangeRequestsScreen() {
       }),
     [allRequests]
   );
+
+  const visibleExecutionLogs = useMemo(() => {
+    const list = Array.isArray(auditExecutionLogs) ? [...auditExecutionLogs] : [];
+    list.sort((a: any, b: any) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime());
+    if (canView) return list;
+    const myId = String(currentUser?.id || "");
+    return list.filter((row: any) => String(row?.byUserId || "") === myId);
+  }, [auditExecutionLogs, canView, currentUser?.id]);
+
+  const pagedExecutionLogs = useMemo(
+    () => visibleExecutionLogs.slice(0, visibleExecutionLogCount),
+    [visibleExecutionLogs, visibleExecutionLogCount]
+  );
+  const hasMoreExecutionLogs = pagedExecutionLogs.length < visibleExecutionLogs.length;
+
+  const consistencyReport = useMemo(() => {
+    const issues: string[] = [];
+    const txById = new Map<string, any>((Array.isArray(transactions) ? transactions : []).map((row: any) => [String(row?.id || ""), row]));
+    const loansById = new Map<string, any>((Array.isArray(loans) ? loans : []).map((row: any) => [String(row?.id || ""), row]));
+
+    (visibleExecutionLogs || []).forEach((log: any) => {
+      const action = String(log?.action || "");
+      if (action === "update_applied") {
+        const txnId = String(log?.transactionId || log?.targetId || "");
+        const txn = txById.get(txnId);
+        if (!txn) {
+          issues.push(`${log?.requestNumber || log?.requestId}: update target transaction not found (${txnId})`);
+          return;
+        }
+        const patch = log?.patch && typeof log.patch === "object" ? log.patch : {};
+        const after = log?.after && typeof log.after === "object" ? log.after : {};
+        Object.keys(patch)
+          .filter((key) => !String(key || "").startsWith("__"))
+          .forEach((key) => {
+            const expected = (after as any)?.[key];
+            const current = (txn as any)?.[key];
+            const bothNumeric = Number.isFinite(Number(expected)) && Number.isFinite(Number(current));
+            const equal = bothNumeric ? Number(expected) === Number(current) : String(expected ?? "") === String(current ?? "");
+            if (!equal) {
+              issues.push(`${log?.requestNumber || log?.requestId}: field mismatch (${key})`);
+            }
+          });
+        return;
+      }
+
+      if (action === "delete_executed") {
+        const targetType = String(log?.targetType || "transaction");
+        const targetId = String(log?.targetId || log?.transactionId || "");
+        if (targetType === "loan") {
+          if (loansById.has(targetId)) {
+            issues.push(`${log?.requestNumber || log?.requestId}: deleted loan still exists (${targetId})`);
+          }
+          const linkedIds = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+          linkedIds.forEach((linkedId: string) => {
+            if (txById.has(String(linkedId || ""))) {
+              issues.push(`${log?.requestNumber || log?.requestId}: linked txn still exists (${linkedId})`);
+            }
+          });
+          return;
+        }
+        const txnId = String(log?.transactionId || targetId);
+        if (txById.has(txnId)) {
+          issues.push(`${log?.requestNumber || log?.requestId}: deleted transaction still exists (${txnId})`);
+        }
+      }
+    });
+
+    return {
+      checked: visibleExecutionLogs.length,
+      issueCount: issues.length,
+      issues,
+    };
+  }, [visibleExecutionLogs, transactions, loans]);
 
   React.useEffect(() => {
     const targetId = String(requestId || "").trim();
@@ -635,6 +710,49 @@ export default function AuditChangeRequestsScreen() {
               );
             })
           )}
+        </View>
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Execution Log သီးခြားမှတ်တမ်း ({visibleExecutionLogs.length})</Text>
+          <Text style={[styles.sectionEmptyText, { color: consistencyReport.issueCount > 0 ? "#B91C1C" : "#0F766E" }]}>
+            Consistency Check: {consistencyReport.checked} ခုစစ်ပြီး • Issue {consistencyReport.issueCount} ခု
+          </Text>
+          {consistencyReport.issueCount > 0 ? (
+            <View style={[styles.auditHistoryCard, { borderLeftColor: "#B91C1C" }]}>
+              {consistencyReport.issues.slice(0, 5).map((issue: string, idx: number) => (
+                <Text key={`issue-${idx}`} style={[styles.auditHistoryMeta, { color: "#B91C1C" }]}>- {issue}</Text>
+              ))}
+            </View>
+          ) : null}
+          {pagedExecutionLogs.length === 0 ? (
+            <Text style={styles.sectionEmptyText}>Execution log မရှိသေးပါ။</Text>
+          ) : (
+            pagedExecutionLogs.map((log: any) => {
+              const requestNo = String(log?.requestNumber || log?.requestId || "-");
+              const action = String(log?.action || "");
+              const actionLabel = action === "delete_executed" ? "ပယ်ဖျက်ပြီး" : "ပြင်ဆင်ပြီး";
+              const amountBefore = Number(log?.before?.amount ?? log?.before?.principal ?? 0);
+              const amountAfter = Number(log?.after?.amount ?? 0);
+              return (
+                <Pressable key={`exec-log-${String(log?.id || requestNo)}`} style={styles.auditHistoryCard} onPress={() => openDetail(String(log?.requestId || ""))}>
+                  <Text style={styles.auditHistoryTitle}>{requestNo} • {actionLabel}</Text>
+                  <Text style={styles.auditHistoryMeta}>Target: {String(log?.targetType || "-")} / {String(log?.targetId || "-")}</Text>
+                  {action === "update_applied" ? (
+                    <Text style={styles.auditHistoryMeta}>ပမာဏ: {amountBefore.toLocaleString()} KS → {amountAfter.toLocaleString()} KS</Text>
+                  ) : (
+                    <Text style={styles.auditHistoryMeta}>ပယ်ဖျက်ပမာဏ: {amountBefore.toLocaleString()} KS</Text>
+                  )}
+                  <Text style={styles.auditHistoryMeta}>ဆောင်ရွက်သူ: {String(log?.byDisplayName || log?.byUserId || "-")}</Text>
+                  <Text style={styles.auditHistoryMeta}>ဆောင်ရွက်ချိန်: {fmtDateTime(log?.createdAt)}</Text>
+                </Pressable>
+              );
+            })
+          )}
+          {hasMoreExecutionLogs ? (
+            <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleExecutionLogCount((prev) => prev + 20)}>
+              <Text style={styles.loadMoreBtnText}>နောက်ထပ် မှတ်တမ်းများကြည့်ရန်</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         {visibleRequests.length === 0 ? (
@@ -1143,6 +1261,21 @@ const styles = StyleSheet.create({
   auditHistoryMeta: {
     color: Colors.light.textSecondary,
     fontFamily: "Inter_500Medium",
+    fontSize: 12,
+  },
+  loadMoreBtn: {
+    marginTop: 6,
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: "#F8FAFC",
+  },
+  loadMoreBtnText: {
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
     fontSize: 12,
   },
   modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.45)" },
