@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.44",
-  "latestBuildNumber": "45",
+  "latestVersion": "1.1.45",
+  "latestBuildNumber": "46",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.44-202603060141.apk",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.45-202603060230.apk",
   "notes": "Version 1.1.43: Added XLSX export updates, search-filtered export support, and release stability improvements.",
   "force": false,
-  "publishedAt": "2026-03-05T19:11:20.524Z"
+  "publishedAt": "2026-03-05T20:00:00.698Z"
 }
