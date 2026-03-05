@@ -41,6 +41,7 @@ import { useRouter } from "expo-router";
 import AccessDenied from "@/components/AccessDenied";
 import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
 import { toEnglishDigits } from "@/lib/member-utils";
+import { exportXlsxFile } from "@/lib/xlsx-export";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -404,6 +405,7 @@ export default function ReportsScreen() {
   const [showYearPicker, setShowYearPicker] = useState(false);
   const [showPrintPicker, setShowPrintPicker] = useState(false);
   const [printing, setPrinting] = useState(false);
+  const [keywordSearch, setKeywordSearch] = useState("");
   const [auditSearch, setAuditSearch] = useState("");
   const [auditOnlyFlagged, setAuditOnlyFlagged] = useState(true);
   const [memberStatusFilter, setMemberStatusFilter] = useState<"all" | MemberStatus>("all");
@@ -445,6 +447,11 @@ export default function ReportsScreen() {
   const shouldComputeRegisters = reportTab === "registers" || showPrintPicker || printing;
   const shouldComputeCashBook = reportTab === "cash_book" || showPrintPicker || printing;
   const shouldComputeAudit = reportTab === "audit_flags" || showPrintPicker || printing;
+  const supportsTxnKeywordSearch = ["income_expense", "loans", "funds", "registers", "cash_book"].includes(reportTab);
+  const txnSearchNeedle = useMemo(
+    () => (supportsTxnKeywordSearch ? keywordSearch.trim().toLowerCase() : ""),
+    [supportsTxnKeywordSearch, keywordSearch]
+  );
   const startDateMs = startDate.getTime();
   const endDateMs = endDate.getTime();
   const transactionCount = transactions?.length ?? 0;
@@ -893,14 +900,47 @@ export default function ReportsScreen() {
     setActiveFilterTag(`year-${year}`);
   }, []);
 
+  const matchesTransactionKeyword = useCallback(
+    (txn: any): boolean => {
+      if (!txnSearchNeedle) return true;
+      const memberId = String(txn?.memberId || "").trim();
+      const memberName = String(
+        txn?.payerPayee ||
+          members.find((member: any) => String(member?.id || "").trim() === memberId)?.name ||
+          ""
+      );
+      const description = String(stripTechnicalNoteText(txn?.notes) || txn?.description || "");
+      const categoryLabel = getCategoryLabel(txn?.category);
+      const haystack = [
+        txn?.id,
+        txn?.receiptNumber,
+        memberId,
+        memberName,
+        txn?.payerPayee,
+        categoryLabel,
+        description,
+        txn?.feePeriodStart,
+        txn?.feePeriodEnd,
+        formatDateForRegister(txn?.date),
+        txn?.date,
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(txnSearchNeedle);
+    },
+    [members, txnSearchNeedle]
+  );
+
   const filteredTxns = useMemo(
     () => computeTransactions.filter((t: any) => {
-      const d = new Date(t.date);
+      const txMs = parseDateMs(t?.date);
+      if (!Number.isFinite(txMs) || txMs <= 0) return false;
       const start = new Date(startDate); start.setHours(0,0,0,0);
       const end = new Date(endDate); end.setHours(23,59,59,999);
-      return d >= start && d <= end;
+      if (!(txMs >= start.getTime() && txMs <= end.getTime())) return false;
+      return matchesTransactionKeyword(t);
     }),
-    [computeTransactions, startDate, endDate]
+    [computeTransactions, startDate, endDate, matchesTransactionKeyword]
   );
 
   const incomeExpenseStats = useMemo(() => {
@@ -1853,6 +1893,7 @@ export default function ReportsScreen() {
     memberAgeFilter,
     memberPositionFilter,
     memberDateBasis,
+    txnSearchNeedle,
   ]);
 
   const exportAuditJson = async () => {
@@ -2401,7 +2442,7 @@ export default function ReportsScreen() {
     async (kind: PrintReportKind) => {
       try {
         setPrinting(true);
-        const subtitle = `${scopeLabel} | ${formatDateForRegister(startDate)} - ${formatDateForRegister(endDate)} | ${new Date().toLocaleString()}`;
+        const subtitle = `${scopeLabel} | ${formatDateForRegister(startDate)} - ${formatDateForRegister(endDate)}${txnSearchNeedle ? ` | Search: ${keywordSearch}` : ""} | ${new Date().toLocaleString()}`;
 
         if (kind === "members_filtered") {
           const content = `
@@ -2842,10 +2883,286 @@ export default function ReportsScreen() {
       memberFeeTotalsByMemberId,
       scopedAuditRows,
       canViewAuditFlags,
+      keywordSearch,
+      txnSearchNeedle,
       shareHtmlAsPdf,
       buildBaseHtml,
       renderMemberReportTableHtml,
       renderFeeYearTableHtml,
+    ]
+  );
+
+  const generateExcel = useCallback(
+    async (kind: PrintReportKind) => {
+      try {
+        setPrinting(true);
+        const subtitle = `${scopeLabel} | ${formatDateForRegister(startDate)} - ${formatDateForRegister(endDate)}${txnSearchNeedle ? ` | Search: ${keywordSearch}` : ""} | ${new Date().toLocaleString()}`;
+        const orgName = accountSettings?.orgName || "Social Org Manager";
+
+        const addMeta = (rows: unknown[][], title: string) => {
+          rows.push([orgName]);
+          rows.push([title]);
+          rows.push([subtitle]);
+          rows.push([]);
+        };
+
+        if (kind === "members_filtered") {
+          const rows: unknown[][] = [];
+          addMeta(rows, "အသင်းဝင်အစီရင်ခံစာ");
+          rows.push(["စုစုပေါင်း", memberSummaryStats.total, "အစရှိ", memberFlowStats.opening, "တိုးလာ", memberFlowStats.joined, "လျှော့သွား", memberFlowStats.exited, "လက်ကျန်", memberFlowStats.closing]);
+          rows.push([]);
+          rows.push(["No.", "အမည်", "အသင်းဝင်အမှတ်", "အဖွဲ့တာဝန်", "ကျား/မ", "အသက်", "အခြေအနေ", "ဖုန်း", memberDateBasis === "status" ? "Status Date" : memberDateBasis === "created" ? "Created Date" : "Join Date"]);
+          filteredMemberRows.forEach((m: any, index: number) => {
+            rows.push([
+              index + 1,
+              m?.name || "-",
+              m?.id || "-",
+              Array.isArray(m?.__positionsInRange) && m.__positionsInRange.length > 0
+                ? m.__positionsInRange.map((position: OrgPosition) => ORG_POSITION_LABELS[position] || ORG_POSITION_LABELS.member).join(" / ")
+                : ORG_POSITION_LABELS[(m?.__positionPrimary || m?.__defaultPosition || "member") as OrgPosition] || ORG_POSITION_LABELS.member,
+              MEMBER_GENDER_LABELS[m?.__gender as "male" | "female" | "other"] || "အခြား",
+              m?.__age === null || m?.__age === undefined ? "-" : `${m.__age}`,
+              MEMBER_STATUS_LABELS[m?.__status as MemberStatus] || m?.__status || "-",
+              m?.phone || "-",
+              formatDateForRegister(formatMemberDateByBasis(m)),
+            ]);
+          });
+          await exportXlsxFile({
+            filePrefix: "report_members_filtered",
+            dialogTitle: "Report Excel (.xlsx) ထုတ်ယူရန်",
+            sheets: [{ name: "Members", rows }],
+          });
+          return;
+        }
+
+        if (kind === "executive_committee") {
+          const rows: unknown[][] = [];
+          addMeta(rows, "အမှုဆောင်အဖွဲ့အစီရင်ခံစာ");
+          rows.push(["အမှုဆောင်စုစုပေါင်း", executiveMembers.length, "အစရှိ", memberFlowStats.opening, "တိုးလာ", memberFlowStats.joined, "လျှော့သွား", memberFlowStats.exited, "လက်ကျန်", memberFlowStats.closing]);
+          rows.push([]);
+          rows.push(["No.", "အမည်", "အသင်းဝင်အမှတ်", "အဖွဲ့တာဝန်", "ကျား/မ", "အသက်", "အခြေအနေ", "ဖုန်း", memberDateBasis === "status" ? "Status Date" : memberDateBasis === "created" ? "Created Date" : "Join Date"]);
+          executiveMembers.forEach((m: any, index: number) => {
+            rows.push([
+              index + 1,
+              m?.name || "-",
+              m?.id || "-",
+              Array.isArray(m?.__positionsInRange) && m.__positionsInRange.length > 0
+                ? m.__positionsInRange.map((position: OrgPosition) => ORG_POSITION_LABELS[position] || ORG_POSITION_LABELS.member).join(" / ")
+                : ORG_POSITION_LABELS[(m?.__positionPrimary || m?.__defaultPosition || "member") as OrgPosition] || ORG_POSITION_LABELS.member,
+              MEMBER_GENDER_LABELS[m?.__gender as "male" | "female" | "other"] || "အခြား",
+              m?.__age === null || m?.__age === undefined ? "-" : `${m.__age}`,
+              MEMBER_STATUS_LABELS[m?.__status as MemberStatus] || m?.__status || "-",
+              m?.phone || "-",
+              formatDateForRegister(formatMemberDateByBasis(m)),
+            ]);
+          });
+          await exportXlsxFile({
+            filePrefix: "report_executive_committee",
+            dialogTitle: "Report Excel (.xlsx) ထုတ်ယူရန်",
+            sheets: [{ name: "Executive", rows }],
+          });
+          return;
+        }
+
+        if (kind === "monthly_summary" || kind === "four_month_summary" || kind === "yearly_summary") {
+          const granularity = kind === "monthly_summary" ? "month" : kind === "four_month_summary" ? "four_month" : "year";
+          const title = kind === "monthly_summary" ? "လချုပ် ငွေစာရင်းချုပ်" : kind === "four_month_summary" ? "၄ လပတ် ငွေစာရင်းချုပ်" : "နှစ်ချုပ် ငွေစာရင်းချုပ်";
+          const rows: unknown[][] = [];
+          addMeta(rows, title);
+          rows.push(["ကာလ", "ရငွေ", "အသုံးစရိတ်", "ချေးငွေထုတ်", "ချေးငွေပြန်ရ", "အတိုးရ", "ဘဏ်ထုတ်", "ဘဏ်သွင်း", "ခြားနားချက်"]);
+          buildFinancialSummaryRows(granularity).forEach((row) => {
+            rows.push([
+              row.label,
+              row.income,
+              row.expense,
+              row.loanDisbursed,
+              row.loanRepaid,
+              row.interestIncome,
+              row.transferIn,
+              row.transferOut,
+              row.income - row.expense,
+            ]);
+          });
+          await exportXlsxFile({
+            filePrefix: `report_${granularity}_summary`,
+            dialogTitle: "Report Excel (.xlsx) ထုတ်ယူရန်",
+            sheets: [{ name: "Summary", rows }],
+          });
+          return;
+        }
+
+        const tabTitleMap: Record<ReportTab, string> = {
+          income_expense: isAllScope ? "ရငွေ/အသုံးစရိတ်" : "အသင်းသို့ပေးသွင်းငွေ",
+          loans: "ချေးငွေ",
+          funds: isAllScope ? "ဘဏ်/ငွေသား" : "အသင်းမှထုတ်ယူငွေ",
+          registers: "မှတ်ပုံတင်စာရင်း",
+          cash_book: "နှစ်ကော်လံ ငွေစာရင်း",
+          fees: "လစဉ်ကြေး",
+          members: "အသင်းဝင်များ",
+          audit_flags: "Audit Flag",
+        };
+
+        if (reportTab === "fees") {
+          const sheets: { name: string; rows: unknown[][] }[] = [];
+          feeYearSummaries.forEach((summary) => {
+            const rows: unknown[][] = [];
+            addMeta(rows, `လစဉ်ကြေး ပေးဆောင်မှု (${summary.year})`);
+            rows.push(["အမည်", "နှုန်းထား", ...summary.months.map((m) => m.label), "စုစုပေါင်း"]);
+            summary.memberRows.forEach((row) => {
+              const monthCells = summary.months.map((m) => {
+                if (!m.inSelectedRange) return "-";
+                const eligible = !!row.eligibleMap[m.key];
+                const exempt = !!row.exemptMap?.[m.key];
+                if (!eligible || exempt) return "x";
+                return row.paidMap[m.key] ? "✓" : "☐";
+              });
+              rows.push([row.memberName, getFeeRateLabelForRow(row, summary.months), ...monthCells, Number(row.paidTotal || 0)]);
+            });
+            rows.push(["စုစုပေါင်း", "", ...summary.months.map(() => ""), Number(summary.totals.paid || 0)]);
+            sheets.push({ name: `Fees-${summary.year}`, rows });
+          });
+
+          const outstandingRows: unknown[][] = [];
+          addMeta(outstandingRows, "လစဉ်ကြေးပေးရန်ကျန် စာရင်း");
+          outstandingRows.push(["No.", "ခုနှစ်", "အမည်", "ကျသင့်စုစုပေါင်း", "ပေးပြီးစုစုပေါင်း", "ပေးရန်ကျန်"]);
+          feeOutstandingRows.forEach((row: any, index: number) => {
+            outstandingRows.push([index + 1, row.year, row.memberName || "-", Number(row.dueTotal || 0), Number(row.paidTotal || 0), Number(row.unpaidTotal || 0)]);
+          });
+          sheets.push({ name: "Outstanding", rows: outstandingRows });
+
+          await exportXlsxFile({
+            filePrefix: "report_current_fees",
+            dialogTitle: "Report Excel (.xlsx) ထုတ်ယူရန်",
+            sheets,
+          });
+          return;
+        }
+
+        const rows: unknown[][] = [];
+        addMeta(rows, `လက်ရှိအစီရင်ခံစာ (${tabTitleMap[reportTab]})`);
+
+        if (reportTab === "members") {
+          rows.push(["No.", "အမည်", "အသင်းဝင်အမှတ်", "အဖွဲ့တာဝန်", "ကျား/မ", "အသက်", "အခြေအနေ", "ဖုန်း", memberDateBasis === "status" ? "Status Date" : memberDateBasis === "created" ? "Created Date" : "Join Date"]);
+          filteredMemberRows.forEach((m: any, index: number) => {
+            rows.push([
+              index + 1,
+              m?.name || "-",
+              m?.id || "-",
+              Array.isArray(m?.__positionsInRange) && m.__positionsInRange.length > 0
+                ? m.__positionsInRange.map((position: OrgPosition) => ORG_POSITION_LABELS[position] || ORG_POSITION_LABELS.member).join(" / ")
+                : ORG_POSITION_LABELS[(m?.__positionPrimary || m?.__defaultPosition || "member") as OrgPosition] || ORG_POSITION_LABELS.member,
+              MEMBER_GENDER_LABELS[m?.__gender as "male" | "female" | "other"] || "အခြား",
+              m?.__age === null || m?.__age === undefined ? "-" : `${m.__age}`,
+              MEMBER_STATUS_LABELS[m?.__status as MemberStatus] || m?.__status || "-",
+              m?.phone || "-",
+              formatDateForRegister(formatMemberDateByBasis(m)),
+            ]);
+          });
+        } else if (reportTab === "registers") {
+          rows.push(["No.", "အမည်", "အသင်းဝင်အမှတ်", "ရက်စွဲ", "ပြေစာ", "ခေါင်းစဉ်", "ငွေပမာဏ", "မှတ်ချက်"]);
+          sortedRegisterRows.forEach((row: any, index: number) => {
+            rows.push([index + 1, row.name, row.memberId || "-", row.date, row.receipt, row.heading, Number(row.amount || 0), row.notes || "-"]);
+          });
+        } else if (reportTab === "loans") {
+          rows.push(["No.", "ရက်စွဲ", "အမည်", "အသင်းဝင်", "ပြေစာ", "ခေါင်းစဉ်", "ချေးငွေထုတ်", "ချေးငွေပြန်ရ", "အတိုးရ"]);
+          sortedLoanTxnRows.forEach((row: any, index: number) => {
+            const category = String(row?.category || "");
+            rows.push([
+              index + 1,
+              formatDateForRegister(row?.date),
+              row?.payerPayee || memberNameById.get(String(row?.memberId || "")) || "-",
+              row?.memberId || "-",
+              row?.receiptNumber || "-",
+              getCategoryLabel(row?.category),
+              category === "loan_disbursement" ? Number(row?.amount || 0) : "",
+              category === "loan_repayment" ? Number(row?.amount || 0) : "",
+              category === "interest_income" ? Number(row?.amount || 0) : "",
+            ]);
+          });
+        } else if (reportTab === "cash_book") {
+          rows.push(["ရက်စွဲ", "ပြေစာအမှတ်", "အကြောင်းအရာ", "ငွေသားဝင်", "ငွေသားထွက်", "ဘဏ်ဝင်", "ဘဏ်ထွက်", "ငွေသားလက်ကျန်", "ဘဏ်လက်ကျန်"]);
+          cashBookRows.forEach((row: any) => {
+            rows.push([
+              row.date || "-",
+              row.receipt || "-",
+              row.particulars || "-",
+              Number(row.cashIn || 0),
+              Number(row.cashOut || 0),
+              Number(row.bankIn || 0),
+              Number(row.bankOut || 0),
+              Number(row.cashBalance || 0),
+              Number(row.bankBalance || 0),
+            ]);
+          });
+        } else if (reportTab === "audit_flags" && canViewAuditFlags) {
+          rows.push(["No.", "အသင်းဝင်", "ရက်စွဲ", "ပြေစာ", "ခေါင်းစဉ်", "ငွေ", "Audit Note"]);
+          scopedAuditRows.forEach((row: any, index: number) => {
+            rows.push([
+              index + 1,
+              row.memberId || "-",
+              formatDateForRegister(row.date),
+              row.receiptNumber || "-",
+              getCategoryLabel(row.category),
+              Number(row.amount || 0),
+              row.auditNote || "-",
+            ]);
+          });
+        } else {
+          rows.push(["No.", "ရက်စွဲ", "အမည်", "အသင်းဝင်", "ပြေစာ", "ခေါင်းစဉ်", "ရငွေ", "အသုံးစရိတ်", "မှတ်ချက်"]);
+          sortedNonTransferRows.forEach((row: any, index: number) => {
+            const isExpense = String(row?.type || "") === "expense";
+            rows.push([
+              index + 1,
+              formatDateForRegister(row?.date),
+              row?.payerPayee || memberNameById.get(String(row?.memberId || "")) || "-",
+              row?.memberId || "-",
+              row?.receiptNumber || "-",
+              getCategoryLabel(row?.category),
+              isExpense ? "" : Number(row?.amount || 0),
+              isExpense ? Number(row?.amount || 0) : "",
+              getReadableNotes(row?.notes) || "-",
+            ]);
+          });
+        }
+
+        await exportXlsxFile({
+          filePrefix: `report_current_${reportTab}`,
+          dialogTitle: "Report Excel (.xlsx) ထုတ်ယူရန်",
+          sheets: [{ name: tabTitleMap[reportTab], rows }],
+        });
+      } catch (error) {
+        console.error(error);
+        Alert.alert("Error", "Excel ထုတ်မရနိုင်ပါ။");
+      } finally {
+        setPrinting(false);
+      }
+    },
+    [
+      accountSettings?.orgName,
+      buildFinancialSummaryRows,
+      canViewAuditFlags,
+      endDate,
+      executiveMembers,
+      feeOutstandingRows,
+      feeYearSummaries,
+      filteredMemberRows,
+      formatMemberDateByBasis,
+      getFeeRateLabelForRow,
+      isAllScope,
+      keywordSearch,
+      memberDateBasis,
+      memberFlowStats,
+      memberNameById,
+      memberSummaryStats,
+      reportTab,
+      scopedAuditRows,
+      scopeLabel,
+      sortedLoanTxnRows,
+      sortedNonTransferRows,
+      sortedRegisterRows,
+      startDate,
+      txnSearchNeedle,
+      cashBookRows,
     ]
   );
 
@@ -2855,6 +3172,14 @@ export default function ReportsScreen() {
       void generatePdf(kind);
     },
     [generatePdf]
+  );
+
+  const handleExcelKind = useCallback(
+    (kind: PrintReportKind) => {
+      setShowPrintPicker(false);
+      void generateExcel(kind);
+    },
+    [generateExcel]
   );
 
   if (loading || !computeReady) {
@@ -2940,6 +3265,26 @@ export default function ReportsScreen() {
           >
             <Ionicons name="search" size={20} color="white" />
           </Pressable>
+        </View>
+
+        <View style={styles.keywordSearchRow}>
+          <Ionicons name="search-outline" size={18} color={Colors.light.textSecondary} />
+          <TextInput
+            style={styles.keywordSearchInput}
+            value={keywordSearch}
+            onChangeText={setKeywordSearch}
+            placeholder={
+              supportsTxnKeywordSearch
+                ? "ပြေစာ / အမည် / အကြောင်းအရာ / မှတ်ချက် ရိုက်ရှာပါ"
+                : "ဤ Tab တွင် keyword ရှာဖွေမှု မသက်ရောက်ပါ"
+            }
+            placeholderTextColor={Colors.light.textSecondary}
+          />
+          {keywordSearch.trim().length > 0 ? (
+            <Pressable onPress={() => setKeywordSearch("")} style={styles.keywordSearchClearBtn}>
+              <Ionicons name="close-circle" size={18} color={Colors.light.textSecondary} />
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.periodPicker}>
@@ -4332,6 +4677,45 @@ export default function ReportsScreen() {
                 <Text style={styles.printOptionText}>နှစ်ချုပ် ငွေစာရင်းချုပ် Print</Text>
               </Pressable>
             </View>
+            <Text style={[styles.printSectionTitle, { marginTop: 14 }]}>Excel (.xlsx)</Text>
+            <View style={styles.printOptionList}>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handleExcelKind("current")}
+              >
+                <Text style={styles.printOptionText}>လက်ရှိ Report Tab ကို Excel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handleExcelKind("members_filtered")}
+              >
+                <Text style={styles.printOptionText}>အသင်းဝင် Filter စာရင်း Excel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handleExcelKind("executive_committee")}
+              >
+                <Text style={styles.printOptionText}>နာယကနှင့် အမှုဆောင်အဖွဲ့ Excel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handleExcelKind("monthly_summary")}
+              >
+                <Text style={styles.printOptionText}>လချုပ် ငွေစာရင်းချုပ် Excel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handleExcelKind("four_month_summary")}
+              >
+                <Text style={styles.printOptionText}>၄ လပတ် ငွေစာရင်းချုပ် Excel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.printOptionBtn}
+                onPress={() => handleExcelKind("yearly_summary")}
+              >
+                <Text style={styles.printOptionText}>နှစ်ချုပ် ငွေစာရင်းချုပ် Excel</Text>
+              </Pressable>
+            </View>
             <Pressable style={styles.cancelBtn} onPress={() => setShowPrintPicker(false)}>
               <Text style={styles.cancelBtnText}>Close</Text>
             </Pressable>
@@ -4587,6 +4971,28 @@ const styles = StyleSheet.create({
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   searchBtn: { backgroundColor: Colors.light.tint, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  keywordSearchRow: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: "white",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    gap: 8,
+    minHeight: 40,
+  },
+  keywordSearchInput: {
+    flex: 1,
+    fontSize: 12.5,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+    paddingVertical: 8,
+  },
+  keywordSearchClearBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
   periodPicker: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   periodBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border },
   periodBtnActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
