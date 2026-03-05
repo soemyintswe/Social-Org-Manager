@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.42",
-  "latestBuildNumber": "43",
+  "latestVersion": "1.1.43",
+  "latestBuildNumber": "44",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.42-202603050118.apk",
-  "notes": "Version 1.1.42: Finance page now supports PDF print and Excel (.xls) export for current/summary/detail views, plus stability updates.",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.43-202603060102.apk",
+  "notes": "Version 1.1.43: Added XLSX export updates, search-filtered export support, and release stability improvements.",
   "force": false,
-  "publishedAt": "2026-03-04T18:48:43.646Z"
+  "publishedAt": "2026-03-05T18:32:44.614Z"
 }
