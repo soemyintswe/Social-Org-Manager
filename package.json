@@ -20,6 +20,7 @@
     "start": "npx expo start",
     "lint": "npx expo lint",
     "lint:fix": "npx expo lint --fix",
+    "security:audit-runtime": "node scripts/security/audit-runtime.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "reveal": "node reveal-db-url.js"
