@@ -98,10 +98,9 @@ export default function AuditChangeRequestsScreen() {
   const [visibleExecutionLogCount, setVisibleExecutionLogCount] = useState(20);
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
-  const isAdmin = currentUser?.systemRole === "admin";
-  const isTreasurer = isAdmin || myRole === "treasurer";
-  const isAuditor = isAdmin || can("finance.audit_flag") || myRole === "auditor";
-  const isChair = isAdmin || myRole === "chairperson";
+  const isTreasurer = myRole === "treasurer";
+  const isAuditor = can("finance.audit_flag") || myRole === "auditor";
+  const isChair = myRole === "chairperson";
 
   const canView =
     can("finance.view_summary") ||
@@ -110,8 +109,7 @@ export default function AuditChangeRequestsScreen() {
     can("finance.audit_flag") ||
     isAuditor ||
     isTreasurer ||
-    isChair ||
-    isAdmin;
+    isChair;
 
   const allRequests = useMemo(() => {
     const list = Array.isArray(auditChangeRequests) ? [...auditChangeRequests] : [];

@@ -31,7 +31,7 @@ export const REMOTE_CONFIG_ENV_FALLBACKS: Record<string, string> = {
   [REMOTE_CONFIG_KEYS.CLOUD_SYNC_API_KEY]: String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_API_KEY || ""),
   [REMOTE_CONFIG_KEYS.CLOUD_SYNC_ACCOUNT_EMAIL]: String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_ACCOUNT_EMAIL || ""),
   [REMOTE_CONFIG_KEYS.CLOUD_SYNC_FOLDER_NAME]: String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_FOLDER_NAME || ""),
-  [REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED]: String((process.env as any).EXPO_PUBLIC_MANAGED_SYNC_LOCKDOWN_ENABLED || "true"),
+  [REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED]: String((process.env as any).EXPO_PUBLIC_MANAGED_SYNC_LOCKDOWN_ENABLED || ""),
   [REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL]: String((process.env as any).EXPO_PUBLIC_MANAGED_LAN_SYNC_URL || ""),
   [REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_ENABLED]: String((process.env as any).EXPO_PUBLIC_MANAGED_LAN_SYNC_ENABLED || ""),
   [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT]: String((process.env as any).EXPO_PUBLIC_MANAGED_CLOUD_SYNC_ENDPOINT || ""),
@@ -169,9 +169,20 @@ export function getManagedCloudSyncEnabled(): boolean | null {
   return parseBoolean(getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENABLED));
 }
 
+function hasManagedSyncOverridesConfigured(): boolean {
+  return Boolean(
+    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL) ||
+    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT) ||
+    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY) ||
+    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL) ||
+    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME)
+  );
+}
+
 export function getManagedSyncLockdownEnabled(): boolean {
   const parsed = parseBoolean(getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED));
-  return parsed !== false;
+  if (parsed !== null) return parsed;
+  return hasManagedSyncOverridesConfigured();
 }
 
 export function getDeviceAuthRequired(): boolean {
@@ -241,7 +252,7 @@ export async function initializeRemoteConfig(
     await remote.setDefaults({
       welcome_message: "Welcome to OrgHub",
       feature_new_ui_enabled: false,
-      [REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED]: true,
+        [REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED]: false,
       [REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL]: "",
       [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT]: "",
       [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY]: "",

@@ -294,6 +294,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const lastLocalMutationAtRef = useRef(0);
   const pullInFlightRef = useRef(false);
   const pushInFlightRef = useRef(false);
+  const pendingCloudBackfillRef = useRef(false);
   const LOCAL_PULL_GUARD_MS = 12000;
   const LOCAL_MUTATION_PUSH_WINDOW_MS = 15000;
   const AUTO_PUSH_DEBOUNCE_MS = 800;
@@ -302,14 +303,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const pushAllSyncTargets = useCallback(async () => {
     try {
       await syncQueue.enqueue(async () => {
-        const results = await Promise.allSettled([
-          store.pushLanSnapshotFromLocalDetailed(),
-          store.pushCloudSnapshotFromLocalDetailed(),
-        ]);
+        const results = [];
+        const cloudPush = await store.pushCloudSnapshotFromLocalDetailed();
+        if (cloudPush.ok) {
+          pendingCloudBackfillRef.current = false;
+        }
+        results.push(cloudPush);
+        results.push(await store.pushLanSnapshotFromLocalDetailed());
         const hasHealthyResult = results.some((row) => {
-          if (row.status !== "fulfilled") return false;
-          if (row.value?.ok) return true;
-          const reason = String(row.value?.reason || "");
+          if (row?.ok) return true;
+          const reason = String(row?.reason || "");
           return (
             reason === "disabled_or_empty_url" ||
             reason === "cloud_disabled_or_empty_endpoint"
@@ -324,20 +327,58 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const flushPendingCloudBackfill = useCallback(async () => {
+    if (!pendingCloudBackfillRef.current) return;
+    try {
+      const runtimeConfig = await store.getEffectiveSyncRuntimeConfig();
+      if (!runtimeConfig.cloud.enabled) return;
+      const result = await store.pushCloudSnapshotFromLocalDetailed();
+      if (result.ok) {
+        pendingCloudBackfillRef.current = false;
+      }
+    } catch (error) {
+      console.warn("flushPendingCloudBackfill failed:", error);
+    }
+  }, []);
+
   const pullAllSyncTargets = useCallback(async (): Promise<boolean> => {
     try {
       return await syncQueue.enqueue(async () => {
-        const [lanChanged, cloudChanged] = await Promise.allSettled([
-          store.pullLanSnapshotToLocalDetailed(),
-          store.pullCloudSnapshotToLocalDetailed(),
-        ]);
-        const changedFromLan = lanChanged.status === "fulfilled" && lanChanged.value.ok && lanChanged.value.changed === true;
-        const changedFromCloud = cloudChanged.status === "fulfilled" && cloudChanged.value.ok && cloudChanged.value.changed === true;
+        const runtimeConfig = await store.getEffectiveSyncRuntimeConfig();
+        const cloudPull =
+          runtimeConfig.cloud.enabled
+            ? await store.pullCloudSnapshotToLocalDetailed()
+            : ({ ok: false, changed: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
+        const shouldUseLanFallback =
+          runtimeConfig.lan.enabled &&
+          (
+            !runtimeConfig.cloud.enabled ||
+            !cloudPull.ok ||
+            [
+              "cloud_snapshot_not_found",
+              "snapshot_not_found",
+              "snapshot_read_failed",
+              "snapshot_empty",
+            ].includes(String(cloudPull.reason || ""))
+          );
+        const lanPull =
+          shouldUseLanFallback
+            ? await store.pullLanSnapshotToLocalDetailed()
+            : ({ ok: true, changed: false, reason: "lan_skipped_cloud_primary" } as const);
+        const changedFromCloud = cloudPull.ok && cloudPull.changed === true;
+        const changedFromLan = lanPull.ok && lanPull.changed === true;
+        if (changedFromLan && runtimeConfig.cloud.enabled && !changedFromCloud) {
+          pendingCloudBackfillRef.current = true;
+        }
+        if (changedFromCloud) {
+          pendingCloudBackfillRef.current = false;
+        }
         const hasHealthyResult =
-          (lanChanged.status === "fulfilled" &&
-            (lanChanged.value.ok || String(lanChanged.value.reason || "") === "disabled_or_empty_url")) ||
-          (cloudChanged.status === "fulfilled" &&
-            (cloudChanged.value.ok || String(cloudChanged.value.reason || "") === "cloud_disabled_or_empty_endpoint"));
+          cloudPull.ok ||
+          String(cloudPull.reason || "") === "cloud_disabled_or_empty_endpoint" ||
+          lanPull.ok ||
+          String(lanPull.reason || "") === "disabled_or_empty_url" ||
+          String(lanPull.reason || "") === "lan_skipped_cloud_primary";
         if (!hasHealthyResult) {
           throw new Error("sync_pull_all_failed");
         }
@@ -457,7 +498,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const timer = setInterval(() => {
       void (async () => {
         if (pullInFlightRef.current) return;
-        if (!(accountSettings.syncEnabled || accountSettings.cloudSyncEnabled)) return;
+        const runtimeConfig = await store.getEffectiveSyncRuntimeConfig();
+        if (!(runtimeConfig.lan.enabled || runtimeConfig.cloud.enabled)) return;
         const elapsed = Date.now() - lastLocalMutationAtRef.current;
         if (elapsed < LOCAL_PULL_GUARD_MS) return;
         pullInFlightRef.current = true;
@@ -466,6 +508,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           if (changed) {
             await refreshData({ skipPull: true, markLocalMutation: false });
           }
+          await flushPendingCloudBackfill();
         } finally {
           pullInFlightRef.current = false;
         }
@@ -475,8 +518,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [
     pullAllSyncTargets,
     refreshData,
-    accountSettings.syncEnabled,
-    accountSettings.cloudSyncEnabled,
+    flushPendingCloudBackfill,
     AUTO_PULL_INTERVAL_MS,
     LOCAL_PULL_GUARD_MS,
   ]);

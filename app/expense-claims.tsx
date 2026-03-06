@@ -117,8 +117,8 @@ export default function ExpenseClaimsScreen() {
 
   const canViewFinance = can("finance.view_summary") || can("finance.view_detail") || can("finance.view_self") || can("finance.view_all");
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
-  const canApprove = currentUser?.systemRole === "admin" || role === "patron" || role === "chairperson" || role === "vice_chairperson";
-  const canDisburse = currentUser?.systemRole === "admin" || role === "treasurer";
+  const canApprove = role === "patron" || role === "chairperson" || role === "vice_chairperson";
+  const canDisburse = role === "treasurer";
   const shouldOpenCreateFromParam = useMemo(() => {
     const value = String(openCreateParam || "").trim().toLowerCase();
     return value === "1" || value === "true" || value === "yes" || value === "open";

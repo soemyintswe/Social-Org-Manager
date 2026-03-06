@@ -201,6 +201,7 @@ function RootLayoutNav() {
   const segments = useSegments();
   const router = useRouter();
   const inLogin = (segments[0] as string) === "sign-in";
+  const isSystemAdmin = currentUser?.systemRole === "admin";
   const topIdentityName = String(currentMember?.name || currentUser?.displayName || "").trim();
   const topIdentityMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
   const topIdentityText = topIdentityName && topIdentityMemberId
@@ -228,6 +229,17 @@ function RootLayoutNav() {
       router.replace("/" as any);
     }
   }, [isAuthenticated, loading, inLogin, router]);
+
+  useEffect(() => {
+    if (loading || !isAuthenticated || !isSystemAdmin || inLogin) return;
+    const rootSegment = String(segments[0] || "");
+    const childSegment = String(segments[1] || "");
+    const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
+    const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
+    const isAdminAccountSettings = rootSegment === "account-settings";
+    if (isAdminHome || isAdminSystem || isAdminAccountSettings) return;
+    router.replace("/" as any);
+  }, [segments, loading, isAuthenticated, isSystemAdmin, inLogin, router]);
 
   useEffect(() => {
     if (loading || Platform.OS === "web" || !isAuthenticated || inLogin) return;

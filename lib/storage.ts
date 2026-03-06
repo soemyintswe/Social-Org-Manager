@@ -3208,23 +3208,31 @@ async function resolveCloudSyncConfig(): Promise<{
   const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const remoteEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
   const legacyEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const endpoint = managedLockdownEnabled ? remoteEndpoint : (legacyEndpoint || remoteEndpoint);
+  const managedCloudOverrideActive = managedLockdownEnabled && !!remoteEndpoint;
+  const endpoint = managedCloudOverrideActive ? remoteEndpoint : (legacyEndpoint || remoteEndpoint);
   const managedEnabled = getManagedCloudSyncEnabled();
   const remoteApiKey = sanitizeCloudApiKey(getRemoteCloudSyncApiKey() || "");
   const legacyApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
-  const apiKey = managedLockdownEnabled ? remoteApiKey : (legacyApiKey || remoteApiKey);
+  const apiKey = managedCloudOverrideActive ? remoteApiKey : (legacyApiKey || remoteApiKey);
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
   const remoteAccountEmail = String(getRemoteCloudSyncAccountEmail() || "").trim();
-  const accountEmail = managedLockdownEnabled
+  const accountEmail = managedCloudOverrideActive
     ? remoteAccountEmail
     : (String(settings.cloudSyncGoogleAccountEmail || "").trim() || remoteAccountEmail);
   const remoteFolderName = String(getRemoteCloudSyncFolderName() || "").trim();
-  const folderName = managedLockdownEnabled
+  const folderName = managedCloudOverrideActive
     ? (remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
     : (String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
-  const enabled = managedLockdownEnabled
-    ? (managedEnabled === true && !!endpoint)
-    : ((managedEnabled === null ? settings.cloudSyncEnabled === true : managedEnabled === true) && !!endpoint);
+  const hasLegacyEndpoint = !!legacyEndpoint;
+  const enabledFlag =
+    managedEnabled !== null
+      ? managedEnabled
+      : managedCloudOverrideActive
+        ? true
+        : hasLegacyEndpoint
+          ? true
+          : settings.cloudSyncEnabled === true;
+  const enabled = enabledFlag && !!endpoint;
   return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
 }
 
@@ -3279,15 +3287,23 @@ async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }
   const settings = await getAccountSettings();
   const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+  const managedLanOverrideActive = managedLockdownEnabled && !!remoteUrl;
   const url = normalizeSyncServerUrl(
-    managedLockdownEnabled
+    managedLanOverrideActive
       ? remoteUrl
       : (settings.syncServerUrl || remoteUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
   );
+  const hasLocalUrl = !!normalizeSyncServerUrl(String(settings.syncServerUrl || ""));
   const managedEnabled = getManagedLanSyncEnabled();
-  const enabled = managedLockdownEnabled
-    ? (managedEnabled === true && !!url)
-    : ((managedEnabled === null ? settings.syncEnabled !== false : managedEnabled === true) && !!url);
+  const enabledFlag =
+    managedEnabled !== null
+      ? managedEnabled
+      : managedLanOverrideActive
+        ? true
+        : hasLocalUrl
+          ? true
+          : settings.syncEnabled !== false;
+  const enabled = enabledFlag && !!url;
   return { url, enabled };
 }
 
@@ -3299,27 +3315,29 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
     hasApiKey: boolean;
     source: "managed_remote_config" | "local_settings" | "default";
   };
-}> {
-  const settings = await getAccountSettings();
-  const managedLockdownEnabled = getManagedSyncLockdownEnabled();
-  const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
-  const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
-  const lan = await resolveSyncServerUrl();
-  const hasLocalLanSetting = !managedLockdownEnabled && !!String(settings.syncServerUrl || "").trim();
-  const lanSource: "managed_remote_config" | "local_settings" | "default" = hasLocalLanSetting
-    ? "local_settings"
-    : managedLanUrl
+  }> {
+    const settings = await getAccountSettings();
+    const managedLockdownEnabled = getManagedSyncLockdownEnabled();
+    const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+    const managedLanOverrideActive = managedLockdownEnabled && !!managedLanUrl;
+    const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
+    const lan = await resolveSyncServerUrl();
+    const hasLocalLanSetting = !!String(settings.syncServerUrl || "").trim();
+    const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanOverrideActive
       ? "managed_remote_config"
+      : hasLocalLanSetting
+      ? "local_settings"
       : "default";
 
-  const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
-  const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const cloud = await resolveCloudSyncConfig();
-  const hasLocalCloudSetting = !managedLockdownEnabled && !!localCloudEndpoint;
-  const cloudSource: "managed_remote_config" | "local_settings" | "default" = hasLocalCloudSetting
-    ? "local_settings"
-    : managedCloudEndpoint
+    const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
+    const managedCloudOverrideActive = managedLockdownEnabled && !!managedCloudEndpoint;
+    const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+    const cloud = await resolveCloudSyncConfig();
+    const hasLocalCloudSetting = !!localCloudEndpoint;
+    const cloudSource: "managed_remote_config" | "local_settings" | "default" = managedCloudOverrideActive
       ? "managed_remote_config"
+      : hasLocalCloudSetting
+      ? "local_settings"
       : "default";
 
   return {

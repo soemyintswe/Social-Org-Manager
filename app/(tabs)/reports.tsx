@@ -381,7 +381,6 @@ export default function ReportsScreen() {
   const canViewAuditFlags = can("finance.audit_flag") || canViewAllFinanceRecords;
   const canChooseScope = canViewAllReports && canViewAllFinanceRecords;
   const canManageFeePolicies =
-    currentUser?.systemRole === "admin" ||
     can("finance.manage") ||
     normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
   
@@ -4677,7 +4676,7 @@ export default function ReportsScreen() {
                 <Text style={styles.printOptionText}>နှစ်ချုပ် ငွေစာရင်းချုပ် Print</Text>
               </Pressable>
             </View>
-            <Text style={[styles.printSectionTitle, { marginTop: 14 }]}>Excel (.xlsx)</Text>
+              <Text style={[styles.printSectionTitle, { marginTop: 14 }]}>Excel (.xlsx - Mobile/Desktop)</Text>
             <View style={styles.printOptionList}>
               <Pressable
                 style={styles.printOptionBtn}

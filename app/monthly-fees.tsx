@@ -141,16 +141,16 @@ export default function MonthlyFeesScreen() {
   const router = useRouter();
   const { accountSettings, updateAccountSettings, members = [], transactions = [] } = useData() as any;
   const { currentUser, currentMember } = useAuth();
+  const isSystemAdmin = currentUser?.systemRole === "admin";
 
   const canView =
-    currentUser?.systemRole === "admin" ||
+    !isSystemAdmin &&
     isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
-  const isAdmin = currentUser?.systemRole === "admin";
-  const isTreasurer = isAdmin || role === "treasurer";
-  const isChair = isAdmin || role === "chairperson";
+  const isTreasurer = role === "treasurer";
+  const isChair = role === "chairperson";
   const canEdit = isTreasurer || isChair;
-  const canViewAllDetails = isAdmin || isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
+  const canViewAllDetails = !isSystemAdmin && isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
 
   const rateRules = useMemo<MonthlyFeeRateRule[]>(
     () => (Array.isArray(accountSettings?.monthlyFeeRateRules) ? accountSettings.monthlyFeeRateRules : []),

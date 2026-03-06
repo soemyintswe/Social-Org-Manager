@@ -28,7 +28,6 @@ import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription 
 import { exportXlsxFile } from "@/lib/xlsx-export";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
-import * as FileSystem from "expo-file-system/legacy";
 
 type Tab = "transactions" | "transfers" | "loans";
 type FinanceViewScope = "all" | "self" | "member";
@@ -1062,37 +1061,6 @@ export default function FinanceScreen() {
     await Print.printAsync({ html });
   }, []);
 
-  const shareHtmlAsLegacyExcel = useCallback(async (html: string, filePrefix: string) => {
-    const timestamp = new Date().toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
-    const fileName = `${filePrefix}_${timestamp}.xls`;
-    const mime = "application/vnd.ms-excel;charset=utf-8";
-
-    if (Platform.OS === "web") {
-      const blob = new Blob([`\uFEFF${html}`], { type: mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      return;
-    }
-
-    const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
-    if (!directory) return;
-    const fileUri = directory + fileName;
-    await FileSystem.writeAsStringAsync(fileUri, `\uFEFF${html}`);
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(fileUri, {
-        mimeType: "application/vnd.ms-excel",
-        dialogTitle: "Formatted Excel (.xls) ထုတ်ယူရန်",
-        UTI: "com.microsoft.excel.xls",
-      });
-    }
-  }, []);
-
   const exportFinanceXlsx = useCallback(async (rows: unknown[][], sheetName: string, filePrefix: string) => {
     await exportXlsxFile({
       filePrefix,
@@ -1352,22 +1320,6 @@ export default function FinanceScreen() {
     [buildBaseHtml, buildFinanceHtmlPayload, shareHtmlAsPdf]
   );
 
-  const generateFinanceStyledExcel = useCallback(
-    async (kind: FinancePrintKind) => {
-      try {
-        setPrinting(true);
-        const payload = buildFinanceHtmlPayload(kind);
-        const html = buildBaseHtml(payload.title, payload.subtitle, payload.content, { forExcel: true });
-        await shareHtmlAsLegacyExcel(html, `finance_${activeTab}_formatted`);
-      } catch {
-        Alert.alert("အမှား", "Formatted Excel ထုတ်ယူရာတွင် အဆင်မပြေပါ။");
-      } finally {
-        setPrinting(false);
-      }
-    },
-    [activeTab, buildBaseHtml, buildFinanceHtmlPayload, shareHtmlAsLegacyExcel]
-  );
-
   const generateFinanceExcel = useCallback(
     async (kind: FinancePrintKind) => {
       try {
@@ -1532,14 +1484,6 @@ export default function FinanceScreen() {
       void generateFinanceExcel(kind);
     },
     [generateFinanceExcel]
-  );
-
-  const handleLegacyExcelKind = useCallback(
-    (kind: FinancePrintKind) => {
-      setShowPrintPicker(false);
-      void generateFinanceStyledExcel(kind);
-    },
-    [generateFinanceStyledExcel]
   );
 
   if (!canViewAnyFinance) {
@@ -2074,7 +2018,7 @@ export default function FinanceScreen() {
                 <Text style={styles.printOptionText}>အသေးစိတ်စာရင်းသာ Print</Text>
               </Pressable>
             </View>
-            <Text style={styles.printSectionTitle}>Excel (.xlsx)</Text>
+            <Text style={styles.printSectionTitle}>Excel (.xlsx - Mobile/Desktop)</Text>
             <View style={styles.printOptionList}>
               <Pressable style={styles.printOptionBtn} onPress={() => handleExcelKind("current")}>
                 <Text style={styles.printOptionText}>လက်ရှိ Tab (စာရင်းချုပ် + အသေးစိတ်) Excel</Text>
@@ -2084,18 +2028,6 @@ export default function FinanceScreen() {
               </Pressable>
               <Pressable style={styles.printOptionBtn} onPress={() => handleExcelKind("details")}>
                 <Text style={styles.printOptionText}>အသေးစိတ်စာရင်းသာ Excel</Text>
-              </Pressable>
-            </View>
-            <Text style={[styles.printSectionTitle, { marginTop: 12 }]}>Formatted Excel (.xls - Desktop)</Text>
-            <View style={styles.printOptionList}>
-              <Pressable style={styles.printOptionBtn} onPress={() => handleLegacyExcelKind("current")}>
-                <Text style={styles.printOptionText}>လက်ရှိ Tab (format ပြည့်) Excel</Text>
-              </Pressable>
-              <Pressable style={styles.printOptionBtn} onPress={() => handleLegacyExcelKind("summary")}>
-                <Text style={styles.printOptionText}>စာရင်းချုပ်သာ (format ပြည့်) Excel</Text>
-              </Pressable>
-              <Pressable style={styles.printOptionBtn} onPress={() => handleLegacyExcelKind("details")}>
-                <Text style={styles.printOptionText}>အသေးစိတ်သာ (format ပြည့်) Excel</Text>
               </Pressable>
             </View>
             <Pressable style={styles.cancelBtn} onPress={() => setShowPrintPicker(false)}>

@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 
 export type XlsxSheetData = {
   name: string;
@@ -68,6 +68,19 @@ function buildColWidths(rows: unknown[][]): { wch: number }[] {
   return widths.map((wch) => ({ wch }));
 }
 
+function countNonEmptyCells(row: unknown[]): number {
+  return row.reduce<number>((count, cell) => (String(cell ?? "").trim() ? count + 1 : count), 0);
+}
+
+function buildCellBorder(color = "D7DEE8") {
+  return {
+    top: { style: "thin", color: { rgb: color } },
+    bottom: { style: "thin", color: { rgb: color } },
+    left: { style: "thin", color: { rgb: color } },
+    right: { style: "thin", color: { rgb: color } },
+  };
+}
+
 function applyWorksheetFormatting(ws: XLSX.WorkSheet, rows: unknown[][], explicitHeaderRow?: number): void {
   const ref = ws["!ref"];
   if (!ref) return;
@@ -75,6 +88,7 @@ function applyWorksheetFormatting(ws: XLSX.WorkSheet, rows: unknown[][], explici
   const maxCol = range.e.c;
   const maxRow = range.e.r;
   const headerRow = explicitHeaderRow ?? detectHeaderRowIndex(rows);
+  const defaultBorder = buildCellBorder();
 
   ws["!cols"] = buildColWidths(rows);
 
@@ -98,10 +112,40 @@ function applyWorksheetFormatting(ws: XLSX.WorkSheet, rows: unknown[][], explici
   }
 
   for (let r = range.s.r; r <= range.e.r; r += 1) {
+    const row = Array.isArray(rows[r]) ? rows[r] : [];
+    const nonEmptyCount = countNonEmptyCells(row);
+    const isTitleRow = r === 0 && nonEmptyCount === 1;
+    const isSubtitleRow = r === 1 && nonEmptyCount === 1;
+    const isMetaRow = r === 2 && nonEmptyCount === 1;
+    const isSectionRow =
+      !isTitleRow &&
+      !isSubtitleRow &&
+      !isMetaRow &&
+      headerRow !== undefined &&
+      r < headerRow &&
+      nonEmptyCount === 1 &&
+      String(row[0] ?? "").trim();
+
     for (let c = range.s.c; c <= range.e.c; c += 1) {
       const addr = XLSX.utils.encode_cell({ r, c });
       const cell = ws[addr] as any;
       if (!cell) continue;
+
+      const cellValue = cell.v;
+      const isNumber = typeof cellValue === "number";
+      const baseStyle = {
+        border: defaultBorder,
+        alignment: {
+          horizontal: isNumber ? "right" : "left",
+          vertical: "center",
+          wrapText: true,
+        },
+        font: {
+          name: "Arial",
+          sz: 11,
+          color: { rgb: "0F172A" },
+        },
+      };
 
       if (typeof cell.v === "number") {
         const isInteger = Number.isInteger(cell.v);
@@ -109,20 +153,47 @@ function applyWorksheetFormatting(ws: XLSX.WorkSheet, rows: unknown[][], explici
         cell.z = isInteger ? "#,##0" : "#,##0.00";
       }
 
-      if (headerRow !== undefined && r === headerRow) {
+      if (isTitleRow) {
         cell.s = {
-          ...(cell.s || {}),
-          font: { ...(cell.s?.font || {}), bold: true, color: { rgb: "FFFFFFFF" } },
+          ...baseStyle,
+          font: { name: "Arial", sz: 16, bold: true, color: { rgb: "0F172A" } },
+          fill: { patternType: "solid", fgColor: { rgb: "E6FFFB" } },
+          alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        };
+      } else if (isSubtitleRow) {
+        cell.s = {
+          ...baseStyle,
+          font: { name: "Arial", sz: 13, bold: true, color: { rgb: "0F172A" } },
+          fill: { patternType: "solid", fgColor: { rgb: "F8FAFC" } },
+          alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        };
+      } else if (isMetaRow) {
+        cell.s = {
+          ...baseStyle,
+          font: { name: "Arial", sz: 10, italic: true, color: { rgb: "475569" } },
+          fill: { patternType: "solid", fgColor: { rgb: "F8FAFC" } },
+          alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        };
+      } else if (isSectionRow) {
+        cell.s = {
+          ...baseStyle,
+          font: { name: "Arial", sz: 12, bold: true, color: { rgb: "0F172A" } },
+          fill: { patternType: "solid", fgColor: { rgb: "DBEAFE" } },
+          alignment: { horizontal: "left", vertical: "center", wrapText: true },
+        };
+      } else if (headerRow !== undefined && r === headerRow) {
+        cell.s = {
+          ...baseStyle,
+          font: { name: "Arial", sz: 11, bold: true, color: { rgb: "FFFFFFFF" } },
           fill: { patternType: "solid", fgColor: { rgb: "0EA5A4" } },
           alignment: { horizontal: "center", vertical: "center", wrapText: true },
         };
       } else {
         cell.s = {
-          ...(cell.s || {}),
-          alignment: {
-            horizontal: typeof cell.v === "number" ? "right" : "left",
-            vertical: "center",
-            wrapText: true,
+          ...baseStyle,
+          fill: {
+            patternType: "solid",
+            fgColor: { rgb: r % 2 === 0 ? "FFFFFF" : "F8FAFC" },
           },
         };
       }

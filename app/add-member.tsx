@@ -176,7 +176,6 @@ export default function AddMemberScreen() {
   const [saving, setSaving] = useState(false);
   const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
   const isChairOrVice =
-    currentUser?.systemRole === "admin" ||
     actorPosition === "chairperson" ||
     actorPosition === "vice_chairperson";
   const isEditingOwnRecord =

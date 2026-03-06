@@ -1,12 +1,7 @@
 /* eslint-disable no-console */
 const { execSync } = require("child_process");
 
-const ALLOWLIST = new Map([
-  [
-    "xlsx",
-    "Known upstream advisory with no patched release on npm yet; app uses write-only export path.",
-  ],
-]);
+const ALLOWLIST = new Map();
 
 function parseAuditJson(raw) {
   const trimmed = String(raw || "").trim();

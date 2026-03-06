@@ -24,6 +24,7 @@ export default function FloatingTabMenu({
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const { can, signOut, isAuthenticated, currentUser, currentMember } = useAuth();
+  const isSystemAdmin = currentUser?.systemRole === "admin";
   const isTopBar = mode === "topbar";
   const isPhoneNarrow = windowWidth <= 430;
   const gridColumnCount = isPhoneNarrow ? 2 : 1;
@@ -31,6 +32,13 @@ export default function FloatingTabMenu({
   const menuMaxHeight = Math.max(280, windowHeight - estimatedTopOffset - insets.bottom - 18);
 
   const menuItems = useMemo(() => {
+    if (isSystemAdmin) {
+      return [
+        { name: "ပင်မစာမျက်နှာ", icon: "home-outline", route: "/" },
+        { name: "System Information", icon: "settings-outline", route: "/system", enabled: true },
+        { name: "ချိန်ညှိရန်", icon: "options-outline", route: "/account-settings", enabled: true },
+      ];
+    }
     return [
       { name: "ပင်မစာမျက်နှာ", icon: "home-outline", route: "/" },
       {
@@ -85,9 +93,7 @@ export default function FloatingTabMenu({
         name: "လစဉ်ကြေး",
         icon: "calendar-number-outline",
         route: "/monthly-fees",
-        enabled:
-          currentUser?.systemRole === "admin" ||
-          isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition),
+        enabled: isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition),
       },
       {
         name: "System Information",
@@ -101,7 +107,7 @@ export default function FloatingTabMenu({
         route: "/account-settings",
       },
     ].filter((item) => item.enabled !== false);
-  }, [can, currentMember?.orgPosition, currentUser?.orgPosition, currentUser?.systemRole]);
+  }, [can, currentMember?.orgPosition, currentUser?.orgPosition, isSystemAdmin]);
 
   const handleNavigate = (route: string) => {
     setIsOpen(false);

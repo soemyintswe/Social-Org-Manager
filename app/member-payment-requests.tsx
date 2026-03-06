@@ -269,7 +269,7 @@ export default function MemberPaymentRequestsScreen() {
   const [showAcceptedDatePicker, setShowAcceptedDatePicker] = useState(false);
 
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
-  const canReview = currentUser?.systemRole === "admin" || role === "treasurer";
+  const canReview = role === "treasurer";
   const shouldOpenCreateFromParam = useMemo(() => {
     const value = String(openCreateParam || "").trim().toLowerCase();
     return value === "1" || value === "true" || value === "yes" || value === "open";

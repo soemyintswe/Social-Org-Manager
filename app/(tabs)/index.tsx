@@ -37,6 +37,20 @@ import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
 import { resolveNotificationRoute } from "@/lib/notification-routing";
 
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
+const loadSeenMarkerSet = async (key: string): Promise<Set<string>> => {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item || "")).filter(Boolean) : []);
+  } catch {
+    return new Set<string>();
+  }
+};
+
+const saveSeenMarkerSet = async (key: string, values: Set<string>): Promise<void> => {
+  await AsyncStorage.setItem(key, JSON.stringify(Array.from(values)));
+};
 
 interface Transaction {
   id: string;
@@ -146,6 +160,7 @@ export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
+  const isSystemAdmin = currentUser?.systemRole === "admin";
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
   const userIdentityLabel = useMemo(() => {
@@ -158,12 +173,12 @@ export default function DashboardScreen() {
   const canCreateFinance = can("finance.create") || can("finance.manage");
   const canApproveMemberChanges = can("members.approve_changes");
   const canProposeMemberChanges = can("members.propose_changes");
-  const canViewOrgFinanceSummary =
-    currentUser?.systemRole === "admin" ||
+  const canViewOrgFinanceSummary = !isSystemAdmin && (
     can("finance.view_summary") ||
     can("finance.view_detail") ||
     can("finance.view_all") ||
-    isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
+    isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition)
+  );
   const hasPersonalFinanceProfile = Boolean(currentUser?.memberId);
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
     router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);
@@ -189,7 +204,7 @@ export default function DashboardScreen() {
       const cloudEnabled = runtimeConfig.cloud.enabled;
 
       if (!lanEnabled && !cloudEnabled) {
-        Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync ကို Account Settings မှာ Enable လုပ်ပေးပါ။");
+        Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync configuration ကို Admin account သို့မဟုတ် Remote Config မှာ စစ်ဆေးပေးပါ။");
         return;
       }
 
@@ -642,11 +657,11 @@ export default function DashboardScreen() {
 
   const auditRequestInbox = useMemo(() => {
     const all = Array.isArray(auditChangeRequests) ? auditChangeRequests : [];
-    const canViewAllAudit =
+    const canViewAllAudit = !isSystemAdmin && (
       can("finance.view_detail") ||
       can("finance.view_all") ||
-      can("finance.audit_flag") ||
-      currentUser?.systemRole === "admin";
+      can("finance.audit_flag")
+    );
     const visible = canViewAllAudit ? all : all.filter((item: any) => item.createdByUserId === currentUser?.id);
     const pending = visible.filter((item: any) => item.status === "pending").length;
     const suspended = visible.filter((item: any) => item.status === "suspended").length;
@@ -654,7 +669,7 @@ export default function DashboardScreen() {
     const rejected = visible.filter((item: any) => item.status === "rejected").length;
     const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
     return { visibleCount: visible.length, pending, suspended, approved, rejected, cancelled };
-  }, [auditChangeRequests, currentUser?.id, currentUser?.systemRole, can]);
+  }, [auditChangeRequests, currentUser?.id, can, isSystemAdmin]);
 
   // Schedule Birthday Notification
   useEffect(() => {
@@ -747,6 +762,11 @@ export default function DashboardScreen() {
         for (const item of sorted) {
           const eventId = String(item?.id || "");
           if (!eventId || existingIds.has(eventId)) continue;
+          if (item?.readBy?.[currentUser.id]) {
+            existingIds.add(eventId);
+            changed = true;
+            continue;
+          }
           if (item?.createdByUserId && item.createdByUserId === currentUser.id) {
             existingIds.add(eventId);
             changed = true;
@@ -793,7 +813,7 @@ export default function DashboardScreen() {
 
         const key = `@request_notification_seen_ids_${me}`;
         const existingRaw = await AsyncStorage.getItem(key);
-        const seen = new Set<string>(existingRaw ? JSON.parse(existingRaw) : []);
+        const seen = await loadSeenMarkerSet(key);
         const myNotificationIds = (notifications || [])
           .filter((item: any) => {
             const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
@@ -824,6 +844,12 @@ export default function DashboardScreen() {
           if (!id || seen.has(id)) continue;
           const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
           if (!targets.includes(me)) continue;
+          const readBy = Array.isArray(item?.readByUserIds) ? item.readByUserIds.map((v: any) => String(v || "").trim()) : [];
+          if (readBy.includes(me)) {
+            seen.add(id);
+            changed = true;
+            continue;
+          }
           if (String(item?.createdByUserId || "") === me) {
             seen.add(id);
             changed = true;
@@ -840,7 +866,7 @@ export default function DashboardScreen() {
           changed = true;
         }
         if (changed) {
-          await AsyncStorage.setItem(key, JSON.stringify(Array.from(seen)));
+          await saveSeenMarkerSet(key, seen);
         }
       } catch (error) {
         console.log("Request notification scheduling failed:", error);
@@ -848,6 +874,96 @@ export default function DashboardScreen() {
     };
     void scheduleRequestNotifications();
   }, [notifications, currentUser?.id]);
+
+  useEffect(() => {
+    const scheduleChatNotifications = async () => {
+      const isExpoGo = Constants.appOwnership === "expo";
+      if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
+      const me = String(currentUser?.id || "").trim();
+      if (!me) return;
+      if (!Array.isArray(chatThreads) || !Array.isArray(chatMessages) || chatMessages.length === 0) return;
+      try {
+        const Notifications = require("expo-notifications");
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        const key = `@chat_notification_seen_ids_${me}`;
+        const existingRaw = await AsyncStorage.getItem(key);
+        const seen = await loadSeenMarkerSet(key);
+        const myThreadIds = new Set(
+          (chatThreads || [])
+            .filter((thread: any) => Array.isArray(thread?.participantUserIds) && thread.participantUserIds.includes(me))
+            .map((thread: any) => String(thread?.id || ""))
+            .filter(Boolean)
+        );
+        const visibleMessageMarkers = (chatMessages || [])
+          .filter((item: any) => myThreadIds.has(String(item?.threadId || "")) && String(item?.senderUserId || "") !== me)
+          .map((item: any) => `${String(item?.threadId || "")}:${String(item?.id || "")}`)
+          .filter((item: string) => !item.startsWith(":") && !item.endsWith(":"));
+
+        if (!existingRaw) {
+          await AsyncStorage.setItem(key, JSON.stringify(visibleMessageMarkers));
+          return;
+        }
+
+        const { status } = await Notifications.getPermissionsAsync();
+        let finalStatus = status;
+        if (status !== "granted") {
+          const req = await Notifications.requestPermissionsAsync();
+          finalStatus = req.status;
+        }
+        if (finalStatus !== "granted") return;
+
+        let changed = false;
+        const ordered = [...(chatMessages as any[])].sort(
+          (a, b) => new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime()
+        );
+        for (const item of ordered) {
+          const threadId = String(item?.threadId || "");
+          const messageId = String(item?.id || "");
+          const marker = `${threadId}:${messageId}`;
+          if (!threadId || !messageId || seen.has(marker) || !myThreadIds.has(threadId)) continue;
+          if (String(item?.senderUserId || "") === me) {
+            seen.add(marker);
+            changed = true;
+            continue;
+          }
+          const thread = (chatThreads || []).find((row: any) => String(row?.id || "") === threadId);
+          const lastReadAt = String(thread?.lastReadAtBy?.[me] || "");
+          const messageCreatedAt = new Date(String(item?.createdAt || 0)).getTime();
+          if (lastReadAt && messageCreatedAt <= new Date(lastReadAt).getTime()) {
+            seen.add(marker);
+            changed = true;
+            continue;
+          }
+          const sender = String(item?.senderDisplayName || item?.senderMemberId || "တစ်ဦး");
+          const body = String(item?.text || "").trim() || (item?.image ? "ဓာတ်ပုံ ပေးပို့ထားသည်" : "Message အသစ်ဝင်လာသည်");
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: `💬 ${sender}`,
+              body,
+            },
+            trigger: null,
+          });
+          seen.add(marker);
+          changed = true;
+        }
+        if (changed) {
+          await saveSeenMarkerSet(key, seen);
+        }
+      } catch (error) {
+        console.log("Chat notification scheduling failed:", error);
+      }
+    };
+    void scheduleChatNotifications();
+  }, [chatThreads, chatMessages, currentUser?.id]);
 
   useEffect(() => {
     const scheduleCommentMentionNotifications = async () => {
@@ -954,6 +1070,33 @@ export default function DashboardScreen() {
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
       </View>
+    );
+  }
+
+  if (isSystemAdmin) {
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <Text style={styles.orgName}>System Admin Dashboard</Text>
+          <Text style={styles.headerIdentity} numberOfLines={1}>
+            {userIdentityLabel || "Admin"}
+          </Text>
+        </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>စနစ်ထိန်းချုပ်မှု</Text>
+          <Text style={styles.sectionSubtitle}>
+            Admin account သည် system setup, sync configuration နှင့် initial user account setup ကိုသာ စီမံနိုင်ပါသည်။
+          </Text>
+          <View style={styles.quickActionsGrid}>
+            <QuickAction icon="options-outline" label="Account Settings" onPress={() => router.push("/account-settings" as any)} />
+            <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />
+          </View>
+        </View>
+      </ScrollView>
     );
   }
 
@@ -1251,6 +1394,22 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 20 },
   orgName: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerIdentity: { flex: 1, marginLeft: 12, fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, textAlign: "right" },
+  section: {
+    marginHorizontal: 20,
+    backgroundColor: "white",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 16,
+    marginBottom: 20,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    marginBottom: 14,
+  },
   profileBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "white", justifyContent: "center", alignItems: "center", elevation: 2 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", paddingHorizontal: 15, marginBottom: 25 },
   noticeRow: { flexDirection: "row", paddingHorizontal: 20, gap: 10, marginBottom: 18 },
@@ -1288,6 +1447,7 @@ const styles = StyleSheet.create({
   subBalanceText: { fontSize: 10, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, paddingHorizontal: 20, marginBottom: 15 },
   quickActions: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 20, gap: 12, marginBottom: 25 },
+  quickActionsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   quickAction: { width: "31%", minWidth: 95, backgroundColor: "white", padding: 12, borderRadius: 16, alignItems: "center", elevation: 1 },
   actionIcon: { width: 45, height: 45, borderRadius: 12, backgroundColor: Colors.light.tint + "15", justifyContent: "center", alignItems: "center", marginBottom: 8 },
   actionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
@@ -239,8 +239,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setRestoring(false);
         return;
       }
-      const backgroundMarked = await AsyncStorage.getItem(AUTH_BACKGROUND_MARK_KEY);
-      if (backgroundMarked === "1") {
+      const shouldInvalidateOnBackground = Platform.OS !== "web";
+      const backgroundMarked = shouldInvalidateOnBackground
+        ? await AsyncStorage.getItem(AUTH_BACKGROUND_MARK_KEY)
+        : null;
+      if (shouldInvalidateOnBackground && backgroundMarked === "1") {
         await AsyncStorage.removeItem(AUTH_SESSION_KEY);
         await AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
         if (!active) return;
@@ -500,7 +503,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser, lastActivityAt, signOut]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || Platform.OS === "web") return;
     const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
       if (state === "active") {
         void AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
