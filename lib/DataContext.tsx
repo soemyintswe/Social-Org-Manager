@@ -31,6 +31,7 @@ import type {
   ChatThread,
   ChatMessage,
   AppNotification,
+  OrgPosition,
 } from "./types";
 import * as store from "./storage";
 import { computeLoanMetrics } from "./loan-metrics";
@@ -78,6 +79,7 @@ interface DataContextValue {
   editLoan: (id: string, u: Partial<Loan>) => Promise<void>;
   removeLoan: (id: string) => Promise<void>;
   upsertUserAccount: (u: UserAccount) => Promise<void>;
+  createInitialOrgUserAccount: (input: { username: string; displayName: string; password: string; orgPosition: OrgPosition }) => Promise<UserAccount>;
   removeUserAccount: (id: string) => Promise<void>;
   updateAccountSettings: (s: AccountSettings) => Promise<void>;
   createMemberChangeRequest: (input: {
@@ -615,6 +617,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData({ skipPull: true });
   };
 
+  const createInitialOrgUserAccount = async (input: {
+    username: string;
+    displayName: string;
+    password: string;
+    orgPosition: OrgPosition;
+  }) => {
+    const user = await store.createInitialOrgUserAccount(input);
+    await refreshData({ skipPull: true });
+    return user;
+  };
+
   const removeUserAccount = async (id: string) => {
     await store.deleteUserAccount(id);
     await refreshData({ skipPull: true });
@@ -976,7 +989,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addGroup, editGroup, removeGroup,
     addTransaction, updateTransaction, removeTransaction,
     addLoan, editLoan, removeLoan,
-    upsertUserAccount, removeUserAccount,
+    upsertUserAccount, createInitialOrgUserAccount, removeUserAccount,
     updateAccountSettings,
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,

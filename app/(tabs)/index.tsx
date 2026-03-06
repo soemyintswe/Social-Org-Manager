@@ -1092,6 +1092,8 @@ export default function DashboardScreen() {
             Admin account သည် system setup, sync configuration နှင့် initial user account setup ကိုသာ စီမံနိုင်ပါသည်။
           </Text>
           <View style={styles.quickActionsGrid}>
+            <QuickAction icon="chatbubbles-outline" label="Messages" onPress={() => router.push("/messages" as any)} />
+            <QuickAction icon="folder-open-outline" label="Data & Backup" onPress={() => router.push("/data-management" as any)} />
             <QuickAction icon="options-outline" label="Account Settings" onPress={() => router.push("/account-settings" as any)} />
             <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />
           </View>

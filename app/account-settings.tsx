@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
+import * as Clipboard from "expo-clipboard";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -39,7 +40,7 @@ import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
-  const { accountSettings, updateAccountSettings, refreshData } = useData();
+  const { accountSettings, updateAccountSettings, refreshData, createDirectChatThread, sendChatMessage } = useData();
   const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
   const canEditReceivingAccounts = normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
@@ -55,6 +56,7 @@ export default function AccountSettingsScreen() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [resetIdentifier, setResetIdentifier] = useState("");
+  const [generatedResetPassword, setGeneratedResetPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
@@ -379,15 +381,81 @@ export default function AccountSettingsScreen() {
       return;
     }
 
+    const nextPassword =
+      generatedResetPassword.trim() ||
+      `ORG${Math.random().toString(36).slice(2, 6).toUpperCase()}${Math.floor(100 + Math.random() * 900)}`;
+
     setResettingPassword(true);
     try {
-      const ok = await resetPassword(resetIdentifier.trim());
-      if (!ok) {
+      const result = await resetPassword(resetIdentifier.trim(), nextPassword);
+      if (!result.ok) {
         Alert.alert("မတွေ့ပါ", "ဖော်ပြထားသည့် user ကိုမတွေ့ပါ သို့မဟုတ် reset မအောင်မြင်ပါ။");
         return;
       }
-      Alert.alert("Reset ပြီးပါပြီ", "Target account အတွက် default password သို့ပြန်ထားပြီးပါပြီ။");
+      const targetUserId = String(result.userId || "").trim();
+      const targetName = String(result.displayName || targetUserId || "-").trim();
+      const targetPhone = String(result.phone || "").trim();
+      const issuedPassword = String(result.password || nextPassword).trim();
+      const messageBody =
+        `Password Reset အသိပေးချက်\n` +
+        `Username: ${targetUserId}\n` +
+        `Temporary Password: ${issuedPassword}\n` +
+        `Login ဝင်ပြီးနောက် ကိုယ်ပိုင် Password ကို ချက်ချင်းပြောင်းပါ။`;
+
       setResetIdentifier("");
+      setGeneratedResetPassword("");
+      const actionButtons: any[] = [
+        {
+          text: "Copy",
+          onPress: () => {
+            void Clipboard.setStringAsync(messageBody);
+          },
+        },
+      ];
+      if (targetUserId && currentUser?.id) {
+        actionButtons.push({
+          text: "App Message ပို့မည်",
+          onPress: () => {
+            void (async () => {
+              try {
+                const thread = await createDirectChatThread({
+                  userAId: currentUser.id,
+                  userBId: targetUserId,
+                  createdByUserId: currentUser.id,
+                });
+                await sendChatMessage({
+                  threadId: thread.id,
+                  senderUserId: currentUser.id,
+                  senderMemberId: currentUser.memberId,
+                  senderDisplayName: currentUser.displayName,
+                  text: messageBody,
+                });
+                Alert.alert("ပို့ပြီးပါပြီ", "App Message ဖြင့် password အသစ်ပေးပို့ပြီးပါပြီ။");
+              } catch {
+                Alert.alert("မအောင်မြင်ပါ", "App Message မပို့နိုင်ပါ။");
+              }
+            })();
+          },
+        });
+      }
+      if (targetPhone) {
+        actionButtons.push({
+          text: "Phone Message ပို့မည်",
+          onPress: () => {
+            void Linking.openURL(`sms:${targetPhone}?body=${encodeURIComponent(messageBody)}`).catch(() => {
+              Alert.alert("မအောင်မြင်ပါ", "Phone Message app မဖွင့်နိုင်ပါ။");
+            });
+          },
+        });
+      }
+      Alert.alert(
+        "Reset ပြီးပါပြီ",
+        `${targetName} အတွက် password အသစ်သတ်မှတ်ပြီးပါပြီ။\n\nUsername: ${targetUserId}\nTemporary Password: ${issuedPassword}`,
+        [
+          ...actionButtons,
+          { text: "ပိတ်မည်", style: "cancel" },
+        ]
+      );
     } finally {
       setResettingPassword(false);
     }
@@ -824,7 +892,7 @@ export default function AccountSettingsScreen() {
           <View style={styles.adminCard}>
             <Text style={styles.sectionTitle}>Admin Password Reset</Text>
             <Text style={styles.sectionDesc}>
-              Member ID / ID### / Phone / Email / Admin ဖြင့် user ကိုရှာပြီး default password သို့ reset လုပ်နိုင်ပါသည်။
+              Member ID / ID### / Username / Phone / Email / Admin ဖြင့် user ကိုရှာပြီး temporary password အသစ်သတ်မှတ်နိုင်ပါသည်။
             </Text>
 
             <TextInput
@@ -834,8 +902,17 @@ export default function AccountSettingsScreen() {
               placeholder="ဥပမာ - ရဆသ-001 / ID001 / 09xxxxxxxxx / user@mail.com / Admin"
             />
 
+            <TextInput
+              style={styles.input}
+              value={generatedResetPassword}
+              onChangeText={setGeneratedResetPassword}
+              placeholder="Temporary Password (မဖြည့်လျှင် auto-generate)"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
             <Pressable style={styles.adminResetBtn} onPress={handleAdminReset} disabled={resettingPassword}>
-              <Text style={styles.passwordBtnText}>{resettingPassword ? "Resetting..." : "Reset Password to Default"}</Text>
+              <Text style={styles.passwordBtnText}>{resettingPassword ? "Resetting..." : "Generate / Reset Password"}</Text>
             </Pressable>
           </View>
         )}

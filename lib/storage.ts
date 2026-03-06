@@ -925,6 +925,11 @@ export function buildDefaultPassword(memberId?: string, isAdmin?: boolean): stri
   return digits || "member";
 }
 
+function buildDefaultStandaloneUserPassword(userId?: string): string {
+  const normalized = toEnglishDigits(String(userId || "")).trim();
+  return normalized || "orguser";
+}
+
 async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Member[]): Promise<void> {
   const passwords = await getUserPasswords();
   let changed = false;
@@ -939,6 +944,9 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
     const member = members.find((item) => item.id === user.memberId);
     if (member) {
       passwords[user.id] = buildDefaultPassword(member.id, false);
+      changed = true;
+    } else {
+      passwords[user.id] = buildDefaultStandaloneUserPassword(user.id);
       changed = true;
     }
   }
@@ -956,7 +964,10 @@ export async function changeUserPassword(userId: string, currentPassword: string
   return true;
 }
 
-export async function resetUserPasswordByIdentifier(identifier: string): Promise<{ ok: boolean; userId?: string; reason?: string }> {
+export async function resetUserPasswordByIdentifier(
+  identifier: string,
+  nextPassword?: string
+): Promise<{ ok: boolean; userId?: string; reason?: string; displayName?: string; memberId?: string; phone?: string; password?: string }> {
   const needle = toEnglishDigits(identifier || "").trim().toLowerCase();
   if (!needle) return { ok: false, reason: "empty" };
 
@@ -965,6 +976,10 @@ export async function resetUserPasswordByIdentifier(identifier: string): Promise
     if (!user.isActive) return false;
     if (user.systemRole === "admin") {
       return needle === "admin";
+    }
+
+    if (toEnglishDigits(String(user.id || "")).trim().toLowerCase() === needle) {
+      return true;
     }
 
     const member = members.find((item) => item.id === user.memberId);
@@ -989,16 +1004,75 @@ export async function resetUserPasswordByIdentifier(identifier: string): Promise
 
   if (!targetUser) return { ok: false, reason: "not_found" };
 
+  const chosenPassword = String(nextPassword || "").trim();
+
   if (targetUser.systemRole === "admin") {
-    await setUserPassword(targetUser.id, buildDefaultPassword(undefined, true));
-    return { ok: true, userId: targetUser.id };
+    const password = chosenPassword || buildDefaultPassword(undefined, true);
+    await setUserPassword(targetUser.id, password);
+    return { ok: true, userId: targetUser.id, displayName: targetUser.displayName || "Admin", password };
   }
 
   const member = members.find((item) => item.id === targetUser.memberId);
-  if (!member) return { ok: false, reason: "missing_member" };
+  if (!member) {
+    const password = chosenPassword || buildDefaultStandaloneUserPassword(targetUser.id);
+    await setUserPassword(targetUser.id, password);
+    return {
+      ok: true,
+      userId: targetUser.id,
+      displayName: targetUser.displayName || targetUser.id,
+      password,
+    };
+  }
 
-  await setUserPassword(targetUser.id, buildDefaultPassword(member.id));
-  return { ok: true, userId: targetUser.id };
+  const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
+  const password = chosenPassword || buildDefaultPassword(member.id);
+  await setUserPassword(targetUser.id, password);
+  return {
+    ok: true,
+    userId: targetUser.id,
+    displayName: member.name || targetUser.displayName || targetUser.id,
+    memberId: member.id,
+    phone: primaryPhone || secondaryPhone || "",
+    password,
+  };
+}
+
+export async function createInitialOrgUserAccount(input: {
+  username: string;
+  displayName: string;
+  password: string;
+  orgPosition: OrgPosition;
+}): Promise<UserAccount> {
+  const username = toEnglishDigits(String(input.username || "")).trim();
+  const displayName = String(input.displayName || "").trim();
+  const password = String(input.password || "").trim();
+  const orgPosition = normalizeOrgPosition(input.orgPosition || "chairperson");
+
+  if (!username) throw new Error("username_required");
+  if (!displayName) throw new Error("display_name_required");
+  if (!password) throw new Error("password_required");
+
+  const users = await getUsers();
+  const normalizedUsername = username.toLowerCase();
+  const duplicate = users.find((user) => toEnglishDigits(String(user.id || "")).trim().toLowerCase() === normalizedUsername);
+  if (duplicate) throw new Error("username_exists");
+
+  const existingInitialUser = users.find((user) => user.systemRole === "org_user" && !String(user.memberId || "").trim());
+  if (existingInitialUser) throw new Error("initial_org_user_exists");
+
+  const now = new Date().toISOString();
+  const nextUser: UserAccount = {
+    id: username,
+    displayName,
+    systemRole: "org_user",
+    orgPosition,
+    isActive: true,
+    createdAt: now,
+  };
+
+  await saveUsers([...users, nextUser]);
+  await setUserPassword(nextUser.id, password);
+  return nextUser;
 }
 
 

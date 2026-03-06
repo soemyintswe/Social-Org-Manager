@@ -1,8 +1,8 @@
 # Project Handover & Maintenance Guide
 
-Last updated: 2026-03-01  
-Current app version: `1.1.37`  
-Android versionCode: `38`
+Last updated: 2026-03-07  
+Current app version: `1.1.47`  
+Android versionCode: `48`
 
 ## Project Overview
 
@@ -64,8 +64,16 @@ Key libraries:
 | `server/routes.ts` | `/api/sync/*`, `/api/cloud-sync/proxy`, `/api/app-update` |
 | `server/config/app-update.json` | Auto-update metadata for latest APK |
 | `scripts/build-apk.js` | Android release APK build + update config auto-refresh |
+| `scripts/cleanup-releases.js` | Keeps only recent APK artifacts in `releases/` |
 | `releases/` | Built APK files (release artifacts) |
 | `docs/` | Cloud sync and desktop usage docs |
+
+## Release Cleanup Policy
+
+- Keep only one APK per app version in `releases/`
+- Keep only the latest `4` app versions in git
+- `scripts/build-apk.js` runs cleanup automatically after every successful build
+- If you need to keep more versions temporarily, set `RELEASES_KEEP_VERSIONS` before building
 
 ## Step-by-Step Setup
 
@@ -273,4 +281,3 @@ List findings with file + line references.
   - Re-check print flow in `app/(tabs)/reports.tsx`
 - Member report wrong for historical executive roles:
   - Ensure member has correct `orgPositionHistory` entries in storage data
-

@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.46",
-  "latestBuildNumber": "47",
+  "latestVersion": "1.1.47",
+  "latestBuildNumber": "48",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.46-202603070415.apk",
-  "notes": "Version 1.1.46: Fixed web refresh session persistence, cloud-first sync behavior, LAN-to-cloud backfill, admin route restrictions, and notification deduplication.",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.47-202603070456.apk",
+  "notes": "Version 1.1.47: Added admin initial org user setup, admin messaging access, support password recovery delivery, and system-management route access.",
   "force": false,
-  "publishedAt": "2026-03-06T21:45:56.045Z"
+  "publishedAt": "2026-03-06T22:26:11.123Z"
 }

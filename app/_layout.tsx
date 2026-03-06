@@ -237,7 +237,9 @@ function RootLayoutNav() {
     const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
     const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
     const isAdminAccountSettings = rootSegment === "account-settings";
-    if (isAdminHome || isAdminSystem || isAdminAccountSettings) return;
+    const isAdminMessages = rootSegment === "messages";
+    const isAdminDataManagement = rootSegment === "data-management";
+    if (isAdminHome || isAdminSystem || isAdminAccountSettings || isAdminMessages || isAdminDataManagement) return;
     router.replace("/" as any);
   }, [segments, loading, isAuthenticated, isSystemAdmin, inLogin, router]);
 

@@ -57,7 +57,15 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<boolean>;
   verifyCurrentPassword: (password: string) => Promise<boolean>;
   changePassword: (currentPassword: string, nextPassword: string) => Promise<boolean>;
-  resetPassword: (identifier: string) => Promise<boolean>;
+  resetPassword: (identifier: string, nextPassword?: string) => Promise<{
+    ok: boolean;
+    userId?: string;
+    reason?: string;
+    displayName?: string;
+    memberId?: string;
+    phone?: string;
+    password?: string;
+  }>;
   can: (permission: AccessPermission, options?: AccessOptions) => boolean;
   canAccessMemberRecord: (targetMemberId: string) => boolean;
   recordActivity: () => void;
@@ -467,10 +475,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const resetPassword = useCallback(
-    async (identifier: string) => {
-      if (!currentUser || currentUser.systemRole !== "admin") return false;
-      const result = await resetUserPasswordByIdentifier(identifier);
-      return result.ok;
+    async (identifier: string, nextPassword?: string) => {
+      if (!currentUser || currentUser.systemRole !== "admin") return { ok: false, reason: "forbidden" };
+      return resetUserPasswordByIdentifier(identifier, nextPassword);
     },
     [currentUser]
   );

@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const cleanupReleases = path.resolve(__dirname, './cleanup-releases.js');
 
 function readAppVersion() {
   try {
@@ -167,6 +168,10 @@ try {
     fs.copyFileSync(sourceApk, destApk);
     console.log(`\n✅ Success! APK copied to:\n${destApk}`);
     updateAppUpdateConfig({ version, buildNumber, filename });
+    execSync(`node "${cleanupReleases}"`, {
+      cwd: path.resolve(__dirname, '..'),
+      stdio: 'inherit',
+    });
   } else {
     console.error('\n❌ Build finished but APK file not found at expected location.');
   }
