@@ -6,7 +6,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import type { ReactNode } from "react";
 import type {
   Member,
@@ -501,34 +501,55 @@ export function DataProvider({ children }: { children: ReactNode }) {
     AUTO_PUSH_DEBOUNCE_MS,
   ]);
 
+  const runAutoPull = useCallback(async () => {
+    if (pullInFlightRef.current) return;
+    if (Platform.OS === "web") {
+      try {
+        if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      } catch {}
+    }
+    const runtimeConfig = await store.getEffectiveSyncRuntimeConfig();
+    if (!(runtimeConfig.lan.enabled || runtimeConfig.cloud.enabled)) return;
+    const elapsed = Date.now() - lastLocalMutationAtRef.current;
+    if (elapsed < LOCAL_PULL_GUARD_MS) return;
+    pullInFlightRef.current = true;
+    try {
+      const changed = await pullAllSyncTargets();
+      if (changed) {
+        await refreshData({ skipPull: true, markLocalMutation: false });
+      }
+      await flushPendingCloudBackfill();
+    } finally {
+      pullInFlightRef.current = false;
+    }
+  }, [pullAllSyncTargets, refreshData, flushPendingCloudBackfill, LOCAL_PULL_GUARD_MS]);
+
   useEffect(() => {
     const timer = setInterval(() => {
-      void (async () => {
-        if (pullInFlightRef.current) return;
-        const runtimeConfig = await store.getEffectiveSyncRuntimeConfig();
-        if (!(runtimeConfig.lan.enabled || runtimeConfig.cloud.enabled)) return;
-        const elapsed = Date.now() - lastLocalMutationAtRef.current;
-        if (elapsed < LOCAL_PULL_GUARD_MS) return;
-        pullInFlightRef.current = true;
-        try {
-          const changed = await pullAllSyncTargets();
-          if (changed) {
-            await refreshData({ skipPull: true, markLocalMutation: false });
-          }
-          await flushPendingCloudBackfill();
-        } finally {
-          pullInFlightRef.current = false;
-        }
-      })();
+      void runAutoPull();
     }, AUTO_PULL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [
-    pullAllSyncTargets,
-    refreshData,
-    flushPendingCloudBackfill,
+    runAutoPull,
     AUTO_PULL_INTERVAL_MS,
-    LOCAL_PULL_GUARD_MS,
   ]);
+
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      const handler = () => {
+        void runAutoPull();
+      };
+      window.addEventListener("online", handler);
+      return () => window.removeEventListener("online", handler);
+    }
+    const handler = (state: AppStateStatus) => {
+      if (state === "active") {
+        void runAutoPull();
+      }
+    };
+    const sub = AppState.addEventListener("change", handler);
+    return () => sub.remove();
+  }, [runAutoPull]);
 
   // --- Actions ---
   const addMember = async (m: Omit<Member, "id">) => {

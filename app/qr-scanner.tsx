@@ -4,9 +4,14 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { MEMBER_STATUS_LABELS, normalizeMemberStatus } from "@/lib/types";
+
+const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
+const LAN_QR_PREFIX = "ORGHUB_LAN:";
+const LAN_QR_PREFIX_ALT = "ORGHUB_LAN|";
 
 type ParsedMemberCardPayload = {
   memberId: string;
@@ -24,6 +29,12 @@ type VerificationResult = {
   member?: any;
   payload?: ParsedMemberCardPayload;
   mismatches?: string[];
+};
+
+type LanScanResult = {
+  status: "ok" | "invalid";
+  message: string;
+  url?: string;
 };
 
 const parseMemberCardPayload = (data: string): ParsedMemberCardPayload | null => {
@@ -65,13 +76,35 @@ const parseMemberCardPayload = (data: string): ParsedMemberCardPayload | null =>
   return { memberId: raw, raw, source: "plain" };
 };
 
+const parseLanQrPayload = (data: string): string => {
+  const raw = String(data || "").trim();
+  if (!raw) return "";
+  let candidate = raw;
+  if (raw.startsWith(LAN_QR_PREFIX)) {
+    candidate = raw.slice(LAN_QR_PREFIX.length).trim();
+  } else if (raw.startsWith(LAN_QR_PREFIX_ALT)) {
+    const parts = raw.split("|");
+    candidate = parts[1] ? String(parts[1]).trim() : "";
+  }
+  if (!candidate) return "";
+  const withProtocol = /^https?:\/\//i.test(candidate) ? candidate : `http://${candidate}`;
+  try {
+    const parsed = new URL(withProtocol);
+    return parsed.href.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+};
+
 export default function QRScannerScreen() {
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   const isMemberVerifyMode = String(mode || "") === "member_verify";
+  const isLanSyncMode = String(mode || "") === "lan_sync";
   const { members = [] } = useData() as any;
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  const [lanResult, setLanResult] = useState<LanScanResult | null>(null);
   const insets = useSafeAreaInsets();
 
   if (!permission) {
@@ -92,6 +125,16 @@ export default function QRScannerScreen() {
 
   const handleBarCodeScanned = ({ data }: { data: string }) => {
     setScanned(true);
+    if (isLanSyncMode) {
+      const resolved = parseLanQrPayload(data);
+      if (!resolved) {
+        setLanResult({ status: "invalid", message: "LAN QR Data မမှန်ကန်ပါ။" });
+        return;
+      }
+      void AsyncStorage.setItem(PENDING_LAN_URL_KEY, resolved);
+      setLanResult({ status: "ok", message: "LAN URL ကိုသိမ်းပြီးပါပြီ။ Account Settings မှ Save လုပ်ပါ။", url: resolved });
+      return;
+    }
     const payload = parseMemberCardPayload(data);
 
     if (!payload) {
@@ -167,6 +210,7 @@ export default function QRScannerScreen() {
   const resetScanner = () => {
     setScanned(false);
     setVerificationResult(null);
+    setLanResult(null);
   };
 
   const statusMeta = (() => {
@@ -198,7 +242,11 @@ export default function QRScannerScreen() {
         
         <View style={styles.scanFrameContainer}>
             <Text style={styles.instruction}>
-              {isMemberVerifyMode ? "OFFICIAL MEMBER CARD QR Code ကို ဖတ်ပါ" : "Member Card QR Code ကို ဖတ်ပါ"}
+              {isLanSyncMode
+                ? "LAN Sync QR Code ကို ဖတ်ပါ"
+                : isMemberVerifyMode
+                ? "OFFICIAL MEMBER CARD QR Code ကို ဖတ်ပါ"
+                : "Member Card QR Code ကို ဖတ်ပါ"}
             </Text>
             <View style={styles.scanFrame}>
                 <View style={styles.cornerTL} />
@@ -209,8 +257,40 @@ export default function QRScannerScreen() {
         </View>
       </View>
 
-      {scanned && (
-        isMemberVerifyMode ? (
+      {scanned &&
+        (isLanSyncMode ? (
+          <View style={styles.resultSheet}>
+            <View style={styles.resultHeader}>
+              <Ionicons
+                name={lanResult?.status === "ok" ? "checkmark-circle-outline" : "alert-circle-outline"}
+                size={22}
+                color={lanResult?.status === "ok" ? "#059669" : "#DC2626"}
+              />
+              <Text
+                style={[
+                  styles.resultTitle,
+                  { color: lanResult?.status === "ok" ? "#059669" : "#DC2626" },
+                ]}
+              >
+                {lanResult?.status === "ok" ? "LAN URL Saved" : "Invalid QR"}
+              </Text>
+            </View>
+            <Text style={styles.resultText}>{lanResult?.message || "-"}</Text>
+            {lanResult?.url ? (
+              <View style={styles.memberInfoCard}>
+                <Text style={styles.memberInfoText}>URL: {lanResult.url}</Text>
+              </View>
+            ) : null}
+            <View style={styles.resultActions}>
+              <Pressable style={[styles.resultBtn, styles.resultBtnPrimary]} onPress={() => router.back()}>
+                <Text style={styles.resultBtnPrimaryText}>Close</Text>
+              </Pressable>
+              <Pressable style={[styles.resultBtn, styles.resultBtnGhost]} onPress={resetScanner}>
+                <Text style={styles.resultBtnGhostText}>ထပ်မံ Scan</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : isMemberVerifyMode ? (
           <View style={styles.resultSheet}>
             <View style={styles.resultHeader}>
               <Ionicons name={statusMeta.icon} size={22} color={statusMeta.color} />
@@ -255,10 +335,9 @@ export default function QRScannerScreen() {
           </View>
         ) : (
           <View style={styles.rescanContainer}>
-              <Button title={"Tap to Scan Again"} onPress={resetScanner} />
+            <Button title={"Tap to Scan Again"} onPress={resetScanner} />
           </View>
-        )
-      )}
+        ))}
     </View>
   );
 }

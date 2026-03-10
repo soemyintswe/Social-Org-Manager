@@ -3488,24 +3488,12 @@ async function compressImageDataUrl(value: string): Promise<string> {
 
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
-  const managedLockdownEnabled = getManagedSyncLockdownEnabled();
   const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
-  const managedLanOverrideActive = managedLockdownEnabled && !!remoteUrl;
   const url = normalizeSyncServerUrl(
-    managedLanOverrideActive
-      ? remoteUrl
-      : (settings.syncServerUrl || remoteUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
+    settings.syncServerUrl || remoteUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL
   );
   const hasLocalUrl = !!normalizeSyncServerUrl(String(settings.syncServerUrl || ""));
-  const managedEnabled = getManagedLanSyncEnabled();
-  const enabledFlag =
-    managedEnabled !== null
-      ? managedEnabled
-      : managedLanOverrideActive
-        ? true
-        : hasLocalUrl
-          ? true
-          : settings.syncEnabled !== false;
+  const enabledFlag = hasLocalUrl ? true : settings.syncEnabled !== false;
   const enabled = enabledFlag && !!url;
   return { url, enabled };
 }
@@ -3522,14 +3510,16 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
     const settings = await getAccountSettings();
     const managedLockdownEnabled = getManagedSyncLockdownEnabled();
     const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
-    const managedLanOverrideActive = managedLockdownEnabled && !!managedLanUrl;
-    const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
+    const managedLanOverrideActive = false;
+    const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || managedLanUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
     const lan = await resolveSyncServerUrl();
     const hasLocalLanSetting = !!String(settings.syncServerUrl || "").trim();
     const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanOverrideActive
       ? "managed_remote_config"
       : hasLocalLanSetting
       ? "local_settings"
+      : managedLanUrl
+      ? "managed_remote_config"
       : "default";
 
     const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");

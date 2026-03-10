@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -11,13 +11,16 @@ import {
   Alert,
   KeyboardAvoidingView,
   Linking,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import QRCode from "react-native-qrcode-svg";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -39,6 +42,9 @@ import {
 } from "@/lib/sync-defaults";
 import { getManagedSyncLockdownEnabled } from "@/lib/remote-config";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
+
+const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
+const LAN_QR_PREFIX = "ORGHUB_LAN:";
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -82,6 +88,8 @@ export default function AccountSettingsScreen() {
   const [receivingAyaPayMmqr, setReceivingAyaPayMmqr] = useState(accountSettings.receivingAyaPayMmqr || "");
   const [syncing, setSyncing] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [showLanQr, setShowLanQr] = useState(false);
+  const [lanShareIdInput, setLanShareIdInput] = useState("");
   const [syncConfigSummary, setSyncConfigSummary] = useState<{
     lanSource: "managed_remote_config" | "local_settings" | "default";
     cloudSource: "managed_remote_config" | "local_settings" | "default";
@@ -116,6 +124,29 @@ export default function AccountSettingsScreen() {
     if (!trimmed) return "";
     const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
     return withProtocol.replace(/\/+$/, "");
+  };
+
+  const encodeLanShareId = (url: string): string => {
+    const normalized = normalizeUrl(url);
+    if (!normalized) return "";
+    const stripped = normalized.replace(/^https?:\/\//i, "");
+    const encoded = stripped
+      .replace(/\./g, "-")
+      .replace(/:/g, "_")
+      .replace(/\//g, "~");
+    return `LAN-${encoded}`;
+  };
+
+  const decodeLanShareId = (input: string): string => {
+    const raw = String(input || "").trim();
+    if (!raw) return "";
+    const cleaned = raw.toUpperCase().startsWith("LAN-") ? raw.slice(4) : raw;
+    if (!cleaned) return "";
+    const restored = cleaned
+      .replace(/~/g, "/")
+      .replace(/_/g, ":")
+      .replace(/-/g, ".");
+    return normalizeUrl(restored);
   };
 
   const syncSourceLabel = (source: "managed_remote_config" | "local_settings" | "default"): string => {
@@ -212,6 +243,31 @@ export default function AccountSettingsScreen() {
     };
   }, [accountSettings]);
 
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const loadPendingLanUrl = async () => {
+        try {
+          const pending = await AsyncStorage.getItem(PENDING_LAN_URL_KEY);
+          if (!active || !pending) return;
+          await AsyncStorage.removeItem(PENDING_LAN_URL_KEY);
+          const normalized = normalizeUrl(pending);
+          if (normalized) {
+            setSyncServerUrl(normalized);
+            setSyncEnabled(true);
+            Alert.alert("LAN URL", "QR မှ ရယူထားသော LAN URL ကို ထည့်ပြီးပါပြီ။ Save ကိုနှိပ်ပါ။");
+          }
+        } catch {
+          // ignore
+        }
+      };
+      void loadPendingLanUrl();
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
   const getReceivingValuesForSave = () => {
     if (canEditReceivingAccounts) {
       return {
@@ -256,38 +312,36 @@ export default function AccountSettingsScreen() {
     | "cloudSyncGoogleAccountEmail"
     | "cloudSyncFolderName"
   > => {
-    if (!canManageSystem) {
-      return {
-        syncServerUrl: String(accountSettings.syncServerUrl || ""),
-        syncEnabled: accountSettings.syncEnabled !== false,
-        cloudSyncEnabled: accountSettings.cloudSyncEnabled === true,
-        cloudSyncProvider: "google_drive_apps_script" as const,
-        cloudSyncEndpoint: String(accountSettings.cloudSyncEndpoint || ""),
-        cloudSyncApiKey: String(accountSettings.cloudSyncApiKey || ""),
-        cloudSyncGoogleAccountEmail: String(accountSettings.cloudSyncGoogleAccountEmail || ""),
-        cloudSyncFolderName: String(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME),
-      };
-    }
-
     const normalizedUrl = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
     return {
-      syncServerUrl: managedSyncLockdown ? String(accountSettings.syncServerUrl || "") : normalizedUrl,
-      syncEnabled: managedSyncLockdown ? accountSettings.syncEnabled !== false : syncEnabled,
-      cloudSyncEnabled: managedSyncLockdown ? accountSettings.cloudSyncEnabled === true : cloudSyncEnabled,
+      syncServerUrl: normalizedUrl,
+      syncEnabled,
+      cloudSyncEnabled: accountSettings.cloudSyncEnabled === true,
       cloudSyncProvider: "google_drive_apps_script",
-      cloudSyncEndpoint: managedSyncLockdown
-        ? String(accountSettings.cloudSyncEndpoint || "")
-        : cloudSyncEndpoint.trim() || DEFAULT_CLOUD_SYNC_ENDPOINT,
-      cloudSyncApiKey: managedSyncLockdown
-        ? String(accountSettings.cloudSyncApiKey || "")
-        : cloudSyncApiKey.trim(),
-      cloudSyncGoogleAccountEmail: managedSyncLockdown
-        ? String(accountSettings.cloudSyncGoogleAccountEmail || "")
-        : cloudSyncGoogleAccountEmail.trim(),
-      cloudSyncFolderName: managedSyncLockdown
-        ? String(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
-        : cloudSyncFolderName.trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME,
+      cloudSyncEndpoint: String(accountSettings.cloudSyncEndpoint || ""),
+      cloudSyncApiKey: String(accountSettings.cloudSyncApiKey || ""),
+      cloudSyncGoogleAccountEmail: String(accountSettings.cloudSyncGoogleAccountEmail || ""),
+      cloudSyncFolderName: String(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME),
     };
+  };
+
+  const lanSharePayload = useMemo(() => {
+    const normalized = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+    if (!normalized) return "";
+    return `${LAN_QR_PREFIX}${normalized}`;
+  }, [syncServerUrl]);
+
+  const lanShareId = useMemo(() => encodeLanShareId(syncServerUrl || DEFAULT_LAN_SYNC_URL), [syncServerUrl]);
+
+  const handleApplyLanShareId = () => {
+    const resolved = decodeLanShareId(lanShareIdInput);
+    if (!resolved) {
+      Alert.alert("မမှန်ကန်ပါ", "LAN Share ID ကိုစစ်ဆေးပါ။");
+      return;
+    }
+    setSyncServerUrl(resolved);
+    setSyncEnabled(true);
+    Alert.alert("LAN URL", "LAN Share ID မှ URL ကို ထည့်ပြီးပါပြီ။ Save ကိုနှိပ်ပါ။");
   };
 
   const handleSave = async () => {
@@ -646,97 +700,159 @@ export default function AccountSettingsScreen() {
             <Text style={styles.checkUpdateText}>{checkingUpdate ? "Checking..." : "Check for Update"}</Text>
           </Pressable>
         </View>
-        {canManageSystem && (
-          <>
-            <Text style={styles.label}>LAN Sync Server URL</Text>
-            <TextInput
-              style={[styles.input, managedSyncLockdown && styles.inputDisabled]}
-              value={syncServerUrl}
-              onChangeText={setSyncServerUrl}
-              placeholder="ဥပမာ - http://192.168.1.100:5000"
-              autoCapitalize="none"
-              editable={!managedSyncLockdown}
-            />
-            {managedSyncLockdown && (
-              <Text style={styles.helperText}>
-                Managed Mode: LAN URL ကို Firebase Remote Config ကနေထိန်းချုပ်နေပါသည်။
+        <>
+          <Text style={styles.label}>LAN Sync Server URL</Text>
+          <TextInput
+            style={styles.input}
+            value={syncServerUrl}
+            onChangeText={setSyncServerUrl}
+            placeholder="ဥပမာ - http://192.168.1.100:5000"
+            autoCapitalize="none"
+          />
+          <View style={styles.lanActionRow}>
+            <Pressable style={styles.lanActionBtn} onPress={() => setShowLanQr(true)} disabled={!lanSharePayload}>
+              <Ionicons name="qr-code-outline" size={16} color={Colors.light.text} />
+              <Text style={styles.lanActionText}>Show LAN QR</Text>
+            </Pressable>
+            <Pressable
+              style={styles.lanActionBtn}
+              onPress={() => router.push({ pathname: "/qr-scanner", params: { mode: "lan_sync" } } as any)}
+            >
+              <Ionicons name="scan-outline" size={16} color={Colors.light.text} />
+              <Text style={styles.lanActionText}>Scan LAN QR</Text>
+            </Pressable>
+          </View>
+          <View style={styles.lanIdRow}>
+            <Text style={styles.lanIdLabel}>Current LAN ID</Text>
+            <Pressable
+              onPress={() => {
+                if (lanShareId) {
+                  void Clipboard.setStringAsync(lanShareId);
+                  Alert.alert("Copied", "LAN ID ကို Copy လုပ်ပြီးပါပြီ။");
+                }
+              }}
+            >
+              <Text style={styles.lanIdValue}>{lanShareId || "-"}</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.label}>LAN Share ID</Text>
+          <TextInput
+            style={styles.input}
+            value={lanShareIdInput}
+            onChangeText={setLanShareIdInput}
+            placeholder={lanShareId ? `ဥပမာ - ${lanShareId}` : "LAN-xxxx"}
+            autoCapitalize="none"
+          />
+          <Pressable style={styles.lanApplyBtn} onPress={handleApplyLanShareId}>
+            <Text style={styles.lanApplyText}>Apply LAN ID</Text>
+          </Pressable>
+          <View style={styles.syncRow}>
+            <Pressable
+              style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive]}
+              onPress={() => setSyncEnabled((v) => !v)}
+            >
+              <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
+              <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
+                {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
               </Text>
-            )}
-            <View style={styles.syncRow}>
-              <Pressable
-                style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive, managedSyncLockdown && styles.syncToggleBtnDisabled]}
-                onPress={() => {
-                  if (!managedSyncLockdown) setSyncEnabled((v) => !v);
-                }}
-              >
-                <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
-                <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
-                  {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
-                </Text>
-              </Pressable>
-              <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
-                {syncing ? (
-                  <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-                ) : (
-                  <Ionicons name="sync-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
-                )}
-                <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
-              </Pressable>
-            </View>
+            </Pressable>
+            <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
+              {syncing ? (
+                <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+              ) : (
+                <Ionicons name="sync-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
+              )}
+              <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
+            </Pressable>
+          </View>
 
-            <View style={styles.securityCard}>
-              <Text style={styles.sectionTitle}>Managed Sync Configuration</Text>
-              <Text style={styles.sectionDesc}>
-                Cloud Sync URL/API Key များကို UI မှတိုက်ရိုက်မတည်းဖြတ်ဘဲ Firebase Remote Config မှတစ်ဆင့် ဗဟိုထိန်းချုပ်ထားပါသည်။
-              </Text>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Managed Lockdown</Text>
-                <Text style={styles.summaryValue}>{managedSyncLockdown ? "Enabled" : "Disabled"}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>LAN Source</Text>
-                <Text style={styles.summaryValue}>{syncSourceLabel(syncConfigSummary.lanSource)}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>LAN Runtime</Text>
-                <Text style={styles.summaryValue}>{syncConfigSummary.lanEnabled ? "Enabled" : "Disabled"}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>LAN URL</Text>
-                <Text style={styles.summaryValue}>{summarizeEndpointForDisplay(syncConfigSummary.lanUrl)}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Cloud Source</Text>
-                <Text style={styles.summaryValue}>{syncSourceLabel(syncConfigSummary.cloudSource)}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Cloud Runtime</Text>
-                <Text style={styles.summaryValue}>{syncConfigSummary.cloudEnabled ? "Enabled" : "Disabled"}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Cloud Endpoint</Text>
-                <Text style={styles.summaryValue}>{summarizeEndpointForDisplay(syncConfigSummary.cloudEndpoint)}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Cloud API Key</Text>
-                <Text style={styles.summaryValue}>{syncConfigSummary.cloudHasApiKey ? "Configured" : "Not configured"}</Text>
-              </View>
-              <View style={styles.syncRow}>
+          <View style={styles.securityCard}>
+            <Text style={styles.sectionTitle}>Managed Sync Configuration</Text>
+            <Text style={styles.sectionDesc}>
+              Cloud Sync ကို UI မှမပြင်ဘဲ Firebase Remote Config မှတစ်ဆင့်သာ ဗဟိုထိန်းချုပ်ပါသည် (read-only)။
+            </Text>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Managed Lockdown</Text>
+              <Text style={styles.summaryValue}>{managedSyncLockdown ? "Enabled" : "Disabled"}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>LAN Source</Text>
+              <Text style={styles.summaryValue}>{syncSourceLabel(syncConfigSummary.lanSource)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>LAN Runtime</Text>
+              <Text style={styles.summaryValue}>{syncConfigSummary.lanEnabled ? "Enabled" : "Disabled"}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>LAN URL</Text>
+              <Text style={styles.summaryValue}>{summarizeEndpointForDisplay(syncConfigSummary.lanUrl)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cloud Source</Text>
+              <Text style={styles.summaryValue}>{syncSourceLabel(syncConfigSummary.cloudSource)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cloud Runtime</Text>
+              <Text style={styles.summaryValue}>{syncConfigSummary.cloudEnabled ? "Enabled" : "Disabled"}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cloud Endpoint</Text>
+              <Text style={styles.summaryValue}>{summarizeEndpointForDisplay(syncConfigSummary.cloudEndpoint)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cloud API Key</Text>
+              <Text style={styles.summaryValue}>{syncConfigSummary.cloudHasApiKey ? "Configured" : "Not configured"}</Text>
+            </View>
+          </View>
+        </>
+
+        <Modal visible={showLanQr} transparent animationType="fade" onRequestClose={() => setShowLanQr(false)}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.sectionTitle}>LAN Share QR</Text>
+              {lanSharePayload ? (
+                <>
+                  <View style={styles.qrBox}>
+                    <QRCode value={lanSharePayload} size={180} />
+                  </View>
+                  <Text style={styles.qrHint}>QR ကို scan လုပ်ပြီး LAN URL ကို Auto fill လုပ်နိုင်ပါတယ်။</Text>
+                  <Text style={styles.qrMeta}>URL: {normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL)}</Text>
+                  <Text style={styles.qrMeta}>ID: {lanShareId || "-"}</Text>
+                </>
+              ) : (
+                <Text style={styles.sectionDesc}>LAN URL မရှိသေးပါ။</Text>
+              )}
+              <View style={styles.modalActions}>
                 <Pressable
-                  style={[styles.syncToggleBtn, cloudSyncEnabled && styles.syncToggleBtnActive, managedSyncLockdown && styles.syncToggleBtnDisabled]}
+                  style={styles.modalGhostBtn}
                   onPress={() => {
-                    if (!managedSyncLockdown) setCloudSyncEnabled((v) => !v);
+                    if (lanShareId) {
+                      void Clipboard.setStringAsync(lanShareId);
+                      Alert.alert("Copied", "LAN ID ကို Copy လုပ်ပြီးပါပြီ။");
+                    }
                   }}
                 >
-                  <Ionicons name={cloudSyncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={cloudSyncEnabled ? "#fff" : Colors.light.text} />
-                  <Text style={[styles.syncToggleText, cloudSyncEnabled && styles.syncToggleTextActive]}>
-                    {cloudSyncEnabled ? "Cloud Sync Enabled" : "Cloud Sync Disabled"}
-                  </Text>
+                  <Text style={styles.modalGhostText}>Copy ID</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.modalGhostBtn}
+                  onPress={() => {
+                    const url = normalizeUrl(syncServerUrl || DEFAULT_LAN_SYNC_URL);
+                    if (url) {
+                      void Clipboard.setStringAsync(url);
+                      Alert.alert("Copied", "LAN URL ကို Copy လုပ်ပြီးပါပြီ။");
+                    }
+                  }}
+                >
+                  <Text style={styles.modalGhostText}>Copy URL</Text>
+                </Pressable>
+                <Pressable style={styles.modalPrimaryBtn} onPress={() => setShowLanQr(false)}>
+                  <Text style={styles.modalPrimaryText}>Close</Text>
                 </Pressable>
               </View>
             </View>
-          </>
-        )}
+          </View>
+        </Modal>
 
         {canEditReceivingAccounts && (
           <View style={styles.securityCard}>
@@ -997,6 +1113,57 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  lanActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  lanActionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    paddingVertical: 10,
+  },
+  lanActionText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  lanIdRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 10,
+    paddingHorizontal: 2,
+  },
+  lanIdLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.textSecondary,
+  },
+  lanIdValue: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.tint,
+  },
+  lanApplyBtn: {
+    marginTop: 10,
+    borderRadius: 10,
+    backgroundColor: "#0EA5E9",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  lanApplyText: {
+    color: "#fff",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+  },
   dropdown: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1248,5 +1415,70 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     fontFamily: "Inter_600SemiBold",
     fontSize: 13,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: Colors.light.surface,
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  qrBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  qrHint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    textAlign: "center",
+    marginBottom: 8,
+    fontFamily: "Inter_400Regular",
+  },
+  qrMeta: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    marginTop: 4,
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+    marginTop: 14,
+  },
+  modalGhostBtn: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#fff",
+  },
+  modalGhostText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  modalPrimaryBtn: {
+    borderRadius: 10,
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  modalPrimaryText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#fff",
   },
 });

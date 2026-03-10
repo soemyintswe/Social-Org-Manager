@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.49",
-  "latestBuildNumber": "50",
+  "latestVersion": "1.1.50",
+  "latestBuildNumber": "51",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.49-202603110423.apk",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.50-202603110546.apk",
   "notes": "Version 1.1.49: Web sync fixes, delete filtering, routing, and UX improvements.",
   "force": false,
-  "publishedAt": "2026-03-11T04:23:00.000Z"
+  "publishedAt": "2026-03-10T23:16:48.855Z"
 }
