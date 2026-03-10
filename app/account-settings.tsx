@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
+import * as Crypto from "expo-crypto";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -100,6 +101,14 @@ export default function AccountSettingsScreen() {
   const managedSyncLockdown = getManagedSyncLockdownEnabled();
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  const generateSecureResetPassword = (): string => {
+    const uuid = Crypto.randomUUID().replace(/-/g, "").toUpperCase();
+    const token = uuid.slice(0, 4);
+    const numericSeed = parseInt(uuid.slice(4, 8), 16);
+    const suffix = 100 + (Number.isFinite(numericSeed) ? numericSeed % 900 : 0);
+    return `ORG${token}${suffix}`;
+  };
 
   const normalizeUrl = (raw: string): string => {
     const trimmed = String(raw || "").trim();
@@ -382,8 +391,7 @@ export default function AccountSettingsScreen() {
     }
 
     const nextPassword =
-      generatedResetPassword.trim() ||
-      `ORG${Math.random().toString(36).slice(2, 6).toUpperCase()}${Math.floor(100 + Math.random() * 900)}`;
+      generatedResetPassword.trim() || generateSecureResetPassword();
 
     setResettingPassword(true);
     try {

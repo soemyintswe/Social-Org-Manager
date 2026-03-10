@@ -265,6 +265,10 @@ function configureExpoAndLanding(app: express.Application) {
     if (fs.existsSync(webExpoAssetsDir)) {
       app.use("/_expo", express.static(webExpoAssetsDir));
     }
+    const webAssetsDir = path.join(webBuildDir, "assets");
+    if (fs.existsSync(webAssetsDir)) {
+      app.use("/assets", express.static(webAssetsDir));
+    }
     const webFavicon = path.join(webBuildDir, "favicon.ico");
     if (fs.existsSync(webFavicon)) {
       app.get("/favicon.ico", (_req, res) => res.sendFile(webFavicon));
