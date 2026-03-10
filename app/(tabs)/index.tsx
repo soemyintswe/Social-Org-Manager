@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useEffect, useState } from "react";
+import React, { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
   StyleSheet,
   Text,
@@ -10,6 +10,8 @@ import {
   Linking,
   Platform,
   Alert,
+  Animated,
+  Easing,
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
 import { default as Constants } from 'expo-constants';
@@ -138,18 +140,47 @@ function QuickAction({
   icon,
   label,
   onPress,
+  spinning = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
+  spinning?: boolean;
 }) {
+  const spinValue = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!spinning) {
+      spinValue.stopAnimation(() => {
+        spinValue.setValue(0);
+      });
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 900,
+        easing: Easing.linear,
+        useNativeDriver: Platform.OS !== "web",
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spinning, spinValue]);
+
+  const rotate = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
   return (
     <Pressable
       style={({ pressed }) => [styles.quickAction, pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] }]}
       onPress={onPress}
     >
       <View style={styles.actionIcon}>
-        <Ionicons name={icon} size={24} color={Colors.light.tint} />
+        <Animated.View style={spinning ? { transform: [{ rotate }] } : undefined}>
+          <Ionicons name={icon} size={24} color={Colors.light.tint} />
+        </Animated.View>
       </View>
       <Text style={styles.actionLabel}>{label}</Text>
     </Pressable>
@@ -158,7 +189,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
+  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
@@ -309,6 +340,38 @@ export default function DashboardScreen() {
     );
   };
 
+  const deletedTxnIds = useMemo(() => {
+    const set = new Set<string>();
+    (auditExecutionLogs || []).forEach((log: any) => {
+      if (String(log?.action || "") !== "delete_executed") return;
+      const targetType = String(log?.targetType || "").trim().toLowerCase();
+      const targetId = String(log?.targetId || log?.transactionId || "").trim();
+      if (!targetType || targetType === "transaction") {
+        if (targetId) set.add(targetId);
+      }
+      const affected = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+      affected.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) set.add(value);
+      });
+    });
+    (auditChangeRequests || []).forEach((req: any) => {
+      if (String(req?.requestKind || "") !== "delete") return;
+      if (String(req?.status || "") !== "approved") return;
+      const targetType = String(req?.targetType || "").trim().toLowerCase();
+      const targetId = String(req?.targetId || req?.transactionId || "").trim();
+      if (!targetType || targetType === "transaction") {
+        if (targetId) set.add(targetId);
+      }
+      const related = Array.isArray(req?.relatedTransactionIds) ? req.relatedTransactionIds : [];
+      related.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) set.add(value);
+      });
+    });
+    return set;
+  }, [auditExecutionLogs, auditChangeRequests]);
+
   const recentTxns: Transaction[] = useMemo(() => {
     const source: Transaction[] = canViewOrgFinanceSummary
       ? [...(transactions || [])]
@@ -318,9 +381,15 @@ export default function DashboardScreen() {
           return String(txn?.memberId || "").trim() === myMemberId;
         });
     return source
+      .filter((txn: any) => {
+        const id = String(txn?.id || "").trim();
+        if (id && deletedTxnIds.has(id)) return false;
+        if (txn?.deleted || txn?.deletedAt) return false;
+        return true;
+      })
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 5);
-  }, [transactions, canViewOrgFinanceSummary, currentUser?.memberId]);
+  }, [transactions, canViewOrgFinanceSummary, currentUser?.memberId, deletedTxnIds]);
   const publicEvents: OrgEvent[] = useMemo(
     () =>
       [...(events || [])].filter(
@@ -1311,7 +1380,7 @@ export default function DashboardScreen() {
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
       <View style={styles.quickActions}>
-        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} />
+        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} spinning={syncingNow} />
         <QuickAction icon="chatbubbles-outline" label="Messages" onPress={() => router.push("/messages" as any)} />
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}

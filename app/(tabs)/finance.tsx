@@ -396,6 +396,7 @@ export default function FinanceScreen() {
     transactions,
     loans,
     auditChangeRequests,
+    auditExecutionLogs,
     members,
     removeTransaction,
     updateTransaction,
@@ -480,8 +481,68 @@ export default function FinanceScreen() {
     activeTab,
   ]);
 
-  const computeTransactions = useMemo(() => (computeReady ? (transactions || []) : []), [computeReady, transactions]);
-  const computeLoans = useMemo(() => (computeReady ? (loans || []) : []), [computeReady, loans]);
+  const deletedTargets = useMemo(() => {
+    const txnIds = new Set<string>();
+    const loanIds = new Set<string>();
+    (auditExecutionLogs || []).forEach((log: any) => {
+      if (String(log?.action || "") !== "delete_executed") return;
+      const targetType = String(log?.targetType || "").trim().toLowerCase();
+      const targetId = String(log?.targetId || "").trim();
+      if (targetType === "loan") {
+        if (targetId) loanIds.add(targetId);
+      } else if (!targetType || targetType === "transaction") {
+        if (targetId) txnIds.add(targetId);
+      }
+      const affected = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+      affected.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) txnIds.add(value);
+      });
+    });
+    (auditChangeRequests || []).forEach((req: any) => {
+      if (String(req?.requestKind || "") !== "delete") return;
+      if (String(req?.status || "") !== "approved") return;
+      const targetType = String(req?.targetType || "").trim().toLowerCase();
+      const targetId = String(req?.targetId || "").trim();
+      if (targetType === "loan") {
+        if (targetId) loanIds.add(targetId);
+      } else if (!targetType || targetType === "transaction") {
+        if (targetId) txnIds.add(targetId);
+      }
+      const related = Array.isArray(req?.relatedTransactionIds) ? req.relatedTransactionIds : [];
+      related.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) txnIds.add(value);
+      });
+    });
+    return { txnIds, loanIds };
+  }, [auditExecutionLogs, auditChangeRequests]);
+
+  const computeTransactions = useMemo(
+    () =>
+      computeReady
+        ? (transactions || []).filter((txn: any) => {
+            const id = String(txn?.id || "").trim();
+            if (id && deletedTargets.txnIds.has(id)) return false;
+            if (txn?.deleted || txn?.deletedAt) return false;
+            return true;
+          })
+        : [],
+    [computeReady, transactions, deletedTargets]
+  );
+
+  const computeLoans = useMemo(
+    () =>
+      computeReady
+        ? (loans || []).filter((loan: any) => {
+            const id = String(loan?.id || "").trim();
+            if (id && deletedTargets.loanIds.has(id)) return false;
+            if (loan?.deleted || loan?.deletedAt) return false;
+            return true;
+          })
+        : [],
+    [computeReady, loans, deletedTargets]
+  );
 
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
     router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);

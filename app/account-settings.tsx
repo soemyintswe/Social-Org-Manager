@@ -6,6 +6,7 @@ import {
   TextInput,
   Pressable,
   ScrollView,
+  ActivityIndicator,
   Platform,
   Alert,
   KeyboardAvoidingView,
@@ -674,6 +675,11 @@ export default function AccountSettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
+                {syncing ? (
+                  <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                ) : (
+                  <Ionicons name="sync-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
+                )}
                 <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
               </Pressable>
             </View>
@@ -1195,8 +1201,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: Colors.light.tint,
     paddingHorizontal: 14,
+    paddingVertical: 11,
     justifyContent: "center",
     alignItems: "center",
+    flexDirection: "row",
   },
   syncNowText: {
     color: "#fff",

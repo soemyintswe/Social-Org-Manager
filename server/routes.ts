@@ -160,14 +160,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       delete (payload as any).endpoint;
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12000);
+      const timeout = setTimeout(() => controller.abort(), 45000);
       let upstream: Response;
       try {
         upstream = await fetch(normalizedEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-          redirect: "error",
+          redirect: "follow",
           signal: controller.signal,
         });
       } finally {

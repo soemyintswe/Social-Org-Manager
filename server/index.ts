@@ -225,6 +225,11 @@ function configureExpoAndLanding(app: express.Application) {
   }
   const appName = getAppName();
 
+  const webBuildDir = resolveFromBase("web-build");
+  const hasWebBuild =
+    fs.existsSync(webBuildDir) &&
+    fs.existsSync(path.join(webBuildDir, "index.html"));
+
   log("Serving static Expo files with dynamic manifest routing");
 
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -242,6 +247,9 @@ function configureExpoAndLanding(app: express.Application) {
     }
 
     if (req.path === "/") {
+      if (hasWebBuild) {
+        return res.sendFile(path.join(webBuildDir, "index.html"));
+      }
       return serveLandingPage({
         req,
         res,
@@ -256,10 +264,6 @@ function configureExpoAndLanding(app: express.Application) {
   app.use("/assets", express.static(resolveFromBase("assets")));
   app.use(express.static(resolveFromBase("static-build")));
 
-  const webBuildDir = resolveFromBase("web-build");
-  const hasWebBuild =
-    fs.existsSync(webBuildDir) &&
-    fs.existsSync(path.join(webBuildDir, "index.html"));
   if (hasWebBuild) {
     const webExpoAssetsDir = path.join(webBuildDir, "_expo");
     if (fs.existsSync(webExpoAssetsDir)) {
@@ -275,6 +279,16 @@ function configureExpoAndLanding(app: express.Application) {
     }
     app.use("/web", express.static(webBuildDir));
     app.get(/^\/web(\/.*)?$/, (_req, res) => {
+      return res.sendFile(path.join(webBuildDir, "index.html"));
+    });
+    app.use((req, res, next) => {
+      if (req.path.startsWith("/api")) return next();
+      if (req.path === "/manifest") return next();
+      if (req.path.startsWith("/_expo") || req.path.startsWith("/assets") || req.path === "/favicon.ico") {
+        return next();
+      }
+      const accept = String(req.header("accept") || "");
+      if (!accept.includes("text/html")) return next();
       return res.sendFile(path.join(webBuildDir, "index.html"));
     });
     log("Web build route enabled at /web");

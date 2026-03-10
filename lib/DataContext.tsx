@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
+import { Platform } from "react-native";
 import type { ReactNode } from "react";
 import type {
   Member,
@@ -300,7 +301,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const LOCAL_PULL_GUARD_MS = 12000;
   const LOCAL_MUTATION_PUSH_WINDOW_MS = 15000;
   const AUTO_PUSH_DEBOUNCE_MS = 800;
-  const AUTO_PULL_INTERVAL_MS = 15000;
+  const AUTO_PULL_INTERVAL_MS = Platform.OS === "web" ? 6000 : 15000;
 
   const pushAllSyncTargets = useCallback(async () => {
     try {
