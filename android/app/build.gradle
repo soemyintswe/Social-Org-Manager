@@ -94,8 +94,8 @@ android {
         applicationId 'com.soemyintswe.orghub'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 48
-        versionName "1.1.47"
+        versionCode 49
+        versionName "1.1.48"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
