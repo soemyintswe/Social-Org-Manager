@@ -1438,15 +1438,120 @@ export async function getAuditExecutionLogs(): Promise<AuditExecutionLog[]> {
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 }
 
+type DeletedTargetIndex = {
+  transactionIds: Set<string>;
+  loanIds: Set<string>;
+};
+
+function normalizeId(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function collectDeletedTargetsFromExecutionLogs(logs: AuditExecutionLog[]): DeletedTargetIndex {
+  const transactionIds = new Set<string>();
+  const loanIds = new Set<string>();
+  for (const log of logs) {
+    if (String(log?.action || "") !== "delete_executed") continue;
+    const targetType = String(log?.targetType || "");
+    const targetId = normalizeId(log?.targetId);
+    const txnId = normalizeId(log?.transactionId);
+    const relatedLoanId = normalizeId(log?.relatedLoanId);
+    if (targetType === "loan") {
+      if (targetId) loanIds.add(targetId);
+      if (relatedLoanId) loanIds.add(relatedLoanId);
+    } else {
+      if (targetId) transactionIds.add(targetId);
+      if (txnId) transactionIds.add(txnId);
+    }
+    const linkedIds = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+    for (const id of linkedIds) {
+      const normalized = normalizeId(id);
+      if (normalized) transactionIds.add(normalized);
+    }
+    const patchIds = (log as any)?.patch?.__removedLinkedTransactionIds;
+    if (Array.isArray(patchIds)) {
+      for (const id of patchIds) {
+        const normalized = normalizeId(id);
+        if (normalized) transactionIds.add(normalized);
+      }
+    }
+    const beforeLinked = (log as any)?.before?.__linkedTransactions;
+    if (Array.isArray(beforeLinked)) {
+      for (const row of beforeLinked) {
+        const id = normalizeId((row as any)?.id);
+        if (id) transactionIds.add(id);
+      }
+    }
+  }
+  return { transactionIds, loanIds };
+}
+
+function isDeletedRow(row: any): boolean {
+  return Boolean(row?.deleted || row?.deletedAt);
+}
+
+function filterTransactionsByDeletedIndex(txns: Transaction[], index: DeletedTargetIndex): Transaction[] {
+  if (!index.transactionIds.size && !index.loanIds.size) return txns;
+  return txns.filter((row: any) => {
+    const id = normalizeId(row?.id);
+    if (id && index.transactionIds.has(id)) return false;
+    const loanId = normalizeId(row?.loanId);
+    if (loanId && index.loanIds.has(loanId)) return false;
+    if (isDeletedRow(row)) return false;
+    return true;
+  });
+}
+
+function filterLoansByDeletedIndex(loans: Loan[], index: DeletedTargetIndex): Loan[] {
+  if (!index.loanIds.size) return loans;
+  return loans.filter((row: any) => {
+    const id = normalizeId(row?.id);
+    if (id && index.loanIds.has(id)) return false;
+    if (isDeletedRow(row)) return false;
+    return true;
+  });
+}
+
+async function buildDeletedTargetIndexFromStorage(): Promise<DeletedTargetIndex> {
+  const logs = await getAuditExecutionLogs();
+  return collectDeletedTargetsFromExecutionLogs(logs);
+}
+
+export async function pruneDeletedTargetsFromStorage(): Promise<boolean> {
+  const [index, txnsRaw, loansRaw] = await Promise.all([
+    buildDeletedTargetIndexFromStorage(),
+    safeGet<Transaction[]>(KEYS.TRANSACTIONS, []),
+    safeGet<Loan[]>(KEYS.LOANS, []),
+  ]);
+  if (!index.transactionIds.size && !index.loanIds.size) return false;
+  const nextTxns = filterTransactionsByDeletedIndex(Array.isArray(txnsRaw) ? txnsRaw : [], index);
+  const nextLoans = filterLoansByDeletedIndex(Array.isArray(loansRaw) ? loansRaw : [], index);
+  const changed = nextTxns.length !== (Array.isArray(txnsRaw) ? txnsRaw.length : 0) || nextLoans.length !== (Array.isArray(loansRaw) ? loansRaw.length : 0);
+  if (changed) {
+    await AsyncStorage.multiSet([
+      [KEYS.TRANSACTIONS, JSON.stringify(nextTxns)],
+      [KEYS.LOANS, JSON.stringify(nextLoans)],
+    ]);
+  }
+  return changed;
+}
+
 async function getAuditRequestTargetMemberId(req: AuditChangeRequest): Promise<string> {
   if (String(req?.targetType || "") === "loan") {
     const loans = await getLoans();
     const loan = loans.find((row: any) => String(row?.id || "") === String(req?.targetId || req?.relatedLoanId || ""));
-    return String((loan as any)?.memberId || "").trim();
+    if (loan) return String((loan as any)?.memberId || "").trim();
+    const logs = await getAuditExecutionLogs();
+    const log = logs.find((row) => String(row?.requestId || "") === String(req?.id || ""));
+    const fallbackMemberId = normalizeId((log as any)?.before?.memberId);
+    return fallbackMemberId;
   }
   const txns = await getTransactions();
   const txn = txns.find((row: any) => String(row?.id || "") === String(req?.targetId || req?.transactionId || ""));
-  return String((txn as any)?.memberId || "").trim();
+  if (txn) return String((txn as any)?.memberId || "").trim();
+  const logs = await getAuditExecutionLogs();
+  const log = logs.find((row) => String(row?.requestId || "") === String(req?.id || ""));
+  return normalizeId((log as any)?.before?.memberId);
 }
 
 export async function createAuditChangeRequest(input: {
@@ -1460,7 +1565,12 @@ export async function createAuditChangeRequest(input: {
   createdByMemberId?: string;
   createdByDisplayName?: string;
 }): Promise<AuditChangeRequest> {
-  const [requests, transactions, loans] = await Promise.all([getAuditChangeRequests(), getTransactions(), getLoans()]);
+  const [requests, transactions, loans, deleteIndex] = await Promise.all([
+    getAuditChangeRequests(),
+    getTransactions(),
+    getLoans(),
+    buildDeletedTargetIndexFromStorage(),
+  ]);
   const requestKind: AuditChangeRequestKind = normalizeAuditRequestKind(input.requestKind);
   const resolvedTargetType: AuditChangeTargetType = requestKind === "delete"
     ? normalizeAuditTargetType(input.targetType, String(input.targetId || ""), String(input.transactionId || ""))
@@ -1474,6 +1584,17 @@ export async function createAuditChangeRequest(input: {
   const loan = loans.find((row: any) => String(row?.id || "") === targetId);
   if (resolvedTargetType === "transaction" && !txn) throw new Error("transaction_not_found");
   if (resolvedTargetType === "loan" && !loan) throw new Error("loan_not_found");
+  if (requestKind === "delete") {
+    if (resolvedTargetType === "loan") {
+      if (deleteIndex.loanIds.has(targetId)) throw new Error("already_deleted");
+    } else {
+      if (deleteIndex.transactionIds.has(targetId) || deleteIndex.transactionIds.has(transactionId)) {
+        throw new Error("already_deleted");
+      }
+      const loanId = normalizeId((txn as any)?.loanId);
+      if (loanId && deleteIndex.loanIds.has(loanId)) throw new Error("already_deleted");
+    }
+  }
 
   const activeConflict = requests.find((row: any) => {
     const sameTarget =
@@ -3043,7 +3164,11 @@ export async function saveAttendance(eventId: string, memberId: string, status: 
 }
 
 // --- Transactions ---
-export const getTransactions = () => safeGet<Transaction[]>(KEYS.TRANSACTIONS, []);
+export async function getTransactions(): Promise<Transaction[]> {
+  const txns = await safeGet<Transaction[]>(KEYS.TRANSACTIONS, []);
+  const index = await buildDeletedTargetIndexFromStorage();
+  return filterTransactionsByDeletedIndex(Array.isArray(txns) ? txns : [], index);
+}
 
 export async function addTransaction(txn: any) {
   const txns = await getTransactions();
@@ -3081,7 +3206,11 @@ export async function deleteTransaction(id: string) {
 }
 
 // --- Loans ---
-export const getLoans = () => safeGet<Loan[]>(KEYS.LOANS, []);
+export async function getLoans(): Promise<Loan[]> {
+  const loans = await safeGet<Loan[]>(KEYS.LOANS, []);
+  const index = await buildDeletedTargetIndexFromStorage();
+  return filterLoansByDeletedIndex(Array.isArray(loans) ? loans : [], index);
+}
 
 export async function addLoan(loan: any) {
   const loans = await getLoans();
@@ -4047,6 +4176,20 @@ export async function restoreData(jsonString: string): Promise<boolean> {
     if (Array.isArray(importedMembers) && importedMembers.length > 0) {
       await setEmptyOrgState(false);
     }
+    const importedLogs = parseJsonSafe<AuditExecutionLog[]>(exportObj?.[KEYS.AUDIT_EXECUTION_LOGS], []);
+    if (Array.isArray(importedLogs) && importedLogs.length > 0) {
+      const index = collectDeletedTargetsFromExecutionLogs(importedLogs);
+      if (index.transactionIds.size || index.loanIds.size) {
+        const importedTxns = parseJsonSafe<Transaction[]>(exportObj?.[KEYS.TRANSACTIONS], []);
+        const importedLoans = parseJsonSafe<Loan[]>(exportObj?.[KEYS.LOANS], []);
+        const nextTxns = filterTransactionsByDeletedIndex(Array.isArray(importedTxns) ? importedTxns : [], index);
+        const nextLoans = filterLoansByDeletedIndex(Array.isArray(importedLoans) ? importedLoans : [], index);
+        await AsyncStorage.multiSet([
+          [KEYS.TRANSACTIONS, JSON.stringify(nextTxns)],
+          [KEYS.LOANS, JSON.stringify(nextLoans)],
+        ]);
+      }
+    }
     return true;
   } catch (error) {
     console.error("Restore failed:", error);
@@ -4139,6 +4282,10 @@ function mergeStorageValues(existingValue: unknown, incomingValue: unknown): unk
 export async function mergeData(jsonString: string): Promise<boolean> {
   try {
     const exportObj = JSON.parse(jsonString) as Record<string, unknown>;
+    const incomingLogs = parseJsonSafe<AuditExecutionLog[]>(exportObj?.[KEYS.AUDIT_EXECUTION_LOGS], []);
+    const existingLogs = await getAuditExecutionLogs();
+    const mergedLogs = mergeRecordsById(existingLogs, Array.isArray(incomingLogs) ? incomingLogs : []);
+    const deletedIndex = collectDeletedTargetsFromExecutionLogs(mergedLogs);
 
     const keys = Object.keys(exportObj || {}).filter((key) => isSharedBackupKey(key));
     let changed = false;
@@ -4174,7 +4321,13 @@ export async function mergeData(jsonString: string): Promise<boolean> {
 
       const existingParsed = parseJsonSafe<unknown>(existingRaw, existingRaw || null);
       const incomingParsed = parseJsonSafe<unknown>(incomingRaw, incomingRaw);
-      const mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      let mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      if (key === KEYS.TRANSACTIONS && Array.isArray(mergedValue)) {
+        mergedValue = filterTransactionsByDeletedIndex(mergedValue as Transaction[], deletedIndex);
+      }
+      if (key === KEYS.LOANS && Array.isArray(mergedValue)) {
+        mergedValue = filterLoansByDeletedIndex(mergedValue as Loan[], deletedIndex);
+      }
       const mergedSerialized = typeof mergedValue === "string" ? mergedValue : JSON.stringify(mergedValue);
       if (String(existingRaw || "") !== mergedSerialized) {
         await AsyncStorage.setItem(key, mergedSerialized);
@@ -4187,6 +4340,10 @@ export async function mergeData(jsonString: string): Promise<boolean> {
       await setEmptyOrgState(false);
     }
 
+    if (deletedIndex.transactionIds.size || deletedIndex.loanIds.size) {
+      const pruned = await pruneDeletedTargetsFromStorage();
+      if (pruned) changed = true;
+    }
     return changed;
   } catch (error) {
     console.error("Merge failed:", error);

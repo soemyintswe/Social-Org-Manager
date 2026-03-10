@@ -649,6 +649,10 @@ export default function FinanceScreen() {
         Alert.alert("မရပါ", "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။");
         return;
       }
+      if (reason.includes("already_deleted")) {
+        Alert.alert("မရပါ", "ဤစာရင်းသည် ပယ်ဖျက်ပြီးဖြစ်သောကြောင့် Delete Request ထပ်မတင်နိုင်ပါ။");
+        return;
+      }
       Alert.alert("အမှား", "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
     }
   };

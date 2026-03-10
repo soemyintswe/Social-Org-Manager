@@ -402,6 +402,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
       }
       await store.seedDefaultAdminUser();
+      const pruned = await store.pruneDeletedTargetsFromStorage();
+      if (pruned) {
+        lastLocalMutationAtRef.current = Date.now();
+      }
       const [m, e, g, a, t, l, u, r, acr, ael, ec, mpr, sar, sacr, cth, ctm, n, s] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
