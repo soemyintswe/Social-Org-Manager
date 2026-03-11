@@ -18,7 +18,7 @@ import { default as Constants } from 'expo-constants';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -214,6 +214,8 @@ export default function DashboardScreen() {
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
     router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);
   };
+  const scrollRef = useRef<ScrollView>(null);
+  const { scrollToTop } = useLocalSearchParams();
   const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
   const [syncingNow, setSyncingNow] = useState(false);
   const [refreshingDashboard, setRefreshingDashboard] = useState(false);
@@ -224,6 +226,18 @@ export default function DashboardScreen() {
     const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
     return withProtocol.replace(/\/+$/, "");
   };
+
+  useEffect(() => {
+    if (!scrollToTop) return;
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    if (Platform.OS === "web") {
+      try {
+        window.scrollTo({ top: 0, behavior: "smooth" as any });
+      } catch {
+        // ignore
+      }
+    }
+  }, [scrollToTop]);
 
   const handleSyncNow = async () => {
     if (syncingNow) return;
@@ -1145,6 +1159,7 @@ export default function DashboardScreen() {
   if (isSystemAdmin) {
     return (
       <ScrollView
+        ref={scrollRef}
         style={styles.container}
         contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
@@ -1173,6 +1188,7 @@ export default function DashboardScreen() {
 
   return (
     <ScrollView 
+      ref={scrollRef}
       style={styles.container} 
       contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
       showsVerticalScrollIndicator={false}

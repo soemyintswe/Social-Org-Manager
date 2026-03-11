@@ -530,7 +530,9 @@ function RootLayoutNav() {
             <View style={styles.topIdentityRow}>
               <Pressable
                 style={styles.topIdentityIconBtn}
-                onPress={() => router.replace("/" as any)}
+                onPress={() =>
+                  router.replace({ pathname: "/" as any, params: { scrollToTop: Date.now().toString() } } as any)
+                }
                 accessibilityRole="button"
                 accessibilityLabel="Home"
               >
@@ -664,6 +666,7 @@ export default function RootLayout() {
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
+    ...Ionicons.font,
   });
   const [fontsTimedOut, setFontsTimedOut] = useState(false);
 
