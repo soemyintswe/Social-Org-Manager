@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog } = require("electron");
 const path = require("path");
 const net = require("net");
 const fs = require("fs");
@@ -16,6 +16,7 @@ if (!gotSingleInstanceLock) {
 let mainWindow = null;
 let serverBootstrapped = false;
 let activePort = 5000;
+let blankReloaded = false;
 
 function getDesktopLogFile() {
   try {
@@ -59,9 +60,6 @@ function canListenOnPort(port) {
 
 async function resolvePreferredPort() {
   const preferred = Number(process.env.PORT || 5000);
-  const preferredHealthy = await checkServerHealth(`http://127.0.0.1:${preferred}`);
-  if (preferredHealthy) return preferred;
-
   const preferredFree = await canListenOnPort(preferred);
   if (preferredFree) return preferred;
 
@@ -198,25 +196,21 @@ async function createWindow() {
         );
         logDesktop(`ui snapshot ${JSON.stringify(uiInfo)}`);
 
-        if (Number(uiInfo.rootChildren) <= 0) {
-          logDesktop("blank root detected (children<=0), reloadIgnoringCache");
-          mainWindow.webContents.reloadIgnoringCache();
-        }
-
         const looksBlank =
           Number(uiInfo.rootChildren) <= 0 ||
           Number(uiInfo.rootNodes) <= 1 ||
           (Number(uiInfo.rootHtmlLength) < 40 && Number(uiInfo.textLength) === 0);
 
         if (looksBlank) {
-          logDesktop("renderer appears blank; opening browser fallback");
-          const webUrl = `${baseUrl}/web/`;
-          try {
-            await shell.openExternal(webUrl);
-          } catch (err) {
-            logDesktop(`openExternal failed: ${String(err?.message || err)}`);
+          if (!blankReloaded) {
+            blankReloaded = true;
+            logDesktop("blank root detected, reloadIgnoringCache once");
+            mainWindow.webContents.reloadIgnoringCache();
+            return;
           }
 
+          logDesktop("renderer appears blank; showing fallback page");
+          const webUrl = `${baseUrl}/web/`;
           const fallbackHtml = `
             <!doctype html>
             <html lang="en">
@@ -237,10 +231,23 @@ async function createWindow() {
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     logDesktop(`did-fail-load code=${errorCode} reason=${errorDescription} url=${validatedURL}`);
-    dialog.showErrorBox(
-      "Window Load Error",
-      `Failed to load desktop UI.\nCode: ${errorCode}\nReason: ${errorDescription}\nURL: ${validatedURL}`
-    );
+    const webUrl = `${baseUrl}/web/`;
+    const fallbackHtml = `
+      <!doctype html>
+      <html lang="en">
+        <head><meta charset="utf-8"><title>Social Org Manager</title></head>
+        <body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f6f8fb;color:#0f172a">
+          <h2 style="margin-top:0">Social Org Manager</h2>
+          <p>Desktop UI ကိုဖွင့်မရပါ။</p>
+          <pre style="white-space:pre-wrap;background:#fff;padding:12px;border-radius:8px;border:1px solid #e2e8f0;">
+Code: ${errorCode}
+Reason: ${errorDescription}
+URL: ${validatedURL}
+          </pre>
+          <p><a href="${webUrl}" style="font-size:16px">Open App In Browser</a></p>
+        </body>
+      </html>`;
+    mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(fallbackHtml)}`);
   });
 
   try {

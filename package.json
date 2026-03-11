@@ -131,7 +131,17 @@
       "server/templates/**/*",
       "server/config/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/**/android/**",
+      "!**/node_modules/**/ios/**",
+      "!**/node_modules/**/build/**",
+      "!**/node_modules/**/example/**",
+      "!**/node_modules/**/examples/**",
+      "!**/node_modules/**/sample/**",
+      "!**/node_modules/**/samples/**",
+      "!**/node_modules/**/docs/**",
+      "!**/node_modules/**/test/**",
+      "!**/node_modules/**/tests/**"
     ]
   },
   "private": true
