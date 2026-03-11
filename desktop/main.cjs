@@ -141,6 +141,7 @@ async function createWindow() {
     },
   });
   let shown = false;
+  const baseUrlPattern = "http://127.0.0.1:*/*";
 
   try {
     await mainWindow.webContents.session.clearCache();
@@ -172,6 +173,16 @@ async function createWindow() {
 
   mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     logDesktop(`renderer console level=${level} ${sourceId}:${line} ${message}`);
+  });
+
+  const session = mainWindow.webContents.session;
+  session.webRequest.onCompleted({ urls: [baseUrlPattern] }, (details) => {
+    if (details.statusCode >= 400) {
+      logDesktop(`resource ${details.statusCode} ${details.method} ${details.url} (${details.resourceType})`);
+    }
+  });
+  session.webRequest.onErrorOccurred({ urls: [baseUrlPattern] }, (details) => {
+    logDesktop(`resource error ${details.error} ${details.method} ${details.url} (${details.resourceType})`);
   });
 
   const loadStartedAt = Date.now();
@@ -248,6 +259,21 @@ async function createWindow() {
   mainWindow.webContents.on("did-finish-load", () => {
     logDesktop("did-finish-load");
     setTimeout(evaluateBlankScreen, 6000);
+    mainWindow.webContents
+      .executeJavaScript(
+        `(() => {
+          if (window.__orghubErrorHookInstalled) return;
+          window.__orghubErrorHookInstalled = true;
+          window.addEventListener('error', (e) => {
+            console.error('window.onerror', e?.message || e);
+          });
+          window.addEventListener('unhandledrejection', (e) => {
+            console.error('unhandledrejection', e?.reason || e);
+          });
+        })();`,
+        true
+      )
+      .catch(() => {});
   });
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
