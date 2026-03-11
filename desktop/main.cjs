@@ -16,7 +16,7 @@ if (!gotSingleInstanceLock) {
 let mainWindow = null;
 let serverBootstrapped = false;
 let activePort = 5000;
-let blankReloaded = false;
+let blankCheckAttempts = 0;
 
 function getDesktopLogFile() {
   try {
@@ -173,60 +173,65 @@ async function createWindow() {
     logDesktop(`renderer console level=${level} ${sourceId}:${line} ${message}`);
   });
 
+  const evaluateBlankScreen = async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const uiInfo = await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const root = document.getElementById('root');
+          const info = {
+            href: String(location.href || ""),
+            title: String(document.title || ""),
+            rootChildren: root ? root.children.length : -1,
+            rootNodes: root ? root.querySelectorAll('*').length : -1,
+            rootHtmlLength: root ? String(root.innerHTML || '').length : 0,
+            textLength: root ? String(root.innerText || '').trim().length : 0,
+            bodyBg: String(getComputedStyle(document.body).backgroundColor || ''),
+          };
+          return info;
+        })();`,
+        true
+      );
+      logDesktop(`ui snapshot ${JSON.stringify(uiInfo)}`);
+
+      const looksBlank =
+        Number(uiInfo.rootChildren) <= 0 ||
+        Number(uiInfo.rootNodes) <= 1 ||
+        (Number(uiInfo.rootHtmlLength) < 40 && Number(uiInfo.textLength) === 0);
+
+      if (!looksBlank) {
+        blankCheckAttempts = 0;
+        return;
+      }
+
+      blankCheckAttempts += 1;
+      logDesktop(`renderer appears blank (attempt ${blankCheckAttempts})`);
+
+      if (blankCheckAttempts < 2) {
+        setTimeout(evaluateBlankScreen, 6000);
+        return;
+      }
+
+      const webUrl = `${baseUrl}/web/`;
+      const fallbackHtml = `
+        <!doctype html>
+        <html lang="en">
+          <head><meta charset="utf-8"><title>Social Org Manager</title></head>
+          <body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f6f8fb;color:#0f172a">
+            <h2 style="margin-top:0">Social Org Manager</h2>
+            <p>Desktop UI ကိုဖွင့်မရသေးပါ။ အောက်က လင့်ခ်ကနေ browser mode နဲ့ဖွင့်နိုင်ပါတယ်။</p>
+            <p><a href="${webUrl}" style="font-size:16px">Open App In Browser</a></p>
+          </body>
+        </html>`;
+      await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(fallbackHtml)}`);
+    } catch (e) {
+      logDesktop(`root check failed ${String(e?.message || e)}`);
+    }
+  };
+
   mainWindow.webContents.on("did-finish-load", () => {
     logDesktop("did-finish-load");
-    setTimeout(async () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
-      try {
-        const uiInfo = await mainWindow.webContents.executeJavaScript(
-          `(() => {
-            const root = document.getElementById('root');
-            const info = {
-              href: String(location.href || ""),
-              title: String(document.title || ""),
-              rootChildren: root ? root.children.length : -1,
-              rootNodes: root ? root.querySelectorAll('*').length : -1,
-              rootHtmlLength: root ? String(root.innerHTML || '').length : 0,
-              textLength: root ? String(root.innerText || '').trim().length : 0,
-              bodyBg: String(getComputedStyle(document.body).backgroundColor || ''),
-            };
-            return info;
-          })();`,
-          true
-        );
-        logDesktop(`ui snapshot ${JSON.stringify(uiInfo)}`);
-
-        const looksBlank =
-          Number(uiInfo.rootChildren) <= 0 ||
-          Number(uiInfo.rootNodes) <= 1 ||
-          (Number(uiInfo.rootHtmlLength) < 40 && Number(uiInfo.textLength) === 0);
-
-        if (looksBlank) {
-          if (!blankReloaded) {
-            blankReloaded = true;
-            logDesktop("blank root detected, reloadIgnoringCache once");
-            mainWindow.webContents.reloadIgnoringCache();
-            return;
-          }
-
-          logDesktop("renderer appears blank; showing fallback page");
-          const webUrl = `${baseUrl}/web/`;
-          const fallbackHtml = `
-            <!doctype html>
-            <html lang="en">
-              <head><meta charset="utf-8"><title>Social Org Manager</title></head>
-              <body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f6f8fb;color:#0f172a">
-                <h2 style="margin-top:0">Social Org Manager</h2>
-                <p>Desktop renderer blank screen ဖြစ်နေတာကြောင့် browser mode နဲ့ဖွင့်ပေးထားပါတယ်။</p>
-                <p><a href="${webUrl}" style="font-size:16px">Open App In Browser</a></p>
-              </body>
-            </html>`;
-          await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(fallbackHtml)}`);
-        }
-      } catch (e) {
-        logDesktop(`root check failed ${String(e?.message || e)}`);
-      }
-    }, 1800);
+    setTimeout(evaluateBlankScreen, 6000);
   });
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
