@@ -144,5 +144,8 @@
       "!**/node_modules/**/tests/**"
     ]
   },
+  "overrides": {
+    "tar": "^7.5.11"
+  },
   "private": true
 }

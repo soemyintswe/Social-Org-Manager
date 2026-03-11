@@ -17,6 +17,7 @@ let mainWindow = null;
 let serverBootstrapped = false;
 let activePort = 5000;
 let blankCheckAttempts = 0;
+let fallbackShown = false;
 
 function getDesktopLogFile() {
   try {
@@ -173,8 +174,16 @@ async function createWindow() {
     logDesktop(`renderer console level=${level} ${sourceId}:${line} ${message}`);
   });
 
+  const loadStartedAt = Date.now();
+  const fallbackAfterMs = 45000;
+
   const evaluateBlankScreen = async () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (fallbackShown) return;
+    if (Date.now() - loadStartedAt < 6000) {
+      setTimeout(evaluateBlankScreen, 6000);
+      return;
+    }
     try {
       const uiInfo = await mainWindow.webContents.executeJavaScript(
         `(() => {
@@ -207,7 +216,7 @@ async function createWindow() {
       blankCheckAttempts += 1;
       logDesktop(`renderer appears blank (attempt ${blankCheckAttempts})`);
 
-      if (blankCheckAttempts < 2) {
+      if (Date.now() - loadStartedAt < fallbackAfterMs) {
         setTimeout(evaluateBlankScreen, 6000);
         return;
       }
@@ -221,8 +230,15 @@ async function createWindow() {
             <h2 style="margin-top:0">Social Org Manager</h2>
             <p>Desktop UI ကိုဖွင့်မရသေးပါ။ အောက်က လင့်ခ်ကနေ browser mode နဲ့ဖွင့်နိုင်ပါတယ်။</p>
             <p><a href="${webUrl}" style="font-size:16px">Open App In Browser</a></p>
+            <p><button id="retry" style="margin-top:8px;padding:8px 12px;border-radius:6px;border:1px solid #cbd5f5;background:#fff;cursor:pointer">Retry Desktop UI</button></p>
+            <script>
+              document.getElementById('retry')?.addEventListener('click', () => {
+                location.href = '${baseUrl}/web/?t=' + Date.now();
+              });
+            </script>
           </body>
         </html>`;
+      fallbackShown = true;
       await mainWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(fallbackHtml)}`);
     } catch (e) {
       logDesktop(`root check failed ${String(e?.message || e)}`);
