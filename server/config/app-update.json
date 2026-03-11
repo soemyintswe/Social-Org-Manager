@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.54",
-  "latestBuildNumber": "55",
+  "latestVersion": "1.1.56",
+  "latestBuildNumber": "57",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.54-202603120308.apk",
-  "notes": "Version 1.1.54: Clean rebuild to fix crash on launch after update.",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.56-202603120505.apk",
+  "notes": "Version 1.1.56: One-time cleanup of test Delete/Audit Change Request records and related notifications (prevents re-sync).",
   "force": false,
-  "publishedAt": "2026-03-11T20:38:37.567Z"
+  "publishedAt": "2026-03-11T22:36:06.287Z"
 }

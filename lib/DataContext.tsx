@@ -453,7 +453,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [pullAllSyncTargets]);
 
   useEffect(() => {
-    refreshData();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cleanupApplied = await store.runAuditRequestCleanupOnce();
+        if (!cancelled) {
+          await refreshData({ skipPull: cleanupApplied, markLocalMutation: cleanupApplied });
+        }
+      } catch (error) {
+        console.error("Audit cleanup bootstrap failed:", error);
+        if (!cancelled) {
+          await refreshData();
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshData]);
 
   useEffect(() => {

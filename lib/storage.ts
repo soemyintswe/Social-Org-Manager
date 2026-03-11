@@ -86,6 +86,7 @@ const KEYS = {
 
 const MEMBER_JOIN_DATE_FALLBACK_DMY = "01/01/2018";
 const MEMBER_JOIN_DATE_MIGRATION_V1_KEY = "@orghub_member_join_date_migration_v1";
+const AUDIT_REQUEST_CLEANUP_V1_KEY = "@orghub_audit_request_cleanup_v1";
 
 const EXTRA_SHARED_KEYS = [
   "@custom_categories",
@@ -621,6 +622,37 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
   } catch (e) {
     console.error(`Error reading ${key}:`, e);
     return defaultValue;
+  }
+}
+
+export async function runAuditRequestCleanupOnce(): Promise<boolean> {
+  try {
+    const flag = await AsyncStorage.getItem(AUDIT_REQUEST_CLEANUP_V1_KEY);
+    if (flag === "1") return false;
+
+    const notifications = await safeGet<AppNotification[]>(KEYS.NOTIFICATIONS, []);
+    const filteredNotifications = Array.isArray(notifications)
+      ? notifications.filter((row: any) => {
+          const category = String(row?.category || "");
+          const relatedType = String(row?.relatedType || "");
+          return !(
+            category === "audit_change" ||
+            category === "delete_request" ||
+            relatedType === "audit_change_request"
+          );
+        })
+      : [];
+
+    await Promise.all([
+      AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify([])),
+      AsyncStorage.setItem(KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify([])),
+      AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(filteredNotifications)),
+      AsyncStorage.setItem(AUDIT_REQUEST_CLEANUP_V1_KEY, "1"),
+    ]);
+    return true;
+  } catch (e) {
+    console.error("Audit request cleanup failed:", e);
+    return false;
   }
 }
 
