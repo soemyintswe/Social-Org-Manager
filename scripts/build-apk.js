@@ -146,7 +146,13 @@ try {
   // Use gradlew.bat on Windows, ./gradlew on Unix-like
   const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
   
-  execSync(`${gradlew} assembleRelease`, {
+  const gradleFlags = [
+    '-Dkotlin.incremental=false',
+    '-Dkotlin.incremental.useClasspathSnapshot=false',
+    '-Dorg.gradle.caching=false'
+  ];
+
+  execSync(`${gradlew} assembleRelease ${gradleFlags.join(' ')}`, {
     cwd: androidDir,
     stdio: 'inherit'
   });

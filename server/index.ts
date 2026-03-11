@@ -261,17 +261,38 @@ function configureExpoAndLanding(app: express.Application) {
     next();
   });
 
-  app.use("/assets", express.static(resolveFromBase("assets")));
+  app.use(
+    "/assets",
+    express.static(resolveFromBase("assets"), {
+      setHeaders: (res) => {
+        res.setHeader("Cache-Control", "no-store");
+      },
+    })
+  );
   app.use(express.static(resolveFromBase("static-build")));
 
   if (hasWebBuild) {
     const webExpoAssetsDir = path.join(webBuildDir, "_expo");
     if (fs.existsSync(webExpoAssetsDir)) {
-      app.use("/_expo", express.static(webExpoAssetsDir));
+      app.use(
+        "/_expo",
+        express.static(webExpoAssetsDir, {
+          setHeaders: (res) => {
+            res.setHeader("Cache-Control", "no-store");
+          },
+        })
+      );
     }
     const webAssetsDir = path.join(webBuildDir, "assets");
     if (fs.existsSync(webAssetsDir)) {
-      app.use("/assets", express.static(webAssetsDir));
+      app.use(
+        "/assets",
+        express.static(webAssetsDir, {
+          setHeaders: (res) => {
+            res.setHeader("Cache-Control", "no-store");
+          },
+        })
+      );
     }
     const webFavicon = path.join(webBuildDir, "favicon.ico");
     if (fs.existsSync(webFavicon)) {
