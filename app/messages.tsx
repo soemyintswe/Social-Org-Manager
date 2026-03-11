@@ -43,6 +43,7 @@ export default function MessagesScreen() {
   const [messageText, setMessageText] = useState("");
   const [messageImage, setMessageImage] = useState("");
   const [replyTarget, setReplyTarget] = useState<any>(null);
+  const [isSending, setIsSending] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState("");
   const [newModal, setNewModal] = useState(false);
   const [newMode, setNewMode] = useState<"direct" | "group">("direct");
@@ -120,38 +121,55 @@ export default function MessagesScreen() {
 
   const handleSend = async () => {
     if (!selectedThreadId || !meUserId) return;
+    if (isSending) return;
     const text = messageText.trim();
     if (!text && !messageImage) {
       Alert.alert("လိုအပ်ချက်", "စာသား သို့မဟုတ် ဓာတ်ပုံ တစ်ခုခုထည့်ပါ။");
       return;
     }
+    const draftText = messageText;
+    const draftImage = messageImage;
+    const draftReply = replyTarget;
+    const draftEditingId = editingMessageId;
 
-    if (editingMessageId) {
-      await updateChatMessage({
-        messageId: editingMessageId,
-        editorUserId: meUserId,
-        text,
-        image: messageImage || undefined,
-      });
-    } else {
-      await sendChatMessage({
-        threadId: selectedThreadId,
-        senderUserId: meUserId,
-        senderMemberId: currentUser?.memberId || currentMember?.id,
-        senderDisplayName: currentUser?.displayName || currentMember?.name,
-        text,
-        image: messageImage || undefined,
-        replyToMessageId: replyTarget?.id,
-        replyToUserId: replyTarget?.senderUserId,
-        replyToDisplayName: replyTarget?.senderDisplayName || replyTarget?.senderMemberId || replyTarget?.senderUserId,
-        mentionUserIds: replyTarget?.senderUserId ? [replyTarget.senderUserId] : [],
-      });
-    }
+    setIsSending(true);
     setMessageText("");
     setMessageImage("");
     setReplyTarget(null);
     setEditingMessageId("");
-    await markChatThreadRead(selectedThreadId, meUserId);
+
+    try {
+      if (draftEditingId) {
+        await updateChatMessage({
+          messageId: draftEditingId,
+          editorUserId: meUserId,
+          text,
+          image: draftImage || undefined,
+        });
+      } else {
+        await sendChatMessage({
+          threadId: selectedThreadId,
+          senderUserId: meUserId,
+          senderMemberId: currentUser?.memberId || currentMember?.id,
+          senderDisplayName: currentUser?.displayName || currentMember?.name,
+          text,
+          image: draftImage || undefined,
+          replyToMessageId: draftReply?.id,
+          replyToUserId: draftReply?.senderUserId,
+          replyToDisplayName: draftReply?.senderDisplayName || draftReply?.senderMemberId || draftReply?.senderUserId,
+          mentionUserIds: draftReply?.senderUserId ? [draftReply.senderUserId] : [],
+        });
+      }
+      await markChatThreadRead(selectedThreadId, meUserId);
+    } catch (error) {
+      setMessageText(draftText);
+      setMessageImage(draftImage);
+      setReplyTarget(draftReply);
+      setEditingMessageId(draftEditingId);
+      Alert.alert("Error", "Message ပို့မရပါ။ Network ကိုစစ်ပြီး ထပ်မံကြိုးစားပါ။");
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const startEditMessage = (msg: any) => {
@@ -363,8 +381,16 @@ export default function MessagesScreen() {
                           : "Type a message..."
                   }
                 />
-                <Pressable style={styles.sendBtn} onPress={() => void handleSend()}>
-                  <Ionicons name={editingMessageId ? "checkmark" : "send"} size={16} color="#fff" />
+                <Pressable
+                  style={[styles.sendBtn, isSending && styles.sendBtnDisabled]}
+                  onPress={() => void handleSend()}
+                  disabled={isSending}
+                >
+                  {isSending ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name={editingMessageId ? "checkmark" : "send"} size={16} color="#fff" />
+                  )}
                 </Pressable>
               </View>
             </>
@@ -466,6 +492,7 @@ const styles = StyleSheet.create({
   pickBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: Colors.light.border, alignItems: "center", justifyContent: "center" },
   input: { flex: 1, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#fff" },
   sendBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.light.tint, alignItems: "center", justifyContent: "center" },
+  sendBtnDisabled: { opacity: 0.7 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 },
   modalCard: { backgroundColor: "#fff", borderRadius: 12, padding: 12 },
   modalTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 8 },

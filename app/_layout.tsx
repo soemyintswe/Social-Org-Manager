@@ -659,20 +659,37 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
-  const [fontsLoaded] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
   });
+  const [fontsTimedOut, setFontsTimedOut] = useState(false);
 
   useEffect(() => {
-    if (fontsLoaded) {
+    if (fontsLoaded || fontError || fontsTimedOut) {
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded]);
+  }, [fontsLoaded, fontError, fontsTimedOut]);
 
-  if (!fontsLoaded) return null;
+  useEffect(() => {
+    const timer = setTimeout(() => setFontsTimedOut(true), 5000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const fontsReady = fontsLoaded || !!fontError || fontsTimedOut;
+  if (!fontsReady) {
+    return (
+      <View style={styles.appLoadingShell}>
+        <Text style={styles.appLoadingTitle}>Social Org Manager</Text>
+        <Text style={styles.appLoadingText}>Loading… ခေတ္တစောင့်ပေးပါ။</Text>
+        <View style={styles.appLoadingTrack}>
+          <View style={styles.appLoadingFill} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <ErrorBoundary>
@@ -696,6 +713,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#F8FAFC",
     paddingHorizontal: 24,
+  },
+  appLoadingTitle: {
+    fontSize: 20,
+    color: Colors.light.text,
+    fontFamily: "Inter_700Bold",
+    textAlign: "center",
   },
   appLoadingText: {
     marginTop: 10,

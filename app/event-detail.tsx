@@ -100,6 +100,7 @@ export default function EventDetailScreen() {
   const [commentText, setCommentText] = useState("");
   const [commentImage, setCommentImage] = useState("");
   const [editingCommentId, setEditingCommentId] = useState("");
+  const [isSendingComment, setIsSendingComment] = useState(false);
   const [replyTarget, setReplyTarget] = useState<{
     commentId: string;
     userId: string;
@@ -185,8 +186,20 @@ export default function EventDetailScreen() {
     const msg = commentText.trim();
     if (!msg && !commentImage) return;
     if (!actorUserId || !event) return;
+    if (isSendingComment) return;
     const comments = event.comments || [];
     const now = new Date().toISOString();
+    const draftText = commentText;
+    const draftImage = commentImage;
+    const draftReply = replyTarget;
+    const draftEditingId = editingCommentId;
+
+    setIsSendingComment(true);
+    setCommentText("");
+    setCommentImage("");
+    setEditingCommentId("");
+    setReplyTarget(null);
+
     if (editingCommentId) {
       const next = comments.map((comment) => {
         if (String(comment.id || "") !== String(editingCommentId || "")) return comment;
@@ -194,37 +207,52 @@ export default function EventDetailScreen() {
         return {
           ...comment,
           message: msg,
-          image: commentImage || undefined,
+          image: draftImage || undefined,
           updatedAt: now,
           editedAt: now,
         };
       });
-      await editEvent(String(id), { comments: next });
+      try {
+        await editEvent(String(id), { comments: next });
+      } catch (error) {
+        setCommentText(draftText);
+        setCommentImage(draftImage);
+        setReplyTarget(draftReply);
+        setEditingCommentId(draftEditingId);
+        Alert.alert("Error", "Comment ပို့မရပါ။ Network ကိုစစ်ပြီး ထပ်မံကြိုးစားပါ။");
+      } finally {
+        setIsSendingComment(false);
+      }
     } else {
-      const mentionUserIds = replyTarget?.userId ? [replyTarget.userId] : [];
-      await editEvent(String(id), {
-        comments: [
-          ...comments,
-          {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            userId: actorUserId,
-            memberId: actorMemberId || undefined,
-            displayName: actorDisplayName || undefined,
-            message: msg,
-            image: commentImage || undefined,
-            createdAt: now,
-            replyToCommentId: replyTarget?.commentId,
-            replyToUserId: replyTarget?.userId,
-            replyToDisplayName: replyTarget?.displayName,
-            mentionUserIds,
-          },
-        ],
-      });
+      const mentionUserIds = draftReply?.userId ? [draftReply.userId] : [];
+      try {
+        await editEvent(String(id), {
+          comments: [
+            ...comments,
+            {
+              id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              userId: actorUserId,
+              memberId: actorMemberId || undefined,
+              displayName: actorDisplayName || undefined,
+              message: msg,
+              image: draftImage || undefined,
+              createdAt: now,
+              replyToCommentId: draftReply?.commentId,
+              replyToUserId: draftReply?.userId,
+              replyToDisplayName: draftReply?.displayName,
+              mentionUserIds,
+            },
+          ],
+        });
+      } catch (error) {
+        setCommentText(draftText);
+        setCommentImage(draftImage);
+        setReplyTarget(draftReply);
+        Alert.alert("Error", "Comment ပို့မရပါ။ Network ကိုစစ်ပြီး ထပ်မံကြိုးစားပါ။");
+      } finally {
+        setIsSendingComment(false);
+      }
     }
-    setCommentText("");
-    setCommentImage("");
-    setEditingCommentId("");
-    setReplyTarget(null);
   };
 
   const pickCommentImage = async () => {
@@ -473,8 +501,16 @@ export default function EventDetailScreen() {
                         : "မှတ်ချက်ရေးပါ..."
                 }
               />
-              <Pressable style={styles.commentSendBtn} onPress={() => void handleSendComment()}>
-                <Ionicons name={editingCommentId ? "checkmark" : "send"} size={16} color="#fff" />
+              <Pressable
+                style={[styles.commentSendBtn, isSendingComment && styles.commentSendBtnDisabled]}
+                onPress={() => void handleSendComment()}
+                disabled={isSendingComment}
+              >
+                {isSendingComment ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name={editingCommentId ? "checkmark" : "send"} size={16} color="#fff" />
+                )}
               </Pressable>
             </View>
             {(event.comments || []).length === 0 ? (
@@ -626,6 +662,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  commentSendBtnDisabled: { opacity: 0.7 },
   commentItem: {
     paddingVertical: 8,
     borderTopWidth: 1,

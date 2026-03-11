@@ -109,6 +109,9 @@
   "build": {
     "appId": "com.soemyintswe.orghub.desktop",
     "productName": "Social Org Manager",
+    "extraMetadata": {
+      "main": "desktop/main.cjs"
+    },
     "directories": {
       "output": "desktop-dist"
     },
@@ -141,7 +144,8 @@
       "!**/node_modules/**/samples/**",
       "!**/node_modules/**/docs/**",
       "!**/node_modules/**/test/**",
-      "!**/node_modules/**/tests/**"
+      "!**/node_modules/**/tests/**",
+      "web-build/assets/node_modules/**"
     ]
   },
   "overrides": {

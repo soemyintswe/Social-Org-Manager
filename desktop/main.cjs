@@ -122,16 +122,18 @@ async function createWindow() {
   }
 
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 1024,
-    minHeight: 720,
+    width: 1200,
+    height: 760,
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     center: true,
     resizable: true,
     movable: true,
     minimizable: true,
     maximizable: true,
+    fullscreenable: true,
+    useContentSize: true,
     autoHideMenuBar: true,
     backgroundColor: "#ffffff",
     webPreferences: {
