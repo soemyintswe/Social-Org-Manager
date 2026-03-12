@@ -86,7 +86,7 @@ const KEYS = {
 
 const MEMBER_JOIN_DATE_FALLBACK_DMY = "01/01/2018";
 const MEMBER_JOIN_DATE_MIGRATION_V1_KEY = "@orghub_member_join_date_migration_v1";
-const AUDIT_REQUEST_CLEANUP_V2_KEY = "@orghub_audit_request_cleanup_v2";
+const AUDIT_REQUEST_CLEANUP_V4_KEY = "@orghub_audit_request_cleanup_v4";
 
 const EXTRA_SHARED_KEYS = [
   "@custom_categories",
@@ -627,10 +627,13 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
 
 export async function runAuditRequestCleanupOnce(): Promise<boolean> {
   try {
-    const flag = await AsyncStorage.getItem(AUDIT_REQUEST_CLEANUP_V2_KEY);
+    const flag = await AsyncStorage.getItem(AUDIT_REQUEST_CLEANUP_V4_KEY);
     if (flag === "1") return false;
 
-    const notifications = await safeGet<AppNotification[]>(KEYS.NOTIFICATIONS, []);
+    const [notifications, transactions] = await Promise.all([
+      safeGet<AppNotification[]>(KEYS.NOTIFICATIONS, []),
+      safeGet<Transaction[]>(KEYS.TRANSACTIONS, []),
+    ]);
     const filteredNotifications = Array.isArray(notifications)
       ? notifications.filter((row: any) => {
           const category = String(row?.category || "");
@@ -642,13 +645,32 @@ export async function runAuditRequestCleanupOnce(): Promise<boolean> {
           );
         })
       : [];
+    let txnsChanged = false;
+    const cleanedTransactions = Array.isArray(transactions)
+      ? transactions.map((txn: any) => {
+          if (!txn?.auditFlagged && !txn?.auditNote && !txn?.auditFlaggedByUserId && !txn?.auditFlaggedAt) {
+            return txn;
+          }
+          txnsChanged = true;
+          return {
+            ...txn,
+            auditFlagged: false,
+            auditNote: "",
+            auditFlaggedByUserId: "",
+            auditFlaggedAt: "",
+          };
+        })
+      : [];
 
-    await Promise.all([
+    const writes = [
       AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify([])),
-      AsyncStorage.setItem(KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify([])),
       AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(filteredNotifications)),
-      AsyncStorage.setItem(AUDIT_REQUEST_CLEANUP_V2_KEY, "1"),
-    ]);
+      AsyncStorage.setItem(AUDIT_REQUEST_CLEANUP_V4_KEY, "1"),
+    ];
+    if (txnsChanged) {
+      writes.push(AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(cleanedTransactions)));
+    }
+    await Promise.all(writes);
     try {
       await pushCloudSnapshotFromLocalDetailed();
     } catch (e) {
@@ -1396,19 +1418,15 @@ function normalizeAuditTargetType(value: unknown, fallbackTargetId: string, fall
   return "transaction";
 }
 
-function normalizeAuditWorkflowStage(value: unknown, kind: AuditChangeRequestKind, status: AuditChangeRequestStatus): AuditChangeWorkflowStage {
+function normalizeAuditWorkflowStage(value: unknown, _kind: AuditChangeRequestKind, status: AuditChangeRequestStatus): AuditChangeWorkflowStage {
   const v = String(value || "");
   if (v === "auditor_review" || v === "chair_approval" || v === "treasurer_execution" || v === "completed") {
     return v;
   }
-  if (kind === "delete") {
-    if (status === "rejected" || status === "cancelled") return "completed";
-    if (status === "approved") return "treasurer_execution";
-    if (status === "suspended") return "chair_approval";
-    return "auditor_review";
-  }
-  if (status === "approved" || status === "rejected" || status === "cancelled") return "completed";
-  return "treasurer_execution";
+  if (status === "rejected" || status === "cancelled") return "completed";
+  if (status === "approved") return "treasurer_execution";
+  if (status === "suspended") return "chair_approval";
+  return "auditor_review";
 }
 
 export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
@@ -1422,7 +1440,12 @@ export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
       targetType: normalizeAuditTargetType(item?.targetType, String(item?.targetId || ""), String(item?.transactionId || "")),
       targetId: String(item?.targetId || item?.transactionId || item?.relatedLoanId || ""),
       auditNote: String(item?.auditNote || "").trim(),
-      assignedRole: (item?.assignedRole || (normalizeAuditRequestKind(item?.requestKind) === "delete" ? "auditor" : "treasurer")) as any,
+      assignedRole: (item?.assignedRole ||
+        (normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus) === "treasurer_execution"
+          ? "treasurer"
+          : normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus) === "chair_approval"
+            ? "chairperson"
+            : "auditor")) as any,
       messages: Array.isArray(item?.messages) ? item.messages : [],
       revisions: Array.isArray(item?.revisions) ? item.revisions : [],
       createdAt: item?.createdAt || new Date().toISOString(),
@@ -1591,6 +1614,23 @@ async function getAuditRequestTargetMemberId(req: AuditChangeRequest): Promise<s
   return normalizeId((log as any)?.before?.memberId);
 }
 
+async function resolveAuditInitiatorRole(input: {
+  createdByUserId?: string;
+  createdByMemberId?: string;
+}): Promise<OrgPosition> {
+  try {
+    const users = await getUsers();
+    const user = users.find((row: any) => String(row?.id || "") === String(input.createdByUserId || ""));
+    if (user?.orgPosition) return normalizeOrgPosition(user.orgPosition);
+    const members = await getMembers();
+    const member = members.find((row: any) => String(row?.id || "") === String(input.createdByMemberId || ""));
+    if (member?.orgPosition) return normalizeOrgPosition(member.orgPosition);
+  } catch (e) {
+    console.warn("resolveAuditInitiatorRole failed:", e);
+  }
+  return "member";
+}
+
 export async function createAuditChangeRequest(input: {
   requestKind?: AuditChangeRequestKind;
   targetType?: AuditChangeTargetType;
@@ -1602,11 +1642,12 @@ export async function createAuditChangeRequest(input: {
   createdByMemberId?: string;
   createdByDisplayName?: string;
 }): Promise<AuditChangeRequest> {
-  const [requests, transactions, loans, deleteIndex] = await Promise.all([
+  const [requests, transactions, loans, deleteIndex, initiatorRole] = await Promise.all([
     getAuditChangeRequests(),
     getTransactions(),
     getLoans(),
     buildDeletedTargetIndexFromStorage(),
+    resolveAuditInitiatorRole({ createdByUserId: input.createdByUserId, createdByMemberId: input.createdByMemberId }),
   ]);
   const requestKind: AuditChangeRequestKind = normalizeAuditRequestKind(input.requestKind);
   const resolvedTargetType: AuditChangeTargetType = requestKind === "delete"
@@ -1651,6 +1692,14 @@ export async function createAuditChangeRequest(input: {
   const now = new Date().toISOString();
   const requestId = generateId();
   const noteText = String(input.auditNote || "").trim();
+  const initialStage: AuditChangeWorkflowStage =
+    initiatorRole === "auditor"
+      ? "treasurer_execution"
+      : initiatorRole === "chairperson"
+        ? "auditor_review"
+        : "auditor_review";
+  const initialAssignedRole: OrgPosition =
+    initialStage === "treasurer_execution" ? "treasurer" : initialStage === "chair_approval" ? "chairperson" : "auditor";
   const message: AuditChangeRequestMessage = {
     id: generateId(),
     requestId,
@@ -1659,7 +1708,7 @@ export async function createAuditChangeRequest(input: {
     byUserId: input.createdByUserId,
     byMemberId: input.createdByMemberId,
     byDisplayName: input.createdByDisplayName?.trim() || undefined,
-    toRole: requestKind === "delete" ? "auditor" : "treasurer",
+    toRole: initialAssignedRole,
     createdAt: now,
   };
 
@@ -1673,13 +1722,14 @@ export async function createAuditChangeRequest(input: {
     relatedLoanId:
       String(input.relatedLoanId || (resolvedTargetType === "transaction" ? (txn as any)?.loanId : targetId) || "").trim() || undefined,
     status: "pending",
-    workflowStage: requestKind === "delete" ? "auditor_review" : "treasurer_execution",
+    workflowStage: initialStage,
     auditNote: noteText || "Audit flag မှတ်ချက်",
+    initiatedByRole: initiatorRole,
     createdByUserId: input.createdByUserId,
     createdByMemberId: input.createdByMemberId,
     createdAt: now,
     updatedAt: now,
-    assignedRole: requestKind === "delete" ? "auditor" : "treasurer",
+    assignedRole: initialAssignedRole,
     messages: [message],
     revisions: [],
   };
@@ -1808,21 +1858,33 @@ export async function changeAuditChangeRequestStatus(input: {
     createdAt: now,
   };
 
+  const nextStage: AuditChangeWorkflowStage = (() => {
+    if (status === "rejected" || status === "cancelled") return "completed";
+    if (status === "suspended") return "chair_approval";
+    if (status === "approved") {
+      if (req.workflowStage === "chair_approval") return "treasurer_execution";
+      return req.workflowStage || "treasurer_execution";
+    }
+    if (status === "pending") {
+      if (req.workflowStage && req.workflowStage !== "completed") return req.workflowStage;
+      return "auditor_review";
+    }
+    return req.workflowStage || "auditor_review";
+  })();
+  const nextAssignedRole: OrgPosition | undefined =
+    nextStage === "chair_approval"
+      ? "chairperson"
+      : nextStage === "treasurer_execution"
+        ? "treasurer"
+        : nextStage === "auditor_review"
+          ? "auditor"
+          : undefined;
+
   requests[idx] = {
     ...req,
     status,
-    workflowStage:
-      req.requestKind === "delete"
-        ? status === "approved"
-          ? "treasurer_execution"
-          : status === "suspended"
-            ? "chair_approval"
-            : status === "pending"
-              ? "auditor_review"
-              : "completed"
-        : status === "pending"
-          ? "treasurer_execution"
-          : "completed",
+    workflowStage: nextStage,
+    assignedRole: nextAssignedRole,
     reviewedByUserId: input.byUserId,
     reviewedAt: now,
     reviewNote: decisionNote || undefined,
@@ -1845,7 +1907,7 @@ export async function changeAuditChangeRequestStatus(input: {
   });
 }
 
-export async function forwardDeleteAuditRequestToChair(input: {
+export async function forwardAuditChangeRequestToChair(input: {
   requestId: string;
   byUserId: string;
   byMemberId?: string;
@@ -1856,7 +1918,6 @@ export async function forwardDeleteAuditRequestToChair(input: {
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
   if (idx === -1) throw new Error("request_not_found");
   const req = requests[idx];
-  if (req.requestKind !== "delete") throw new Error("not_delete_request");
   if (req.workflowStage && req.workflowStage !== "auditor_review") throw new Error("invalid_stage");
 
   const note = String(input.note || "").trim();
@@ -1888,9 +1949,9 @@ export async function forwardDeleteAuditRequestToChair(input: {
   await saveAuditChangeRequests(requests);
   const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
-    title: `Delete Request Forwarded to Chair (${req.requestNumber})`,
+    title: `${req.requestKind === "delete" ? "Delete Request" : "Audit Change Request"} Forwarded to Chair (${req.requestNumber})`,
     description: `${req.targetType} ${req.targetId} - chair approval requested`,
-    category: "delete_request",
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
@@ -1899,7 +1960,123 @@ export async function forwardDeleteAuditRequestToChair(input: {
   });
 }
 
-export async function chairReviewDeleteAuditRequest(input: {
+export async function sendAuditRequestBackToTreasurer(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.workflowStage === "completed") throw new Error("invalid_stage");
+  if (req.workflowStage && !["auditor_review", "chair_approval"].includes(req.workflowStage)) {
+    throw new Error("invalid_stage");
+  }
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "forward",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: "treasurer",
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "pending",
+    workflowStage: "treasurer_execution",
+    assignedRole: "treasurer",
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `Audit Request Returned to Treasurer (${req.requestNumber})`,
+    description: note,
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function sendAuditRequestBackToAuditor(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.workflowStage === "completed") throw new Error("invalid_stage");
+  if (req.workflowStage && !["treasurer_execution", "chair_approval"].includes(req.workflowStage)) {
+    throw new Error("invalid_stage");
+  }
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "reply",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: "auditor",
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "pending",
+    workflowStage: "auditor_review",
+    assignedRole: "auditor",
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `Audit Request Sent to Auditor (${req.requestNumber})`,
+    description: note,
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function forwardDeleteAuditRequestToChair(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+}): Promise<void> {
+  return forwardAuditChangeRequestToChair(input);
+}
+
+export async function chairReviewAuditRequest(input: {
   requestId: string;
   byUserId: string;
   byMemberId?: string;
@@ -1911,7 +2088,6 @@ export async function chairReviewDeleteAuditRequest(input: {
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
   if (idx === -1) throw new Error("request_not_found");
   const req = requests[idx];
-  if (req.requestKind !== "delete") throw new Error("not_delete_request");
   if (req.workflowStage !== "chair_approval") throw new Error("invalid_stage");
 
   const note = String(input.note || "").trim();
@@ -1948,16 +2124,27 @@ export async function chairReviewDeleteAuditRequest(input: {
   const targetMemberId = await getAuditRequestTargetMemberId(req);
   await pushSystemEvent({
     title: approved
-      ? `Delete Request Approved by Chair (${req.requestNumber})`
-      : `Delete Request Rejected by Chair (${req.requestNumber})`,
+      ? `${req.requestKind === "delete" ? "Delete Request" : "Audit Change Request"} Approved by Chair (${req.requestNumber})`
+      : `${req.requestKind === "delete" ? "Delete Request" : "Audit Change Request"} Rejected by Chair (${req.requestNumber})`,
     description: note,
-    category: "delete_request",
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
   });
+}
+
+export async function chairReviewDeleteAuditRequest(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  approved: boolean;
+  note: string;
+}): Promise<void> {
+  return chairReviewAuditRequest(input);
 }
 
 export async function confirmDeleteAuditRequestExecution(input: {
@@ -2125,13 +2312,16 @@ export async function applyAuditChangeRequestPatch(input: {
   if (reqIdx === -1) throw new Error("request_not_found");
   const req = requests[reqIdx];
   if (req.requestKind === "delete") throw new Error("invalid_request_kind");
+  if (req.workflowStage !== "treasurer_execution" || String(req.status || "") !== "approved") {
+    throw new Error("request_not_ready_for_execution");
+  }
 
   const txnIdx = txns.findIndex((row: any) => String(row?.id || "") === String(req.transactionId || ""));
   if (txnIdx === -1) throw new Error("transaction_not_found");
   const currentTxn = txns[txnIdx] as any;
 
   const sanitizedPatch = sanitizeAuditPatch(input.patch || {});
-  if (Object.keys(sanitizedPatch).length === 0) throw new Error("empty_patch");
+  const hasPatchChanges = Object.keys(sanitizedPatch).length > 0;
 
   const before = pickTransactionAuditSnapshot(currentTxn);
   const afterTxn = {
@@ -2154,7 +2344,7 @@ export async function applyAuditChangeRequestPatch(input: {
     byMemberId: input.byMemberId,
     note: String(input.note || "").trim() || undefined,
     before,
-    patch: sanitizedPatch,
+    patch: hasPatchChanges ? sanitizedPatch : { __noChange: true },
     after,
     createdAt: now,
   };
@@ -2174,9 +2364,9 @@ export async function applyAuditChangeRequestPatch(input: {
     byUserId: input.byUserId,
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
-    note: String(input.note || "").trim() || "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။",
+    note: String(input.note || "").trim() || (hasPatchChanges ? "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။" : "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပြီးပါပြီ။"),
     before,
-    patch: sanitizedPatch,
+    patch: hasPatchChanges ? sanitizedPatch : { __noChange: true },
     after,
     createdAt: now,
   };
@@ -2185,7 +2375,7 @@ export async function applyAuditChangeRequestPatch(input: {
     id: generateId(),
     requestId: req.id,
     messageType: "decision",
-    note: String(input.note || "").trim() || "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။",
+    note: String(input.note || "").trim() || (hasPatchChanges ? "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။" : "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပြီးပါပြီ။"),
     byUserId: input.byUserId,
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
@@ -2216,7 +2406,9 @@ export async function applyAuditChangeRequestPatch(input: {
   const targetMemberId = String((afterTxn as any)?.memberId || "").trim();
   await pushSystemEvent({
     title: `Audit Change Applied (${req.requestNumber})`,
-    description: `Transaction ${req.transactionId} ကို ပြင်ဆင်ပြီး အတည်ပြုခဲ့ပါသည်`,
+    description: hasPatchChanges
+      ? `Transaction ${req.transactionId} ကို ပြင်ဆင်ပြီး အတည်ပြုခဲ့ပါသည်`
+      : `Transaction ${req.transactionId} တွင် ပြင်ဆင်စရာမရှိ၍ အတည်ပြုခဲ့ပါသည်`,
     category: "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,

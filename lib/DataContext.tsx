@@ -137,6 +137,35 @@ interface DataContextValue {
     patch: Record<string, any>;
     note?: string;
   }) => Promise<void>;
+  forwardAuditChangeRequestToChair: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => Promise<void>;
+  sendAuditRequestBackToTreasurer: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => Promise<void>;
+  sendAuditRequestBackToAuditor: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => Promise<void>;
+  chairReviewAuditRequest: (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    approved: boolean;
+    note: string;
+  }) => Promise<void>;
   forwardDeleteAuditRequestToChair: (input: {
     requestId: string;
     byUserId: string;
@@ -776,6 +805,51 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData({ skipPull: true });
   };
 
+  const forwardAuditChangeRequestToChair = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => {
+    await store.forwardAuditChangeRequestToChair(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const sendAuditRequestBackToTreasurer = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => {
+    await store.sendAuditRequestBackToTreasurer(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const sendAuditRequestBackToAuditor = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    note: string;
+  }) => {
+    await store.sendAuditRequestBackToAuditor(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const chairReviewAuditRequest = async (input: {
+    requestId: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+    approved: boolean;
+    note: string;
+  }) => {
+    await store.chairReviewAuditRequest(input);
+    await refreshData({ skipPull: true });
+  };
+
   const forwardDeleteAuditRequestToChair = async (input: {
     requestId: string;
     byUserId: string;
@@ -1036,6 +1110,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
     createAuditChangeRequest, addAuditChangeRequestMessage, changeAuditChangeRequestStatus, applyAuditChangeRequestPatch,
+    forwardAuditChangeRequestToChair, sendAuditRequestBackToTreasurer, sendAuditRequestBackToAuditor, chairReviewAuditRequest,
     forwardDeleteAuditRequestToChair, chairReviewDeleteAuditRequest, confirmDeleteAuditRequestExecution,
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
     createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,

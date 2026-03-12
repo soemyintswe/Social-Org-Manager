@@ -419,6 +419,7 @@ export interface AuditChangeRequest {
   targetId: string;
   transactionId?: string;
   relatedLoanId?: string;
+  initiatedByRole?: OrgPosition;
   status: AuditChangeRequestStatus;
   workflowStage?: AuditChangeWorkflowStage;
   auditNote: string;

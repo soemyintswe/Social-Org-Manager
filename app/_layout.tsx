@@ -20,7 +20,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -667,6 +667,7 @@ export default function RootLayout() {
     Inter_600SemiBold,
     Inter_700Bold,
     ...Ionicons.font,
+    ...Feather.font,
   });
   const [fontsTimedOut, setFontsTimedOut] = useState(false);
 

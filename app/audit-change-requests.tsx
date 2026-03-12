@@ -68,8 +68,10 @@ export default function AuditChangeRequestsScreen() {
     addAuditChangeRequestMessage,
     changeAuditChangeRequestStatus,
     applyAuditChangeRequestPatch,
-    forwardDeleteAuditRequestToChair,
-    chairReviewDeleteAuditRequest,
+    forwardAuditChangeRequestToChair,
+    sendAuditRequestBackToTreasurer,
+    sendAuditRequestBackToAuditor,
+    chairReviewAuditRequest,
     confirmDeleteAuditRequestExecution,
   } = useData() as any;
   const { currentUser, can } = useAuth();
@@ -288,6 +290,8 @@ export default function AuditChangeRequestsScreen() {
     () => allRequests.find((item: any) => String(item.id || "") === String(selectedRequestId || "")) || null,
     [allRequests, selectedRequestId]
   );
+  const requestKind = String(selectedRequest?.requestKind || "update");
+  const isDeleteRequest = requestKind === "delete";
 
   const selectedTxn = useMemo(
     () => transactions.find((row: any) => String(row?.id || "") === String(selectedRequest?.transactionId || "")) || null,
@@ -304,6 +308,24 @@ export default function AuditChangeRequestsScreen() {
     const member = members.find((m: any) => String(m?.id || "") === memberId);
     return member?.name || memberId;
   }, [members, selectedTxn, selectedLoan]);
+  const latestRevision = useMemo(() => {
+    if (!selectedRequest || !Array.isArray(selectedRequest.revisions) || selectedRequest.revisions.length === 0) return null;
+    return selectedRequest.revisions[selectedRequest.revisions.length - 1];
+  }, [selectedRequest]);
+  const latestMessageNote = useMemo(() => {
+    if (!selectedRequest || !Array.isArray(selectedRequest.messages) || selectedRequest.messages.length === 0) return "";
+    const msg = selectedRequest.messages[selectedRequest.messages.length - 1] as any;
+    return String(msg?.note || "").trim();
+  }, [selectedRequest]);
+  const compareOriginal = useMemo(() => {
+    if (latestRevision?.before) return latestRevision.before;
+    return selectedRequest?.targetType === "loan" ? selectedLoan : selectedTxn;
+  }, [latestRevision, selectedLoan, selectedTxn, selectedRequest?.targetType]);
+  const compareUpdated = useMemo(() => {
+    if (latestRevision?.after) return latestRevision.after;
+    if (isDeleteRequest) return { __action: "delete" };
+    return null;
+  }, [latestRevision, isDeleteRequest]);
   const activeUsers = useMemo(
     () => (Array.isArray(users) ? users : []).filter((row: any) => row?.isActive !== false),
     [users]
@@ -340,6 +362,45 @@ export default function AuditChangeRequestsScreen() {
     const memberId = String(user?.memberId || "").trim();
     const roleLabel = getOrgRoleLabel(String(user?.orgPosition || ""));
     return `${name}${memberId ? ` (${memberId})` : ""} • ${roleLabel}`;
+  };
+
+  const renderSnapshotFields = (snapshot: any, targetType: string) => {
+    if (!snapshot) {
+      return <Text style={styles.compareEmpty}>မသတ်မှတ်ရသေးပါ။</Text>;
+    }
+    if (String(snapshot?.__action || "") === "delete") {
+      return <Text style={[styles.compareText, styles.compareDelete]}>ဖျက်သိမ်းမည်</Text>;
+    }
+    if (targetType === "loan") {
+      const memberId = String(snapshot?.memberId || snapshot?.__linkedTransactions?.[0]?.memberId || "").trim();
+      const memberName = memberNameById.get(memberId) || memberId || "-";
+      const principal = Number(snapshot?.principal ?? snapshot?.amount ?? 0);
+      const issueDate = String(snapshot?.issueDate || snapshot?.date || "-");
+      return (
+        <View>
+          <Text style={styles.compareText}>အသင်းဝင်: {memberName}</Text>
+          <Text style={styles.compareText}>အရင်း: {principal.toLocaleString()} KS</Text>
+          <Text style={styles.compareText}>ရက်စွဲ: {issueDate}</Text>
+        </View>
+      );
+    }
+
+    const payer = String(snapshot?.payerPayee || snapshot?.payerName || "-");
+    const category = String(snapshot?.categoryLabel || snapshot?.category || "-");
+    const amount = Number(snapshot?.amount ?? 0);
+    const date = String(snapshot?.date || "-");
+    const receipt = String(snapshot?.receiptNumber || "-");
+    const notes = String(snapshot?.notes || snapshot?.description || "-");
+    return (
+      <View>
+        <Text style={styles.compareText}>အမျိုးအစား: {category}</Text>
+        <Text style={styles.compareText}>ပေးသွင်းသူ: {payer}</Text>
+        <Text style={styles.compareText}>ပမာဏ: {amount.toLocaleString()} KS</Text>
+        <Text style={styles.compareText}>ရက်စွဲ: {date}</Text>
+        <Text style={styles.compareText}>ပြေစာ: {receipt || "-"}</Text>
+        <Text style={styles.compareText}>မှတ်ချက်: {notes || "-"}</Text>
+      </View>
+    );
   };
 
   const openDetail = (requestId: string) => {
@@ -506,13 +567,13 @@ export default function AuditChangeRequestsScreen() {
     }
   };
 
-  const submitForwardDeleteToChair = async () => {
+  const submitForwardToChair = async () => {
     if (!selectedRequest || !currentUser?.id) return;
     const note = messageNote.trim() || decisionNote.trim();
     if (!note) {
       return Alert.alert("လိုအပ်ချက်", "Chair ထံတင်ပြရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
-    await forwardDeleteAuditRequestToChair({
+    await forwardAuditChangeRequestToChair({
       requestId: selectedRequest.id,
       byUserId: currentUser.id,
       byMemberId: currentUser.memberId,
@@ -523,13 +584,13 @@ export default function AuditChangeRequestsScreen() {
     setDecisionNote("");
   };
 
-  const submitChairDeleteDecision = async (approved: boolean) => {
+  const submitChairDecision = async (approved: boolean) => {
     if (!selectedRequest || !currentUser?.id) return;
     const note = decisionNote.trim() || messageNote.trim();
     if (!note) {
       return Alert.alert("လိုအပ်ချက်", "ဆုံးဖြတ်ချက်မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
-    await chairReviewDeleteAuditRequest({
+    await chairReviewAuditRequest({
       requestId: selectedRequest.id,
       byUserId: currentUser.id,
       byMemberId: currentUser.memberId,
@@ -540,6 +601,40 @@ export default function AuditChangeRequestsScreen() {
     setDecisionNote("");
     setMessageNote("");
     if (!approved) setShowDetailModal(false);
+  };
+
+  const submitReturnToTreasurer = async () => {
+    if (!selectedRequest || !currentUser?.id) return;
+    const note = messageNote.trim() || decisionNote.trim();
+    if (!note) {
+      return Alert.alert("လိုအပ်ချက်", "Treasurer ထံပြန်ပေးပို့ရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
+    }
+    await sendAuditRequestBackToTreasurer({
+      requestId: selectedRequest.id,
+      byUserId: currentUser.id,
+      byMemberId: currentUser.memberId,
+      byDisplayName: currentUser.displayName,
+      note,
+    });
+    setDecisionNote("");
+    setMessageNote("");
+  };
+
+  const submitReturnToAuditor = async () => {
+    if (!selectedRequest || !currentUser?.id) return;
+    const note = messageNote.trim() || decisionNote.trim();
+    if (!note) {
+      return Alert.alert("လိုအပ်ချက်", "Audit ထံပြန်ပေးပို့ရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
+    }
+    await sendAuditRequestBackToAuditor({
+      requestId: selectedRequest.id,
+      byUserId: currentUser.id,
+      byMemberId: currentUser.memberId,
+      byDisplayName: currentUser.displayName,
+      note,
+    });
+    setDecisionNote("");
+    setMessageNote("");
   };
 
   const submitConfirmDeleteExecution = async () => {
@@ -557,6 +652,21 @@ export default function AuditChangeRequestsScreen() {
     Alert.alert("ပြီးပါပြီ", "Delete ကိုအတည်ပြုပယ်ဖျက်ပြီးပါပြီ။");
   };
 
+  const submitNoChangeApproval = async () => {
+    if (!selectedRequest || !selectedTxn || !currentUser?.id) return;
+    const note = decisionNote.trim() || "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပါသည်။";
+    await applyAuditChangeRequestPatch({
+      requestId: selectedRequest.id,
+      byUserId: currentUser.id,
+      byMemberId: currentUser.memberId,
+      byDisplayName: currentUser.displayName,
+      patch: {},
+      note,
+    });
+    setDecisionNote("");
+    setShowDetailModal(false);
+    Alert.alert("ပြီးပါပြီ", "ပြင်ဆင်စရာမရှိသဖြင့် အတည်ပြုပြီးပါပြီ။");
+  };
   const submitFix = async () => {
     if (!selectedRequest || !selectedTxn || !currentUser?.id) return;
 
@@ -594,19 +704,30 @@ export default function AuditChangeRequestsScreen() {
     Alert.alert("ပြီးပါပြီ", "စာရင်းပြင်ဆင်ချက်ကို အတည်ပြုပြီးပါပြီ။");
   };
 
-  const isDeleteRequest = String(selectedRequest?.requestKind || "update") === "delete";
-  const canChangeByTreasurer = !!selectedRequest && isTreasurer && ["pending", "suspended"].includes(String(selectedRequest.status || ""));
-  const canChairDecide = !!selectedRequest && isChair && String(selectedRequest.status || "") === "suspended";
-  const canOwnerCancel = !!selectedRequest && String(selectedRequest.status || "") === "pending" && String(selectedRequest.createdByUserId || "") === String(currentUser?.id || "");
+  const selectedStage = String(selectedRequest?.workflowStage || "") as AuditChangeWorkflowStage;
+  const requestStatus = String(selectedRequest?.status || "pending") as AuditChangeRequestStatus;
+
+  const canAuditorHandle = !!selectedRequest && isAuditor && selectedStage === "auditor_review";
+  const canChairHandle = !!selectedRequest && isChair && selectedStage === "chair_approval";
+  const canTreasurerReview =
+    !!selectedRequest && isTreasurer && selectedStage === "treasurer_execution" && requestStatus !== "approved";
+  const canTreasurerExecute =
+    !!selectedRequest && isTreasurer && selectedStage === "treasurer_execution" && requestStatus === "approved";
+
+  const canOwnerCancel =
+    !!selectedRequest &&
+    ["pending", "suspended"].includes(requestStatus) &&
+    String(selectedRequest.createdByUserId || "") === String(currentUser?.id || "");
   const canReopen =
     !!selectedRequest &&
-    !isDeleteRequest &&
-    (isAuditor || isTreasurer || isChair) &&
-    ["rejected", "suspended"].includes(String(selectedRequest.status || ""));
-  const selectedStage = String(selectedRequest?.workflowStage || "") as AuditChangeWorkflowStage;
-  const canAuditorForwardDelete = !!selectedRequest && isDeleteRequest && isAuditor && selectedStage === "auditor_review";
-  const canChairApproveDelete = !!selectedRequest && isDeleteRequest && isChair && selectedStage === "chair_approval";
-  const canTreasurerConfirmDelete = !!selectedRequest && isDeleteRequest && isTreasurer && selectedStage === "treasurer_execution" && String(selectedRequest?.status || "") === "approved";
+    ["rejected", "cancelled"].includes(requestStatus) &&
+    (isAuditor || isTreasurer || isChair);
+
+  const canAuditorForward = canAuditorHandle;
+  const canChairApprove = canChairHandle;
+  const canTreasurerReturnToAuditor = canTreasurerReview;
+  const canTreasurerConfirmDelete = isDeleteRequest && canTreasurerExecute;
+  const canTreasurerApplyUpdate = !isDeleteRequest && canTreasurerExecute;
 
   if (!canView) {
     return <AccessDenied />;
@@ -814,6 +935,23 @@ export default function AuditChangeRequestsScreen() {
               Amount: {Number((selectedTxn as any)?.amount || (selectedLoan as any)?.principal || (selectedLoan as any)?.amount || 0).toLocaleString()} KS
             </Text>
 
+            <Text style={styles.sectionLabel}>မူလ / ပြင်ဆင်ချက် / အကြောင်းအရာ</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compareRow}>
+              <View style={styles.compareCol}>
+                <Text style={styles.compareTitle}>မူလစာရင်း</Text>
+                {renderSnapshotFields(compareOriginal, String(selectedRequest?.targetType || "transaction"))}
+              </View>
+              <View style={styles.compareCol}>
+                <Text style={styles.compareTitle}>{isDeleteRequest ? "ဖျက်သိမ်းမှု" : "ပြင်ဆင်မည့်စာရင်း"}</Text>
+                {renderSnapshotFields(compareUpdated, String(selectedRequest?.targetType || "transaction"))}
+              </View>
+              <View style={styles.compareCol}>
+                <Text style={styles.compareTitle}>အကြောင်းအရာ</Text>
+                <Text style={styles.compareText}>Audit Note: {selectedRequest?.auditNote || "-"}</Text>
+                <Text style={styles.compareText}>နောက်ဆုံးမှတ်ချက်: {latestMessageNote || "-"}</Text>
+              </View>
+            </ScrollView>
+
             <Text style={styles.sectionLabel}>Decision Note</Text>
             <TextInput
               style={styles.input}
@@ -822,47 +960,58 @@ export default function AuditChangeRequestsScreen() {
               placeholder="လက်ခံ/ကန့်ကွက်/ဆိုင်းငံ့ မှတ်ချက်"
             />
 
-            {!isDeleteRequest && (canChangeByTreasurer || canChairDecide) ? (
+            {canAuditorForward ? (
+              <View style={styles.actionRow}>
+                <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }]} onPress={() => void submitForwardToChair()}>
+                  <Text style={styles.actionBtnText}>ဥက္ကဌထံ တင်ပြမည်</Text>
+                </Pressable>
+                <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B" }]} onPress={() => void submitReturnToTreasurer()}>
+                  <Text style={styles.actionBtnText}>ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {canChairApprove ? (
               <>
                 <View style={styles.actionRow}>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={openFixModal}>
-                    <Text style={styles.actionBtnText}>ပြင်ဆင်ပြီး လက်ခံမည်</Text>
+                  <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={() => void submitChairDecision(true)}>
+                    <Text style={styles.actionBtnText}>လက်ခံမည်</Text>
                   </Pressable>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={() => void submitStatus("rejected")}>
+                  <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={() => void submitChairDecision(false)}>
                     <Text style={styles.actionBtnText}>ကန့်ကွက်မည်</Text>
                   </Pressable>
                 </View>
                 <View style={styles.actionRow}>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }]} onPress={() => void submitStatus("suspended")}>
-                    <Text style={styles.actionBtnText}>ဆိုင်းငံ့မည်</Text>
+                  <Pressable style={[styles.actionBtn, { backgroundColor: "#475569" }]} onPress={() => void submitReturnToAuditor()}>
+                    <Text style={styles.actionBtnText}>စာရင်းစစ်ထံ ပြန်ပို့</Text>
                   </Pressable>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B" }]} onPress={() => void submitStatus("approved")}>
-                    <Text style={styles.actionBtnText}>ပြင်ဆင်ချက်မရှိ လက်ခံ</Text>
+                  <Pressable style={[styles.actionBtn, { backgroundColor: "#334155" }]} onPress={() => void submitReturnToTreasurer()}>
+                    <Text style={styles.actionBtnText}>ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့</Text>
                   </Pressable>
                 </View>
               </>
             ) : null}
 
-            {isDeleteRequest && canAuditorForwardDelete ? (
-              <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5E9", marginTop: 8 }]} onPress={() => void submitForwardDeleteToChair()}>
-                <Text style={styles.actionBtnText}>ဥက္ကဌထံ တင်ပြ/အတည်ပြုတောင်းမည်</Text>
-              </Pressable>
-            ) : null}
-
-            {isDeleteRequest && canChairApproveDelete ? (
+            {canTreasurerApplyUpdate ? (
               <View style={styles.actionRow}>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={() => void submitChairDeleteDecision(true)}>
-                  <Text style={styles.actionBtnText}>Delete ကို လက်ခံမည်</Text>
+                <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={openFixModal}>
+                  <Text style={styles.actionBtnText}>ပြင်ဆင်ပြီး အတည်ပြု</Text>
                 </Pressable>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={() => void submitChairDeleteDecision(false)}>
-                  <Text style={styles.actionBtnText}>Delete ကို ကန့်ကွက်မည်</Text>
+                <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B" }]} onPress={() => void submitNoChangeApproval()}>
+                  <Text style={styles.actionBtnText}>ပြင်ဆင်ချက်မရှိ အတည်ပြု</Text>
                 </Pressable>
               </View>
             ) : null}
 
-            {isDeleteRequest && canTreasurerConfirmDelete ? (
+            {canTreasurerConfirmDelete ? (
               <Pressable style={[styles.actionBtn, { backgroundColor: "#B91C1C", marginTop: 8 }]} onPress={() => void submitConfirmDeleteExecution()}>
                 <Text style={styles.actionBtnText}>Confirm Delete (အတည်ပြုပယ်ဖျက်မည်)</Text>
+              </Pressable>
+            ) : null}
+
+            {canTreasurerReturnToAuditor ? (
+              <Pressable style={[styles.actionBtn, { backgroundColor: "#475569", marginTop: 8 }]} onPress={() => void submitReturnToAuditor()}>
+                <Text style={styles.actionBtnText}>စာရင်းစစ်ထံ ပြန်ပို့</Text>
               </Pressable>
             ) : null}
 
@@ -1281,6 +1430,19 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 22, color: Colors.light.text, fontFamily: "Inter_700Bold", marginBottom: 8 },
   modalMeta: { fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", marginBottom: 4 },
   sectionLabel: { marginTop: 12, marginBottom: 6, color: Colors.light.text, fontFamily: "Inter_600SemiBold", fontSize: 13 },
+  compareRow: { gap: 12, paddingBottom: 4 },
+  compareCol: {
+    width: 220,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#F8FAFC",
+  },
+  compareTitle: { fontSize: 12.5, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 },
+  compareText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text, marginBottom: 3 },
+  compareDelete: { color: "#B91C1C" },
+  compareEmpty: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   input: {
     borderWidth: 1,
     borderColor: Colors.light.border,
