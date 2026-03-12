@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -54,6 +55,23 @@ function fmtDateTime(value: unknown): string {
   return d.toLocaleString();
 }
 
+function summarizeRevisionPatch(rev: any): string {
+  if (!rev || !rev.patch || typeof rev.patch !== "object") return "ပြင်ဆင်ချက်မရှိ";
+  const patch = rev.patch || {};
+  const action = String(patch.__action || "");
+  if (action === "delete") {
+    const linkedCount = Array.isArray(patch.__removedLinkedTransactionIds)
+      ? patch.__removedLinkedTransactionIds.length
+      : 0;
+    return linkedCount > 0
+      ? `ပယ်ဖျက်ပြီး (linked transactions ${linkedCount} ခု)`
+      : "ပယ်ဖျက်ပြီး";
+  }
+  const keys = Object.keys(patch).filter((key) => !String(key || "").startsWith("__"));
+  if (keys.length === 0) return "ပြင်ဆင်ချက်မရှိ";
+  return `ပြင်ဆင်: ${keys.join(", ")}`;
+}
+
 export default function AuditChangeRequestsScreen() {
   const { requestId } = useLocalSearchParams<{ requestId?: string }>();
   const insets = useSafeAreaInsets();
@@ -68,6 +86,7 @@ export default function AuditChangeRequestsScreen() {
     addAuditChangeRequestMessage,
     changeAuditChangeRequestStatus,
     applyAuditChangeRequestPatch,
+    deleteAuditChangeRequestsForTesting,
     forwardAuditChangeRequestToChair,
     sendAuditRequestBackToTreasurer,
     sendAuditRequestBackToAuditor,
@@ -98,11 +117,15 @@ export default function AuditChangeRequestsScreen() {
   const [createDeleteNote, setCreateDeleteNote] = useState("");
   const [showCreateTargetPicker, setShowCreateTargetPicker] = useState(false);
   const [visibleExecutionLogCount, setVisibleExecutionLogCount] = useState(20);
+  const [testSelectMode, setTestSelectMode] = useState(false);
+  const [selectedTestRequestIds, setSelectedTestRequestIds] = useState<string[]>([]);
+  const [testDeleteBusy, setTestDeleteBusy] = useState(false);
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
   const isTreasurer = myRole === "treasurer";
   const isAuditor = can("finance.audit_flag") || myRole === "auditor";
   const isChair = myRole === "chairperson";
+  const allowTestCleanup = isTreasurer;
 
   const canView =
     can("finance.view_summary") ||
@@ -123,6 +146,10 @@ export default function AuditChangeRequestsScreen() {
     if (statusFilter === "all") return base;
     return base.filter((item: any) => item.status === statusFilter);
   }, [allRequests, canView, currentUser?.id, statusFilter]);
+  const selectedTestRequestSet = useMemo(
+    () => new Set((selectedTestRequestIds || []).map((id) => String(id || "")).filter(Boolean)),
+    [selectedTestRequestIds]
+  );
 
   const counts = useMemo(() => {
     const base = canView ? allRequests : allRequests.filter((item: any) => item.createdByUserId === currentUser?.id);
@@ -342,6 +369,15 @@ export default function AuditChangeRequestsScreen() {
     const set = new Set((tagUserIds || []).map((v) => String(v || "").trim()).filter(Boolean));
     return activeUsers.filter((row: any) => set.has(String(row?.id || "")));
   }, [activeUsers, tagUserIds]);
+  const userNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    activeUsers.forEach((row: any) => {
+      const id = String(row?.id || "").trim();
+      if (!id) return;
+      map.set(id, String(row?.displayName || id));
+    });
+    return map;
+  }, [activeUsers]);
 
   const getOrgRoleLabel = (value?: string): string => {
     const role = normalizeOrgPosition(value || "member");
@@ -729,6 +765,72 @@ export default function AuditChangeRequestsScreen() {
   const canTreasurerConfirmDelete = isDeleteRequest && canTreasurerExecute;
   const canTreasurerApplyUpdate = !isDeleteRequest && canTreasurerExecute;
 
+  const toggleTestRequestSelection = (requestId: string) => {
+    const id = String(requestId || "").trim();
+    if (!id) return;
+    setSelectedTestRequestIds((prev) => {
+      if (prev.includes(id)) return prev.filter((item) => item !== id);
+      return [...prev, id];
+    });
+  };
+
+  const clearTestSelections = () => setSelectedTestRequestIds([]);
+
+  const selectAllVisibleRequests = () => {
+    const ids = visibleRequests.map((row: any) => String(row?.id || "")).filter(Boolean);
+    setSelectedTestRequestIds(ids);
+  };
+
+  const exitTestSelectMode = () => {
+    setTestSelectMode(false);
+    clearTestSelections();
+  };
+
+  const performTestCleanup = async () => {
+    setTestDeleteBusy(true);
+    try {
+      const result = await deleteAuditChangeRequestsForTesting({
+        requestIds: selectedTestRequestIds,
+        byUserId: String(currentUser?.id || ""),
+        byMemberId: currentUser?.memberId,
+        byDisplayName: currentUser?.displayName,
+      });
+      exitTestSelectMode();
+      const cloudWarning = result.cloudPush && !result.cloudPush.ok
+        ? `\nCloud Sync မလုပ်နိုင်ပါ။ (${result.cloudPush.reason || "unknown"})\n`
+        : "";
+      Alert.alert("ပြီးစီးပါပြီ", `ဖျက်ပြီး Request အရေအတွက်: ${result.removedIds.length}${cloudWarning}`);
+    } catch (e: any) {
+      Alert.alert("မအောင်မြင်ပါ", String(e?.message || e || "Unknown error"));
+    } finally {
+      setTestDeleteBusy(false);
+    }
+  };
+
+  const submitTestCleanup = async () => {
+    if (!allowTestCleanup || testDeleteBusy) return;
+    if (selectedTestRequestIds.length === 0) {
+      Alert.alert("လိုအပ်ချက်", "ဖျက်လိုသော Request ကို ရွေးချယ်ပါ။");
+      return;
+    }
+    if (Platform.OS === "web") {
+      const ok = typeof window !== "undefined"
+        ? window.confirm(`ရွေးထားသော ${selectedTestRequestIds.length} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`)
+        : true;
+      if (!ok) return;
+      await performTestCleanup();
+      return;
+    }
+    Alert.alert("Test Records ဖျက်မည်", `ရွေးထားသော ${selectedTestRequestIds.length} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`, [
+      { text: "မလုပ်တော့ပါ", style: "cancel" },
+      {
+        text: "ဖျက်မည်",
+        style: "destructive",
+        onPress: () => void performTestCleanup(),
+      },
+    ]);
+  };
+
   if (!canView) {
     return <AccessDenied />;
   }
@@ -777,6 +879,53 @@ export default function AuditChangeRequestsScreen() {
             </Pressable>
           ))}
         </ScrollView>
+
+        {allowTestCleanup ? (
+          <View style={styles.testCleanupRow}>
+            <Pressable
+              style={[styles.testCleanupBtn, testSelectMode && styles.testCleanupBtnActive]}
+              onPress={() => {
+                if (testSelectMode) {
+                  exitTestSelectMode();
+                } else {
+                  setTestSelectMode(true);
+                }
+              }}
+            >
+              <Ionicons name="trash-outline" size={16} color="#fff" />
+              <Text style={styles.testCleanupBtnText}>{testSelectMode ? "Test Cleanup (On)" : "Test Cleanup"}</Text>
+            </Pressable>
+
+            {testSelectMode ? (
+              <View style={styles.testCleanupActions}>
+                <Pressable style={styles.testCleanupMiniBtn} onPress={selectAllVisibleRequests}>
+                  <Text style={styles.testCleanupMiniText}>Select All</Text>
+                </Pressable>
+                <Pressable style={styles.testCleanupMiniBtn} onPress={clearTestSelections}>
+                  <Text style={styles.testCleanupMiniText}>Clear</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.testCleanupMiniBtn, styles.testCleanupDeleteBtn, (!selectedTestRequestIds.length || testDeleteBusy) && { opacity: 0.5 }]}
+                  onPress={() => void submitTestCleanup()}
+                  disabled={!selectedTestRequestIds.length || testDeleteBusy}
+                >
+                  {testDeleteBusy ? (
+                    <View style={styles.testCleanupBusyRow}>
+                      <ActivityIndicator size="small" color="#fff" />
+                      <Text style={[styles.testCleanupMiniText, { color: "#fff" }]}>ဖျက်နေပါတယ်...</Text>
+                    </View>
+                  ) : (
+                    <Text style={[styles.testCleanupMiniText, { color: "#fff" }]}>
+                      Delete Selected ({selectedTestRequestIds.length})
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
+            ) : (
+              <Text style={styles.testCleanupHint}>စမ်းသပ်မှတ်တမ်းများကို Select လုပ်ပြီးဖျက်ရန်သုံးပါ။</Text>
+            )}
+          </View>
+        ) : null}
 
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>ပြင်ဆင်ပြီး ငွေစာရင်းအသေးစိတ် ({updateAppliedRows.length})</Text>
@@ -891,9 +1040,27 @@ export default function AuditChangeRequestsScreen() {
               targetType === "loan"
                 ? Number((loan as any)?.principal || (loan as any)?.amount || 0)
                 : Number((txn as any)?.amount || 0);
+            const isSelected = selectedTestRequestSet.has(String(item?.id || ""));
             return (
-              <Pressable key={item.id} style={styles.requestCard} onPress={() => openDetail(item.id)}>
+              <Pressable
+                key={item.id}
+                style={styles.requestCard}
+                onPress={() => {
+                  if (testDeleteBusy) return;
+                  if (testSelectMode) {
+                    toggleTestRequestSelection(String(item?.id || ""));
+                    return;
+                  }
+                  openDetail(item.id);
+                }}
+                disabled={testDeleteBusy}
+              >
                 <View style={styles.requestTopRow}>
+                  {testSelectMode ? (
+                    <View style={[styles.selectBox, isSelected && styles.selectBoxActive]}>
+                      {isSelected ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                    </View>
+                  ) : null}
                   <Text style={styles.requestTitle}>{idx + 1}. {item.requestNumber || item.id}</Text>
                   <View style={[styles.statusBadge, { backgroundColor: `${color}20` }]}>
                     <Text style={[styles.statusBadgeText, { color }]}>{statusLabel(status)}</Text>
@@ -1101,8 +1268,9 @@ export default function AuditChangeRequestsScreen() {
                 <Text style={styles.sectionLabel}>ပြင်ဆင်ချက်များ</Text>
                 {selectedRequest.revisions.map((rev: any) => (
                   <View key={rev.id} style={styles.messageCard}>
-                    <Text style={styles.messageMeta}>Revision • {rev.byUserId}</Text>
-                    <Text style={styles.messageBody}>{JSON.stringify(rev.patch || {})}</Text>
+                    <Text style={styles.messageMeta}>Revision • {userNameById.get(String(rev?.byUserId || "")) || rev.byUserId}</Text>
+                    <Text style={styles.messageBody}>{summarizeRevisionPatch(rev)}</Text>
+                    {rev?.note ? <Text style={styles.messageSubMeta}>Note: {rev.note}</Text> : null}
                     <Text style={styles.messageTime}>{fmtDateTime(rev.createdAt)}</Text>
                   </View>
                 ))}
@@ -1354,6 +1522,41 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   filterChipText: { color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold", fontSize: 12.5 },
   filterChipTextActive: { color: "#fff" },
+  testCleanupRow: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#fff",
+    gap: 8,
+  },
+  testCleanupBtn: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#0F766E",
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  testCleanupBtnActive: { backgroundColor: "#0F766E" },
+  testCleanupBtnText: { color: "#fff", fontFamily: "Inter_700Bold", fontSize: 12.5 },
+  testCleanupHint: { color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", fontSize: 12 },
+  testCleanupActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  testCleanupMiniBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  testCleanupDeleteBtn: { backgroundColor: "#DC2626", borderColor: "#DC2626" },
+  testCleanupMiniText: { fontSize: 11.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  testCleanupBusyRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   emptyWrap: { alignItems: "center", paddingVertical: 42, gap: 8 },
   emptyText: { color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   requestCard: {
@@ -1367,6 +1570,17 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   requestTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  selectBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+  },
+  selectBoxActive: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
   requestTitle: { fontSize: 14.5, color: Colors.light.text, fontFamily: "Inter_700Bold", flex: 1 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
   statusBadgeText: { fontSize: 11.5, fontFamily: "Inter_700Bold" },

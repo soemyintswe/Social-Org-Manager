@@ -137,6 +137,12 @@ interface DataContextValue {
     patch: Record<string, any>;
     note?: string;
   }) => Promise<void>;
+  deleteAuditChangeRequestsForTesting: (input: {
+    requestIds: string[];
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+  }) => Promise<{ removedIds: string[]; cloudPush?: { ok: boolean; reason?: string } }>;
   forwardAuditChangeRequestToChair: (input: {
     requestId: string;
     byUserId: string;
@@ -805,6 +811,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refreshData({ skipPull: true });
   };
 
+  const deleteAuditChangeRequestsForTesting = async (input: {
+    requestIds: string[];
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+  }) => {
+    const result = await store.deleteAuditChangeRequestsForTesting(input);
+    lastLocalMutationAtRef.current = Date.now();
+    const [acr, ael, n, t] = await Promise.all([
+      store.getAuditChangeRequests(),
+      store.getAuditExecutionLogs(),
+      store.getNotifications(),
+      store.getTransactions(),
+    ]);
+    setAuditChangeRequests(acr);
+    setAuditExecutionLogs(ael);
+    setNotifications(n);
+    setTransactions(t);
+    let cloudPushResult: { ok: boolean; reason?: string } | undefined;
+    try {
+      const cloudPush = await store.pushCloudSnapshotFromLocalDetailed();
+      cloudPushResult = { ok: cloudPush.ok, reason: cloudPush.reason };
+      if (!cloudPush.ok) pendingCloudBackfillRef.current = true;
+    } catch (error: any) {
+      cloudPushResult = { ok: false, reason: String(error?.message || "cloud_push_failed") };
+      pendingCloudBackfillRef.current = true;
+    }
+    return { ...result, cloudPush: cloudPushResult };
+  };
+
   const forwardAuditChangeRequestToChair = async (input: {
     requestId: string;
     byUserId: string;
@@ -1110,6 +1146,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
     createAuditChangeRequest, addAuditChangeRequestMessage, changeAuditChangeRequestStatus, applyAuditChangeRequestPatch,
+    deleteAuditChangeRequestsForTesting,
     forwardAuditChangeRequestToChair, sendAuditRequestBackToTreasurer, sendAuditRequestBackToAuditor, chairReviewAuditRequest,
     forwardDeleteAuditRequestToChair, chairReviewDeleteAuditRequest, confirmDeleteAuditRequestExecution,
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,

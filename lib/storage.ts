@@ -111,6 +111,7 @@ const BACKUP_EXCLUDED_KEYS = new Set<string>([
   "@app_update_last_checked_at",
   "@app_update_skipped_version",
   "@orghub_cloud_sync_last_remote_updated_at",
+  "@orghub_cloud_sync_last_remote_hash",
 ]);
 
 const RESET_ONLY_PREFIXES = [
@@ -172,6 +173,7 @@ async function getAllSharedBackupKeys(): Promise<string[]> {
 
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
 const CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY = "@orghub_cloud_sync_last_remote_updated_at";
+const CLOUD_SYNC_LAST_REMOTE_HASH_KEY = "@orghub_cloud_sync_last_remote_hash";
 const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || DEFAULT_LAN_SYNC_URL_BASE);
 const DEFAULT_CLOUD_SYNC_ENDPOINT = String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_ENDPOINT || DEFAULT_CLOUD_SYNC_ENDPOINT_BASE);
 
@@ -681,6 +683,97 @@ export async function runAuditRequestCleanupOnce(): Promise<boolean> {
     console.error("Audit request cleanup failed:", e);
     return false;
   }
+}
+
+export async function deleteAuditChangeRequestsForTesting(input: {
+  requestIds: string[];
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+}): Promise<{ removedIds: string[] }> {
+  const ids = new Set((input.requestIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  if (ids.size === 0) return { removedIds: [] };
+
+  const [requests, notifications, executionLogs, transactions] = await Promise.all([
+    getAuditChangeRequests(),
+    getNotifications(),
+    getAuditExecutionLogs(),
+    getTransactions(),
+  ]);
+
+  const removedRequests = (Array.isArray(requests) ? requests : []).filter((row: any) => {
+    const rowId = String(row?.id || "").trim();
+    const rowNo = String(row?.requestNumber || "").trim();
+    return (rowId && ids.has(rowId)) || (rowNo && ids.has(rowNo));
+  });
+  if (removedRequests.length === 0) return { removedIds: [] };
+
+  const removedIdSet = new Set(removedRequests.map((row: any) => String(row?.id || "").trim()).filter(Boolean));
+  const removedNoSet = new Set(removedRequests.map((row: any) => String(row?.requestNumber || "").trim()).filter(Boolean));
+
+  const remainingRequests = (Array.isArray(requests) ? requests : []).filter((row: any) => {
+    const rowId = String(row?.id || "").trim();
+    const rowNo = String(row?.requestNumber || "").trim();
+    if (rowId && (removedIdSet.has(rowId) || ids.has(rowId))) return false;
+    if (rowNo && (removedNoSet.has(rowNo) || ids.has(rowNo))) return false;
+    return true;
+  });
+  const remainingNotifications = (Array.isArray(notifications) ? notifications : []).filter((row: any) => {
+    const relatedId = String(row?.relatedId || "");
+    if (relatedId && (removedIdSet.has(relatedId) || ids.has(relatedId))) return false;
+    const title = String(row?.title || "");
+    for (const no of removedNoSet) {
+      if (no && title.includes(no)) return false;
+    }
+    return true;
+  });
+  const remainingLogs = (Array.isArray(executionLogs) ? executionLogs : []).filter(
+    (log: any) => {
+      const reqId = String(log?.requestId || "").trim();
+      const reqNo = String(log?.requestNumber || "").trim();
+      if (reqId && (removedIdSet.has(reqId) || ids.has(reqId))) return false;
+      if (reqNo && (removedNoSet.has(reqNo) || ids.has(reqNo))) return false;
+      return true;
+    }
+  );
+
+  const targetTxnIds = new Set<string>();
+  removedRequests.forEach((req: any) => {
+    const targetId = String(req?.transactionId || req?.targetId || "").trim();
+    if (targetId) targetTxnIds.add(targetId);
+  });
+
+  let txChanged = false;
+  const cleanedTransactions = (Array.isArray(transactions) ? transactions : []).map((txn: any) => {
+    if (!targetTxnIds.has(String(txn?.id || ""))) return txn;
+    if (!txn?.auditFlagged && !txn?.auditNote && !txn?.auditFlaggedByUserId && !txn?.auditFlaggedAt) return txn;
+    txChanged = true;
+    return {
+      ...txn,
+      auditFlagged: false,
+      auditNote: "",
+      auditFlaggedByUserId: "",
+      auditFlaggedAt: "",
+    };
+  });
+
+  const writes: Promise<any>[] = [
+    AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(remainingRequests)),
+    AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(remainingNotifications)),
+    AsyncStorage.setItem(KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(remainingLogs)),
+  ];
+  if (txChanged) {
+    writes.push(AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(cleanedTransactions)));
+  }
+  await Promise.all(writes);
+
+  try {
+    await pushCloudSnapshotFromLocalDetailed();
+  } catch (e) {
+    console.warn("Test audit request cleanup cloud push skipped:", e);
+  }
+
+  return { removedIds: removedRequests.map((row: any) => String(row?.id || "")).filter(Boolean) };
 }
 
 // --- Members ---
@@ -4247,9 +4340,20 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
     }
 
     const incomingUpdatedAt = String(snapshot.updatedAt || "");
+    const incomingHash = String(snapshot.snapshotHash || "");
     const lastApplied = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY)) || "");
-    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
-      return { ok: true, changed: false, reason: "already_applied", endpoint };
+    const lastAppliedHash = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY)) || "");
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied && incomingHash && lastAppliedHash && incomingHash === lastAppliedHash) {
+      try {
+        const localRaw = await exportData();
+        const localData = await sanitizeExportForLanSync(JSON.parse(localRaw) as Record<string, string>);
+        const localHash = await computeSnapshotHash(localData);
+        if (localHash === incomingHash) {
+          return { ok: true, changed: false, reason: "already_applied", endpoint };
+        }
+      } catch {
+        // If local hash can't be computed, fall through to merge.
+      }
     }
     const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
     if (!verify.ok) {
@@ -4259,6 +4363,9 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
     const merged = await mergeData(JSON.stringify(snapshot.data));
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
+    }
+    if (incomingHash) {
+      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY, incomingHash);
     }
     return { ok: true, changed: merged, reason: merged ? "cloud_pulled_applied" : "cloud_pulled_no_change", endpoint };
   } catch (e: any) {
