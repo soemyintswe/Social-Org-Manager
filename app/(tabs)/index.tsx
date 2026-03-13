@@ -38,7 +38,6 @@ import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
 import { resolveNotificationRoute } from "@/lib/notification-routing";
 
-const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
 const loadSeenMarkerSet = async (key: string): Promise<Set<string>> => {
   try {
     const raw = await AsyncStorage.getItem(key);
@@ -189,7 +188,7 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
+  const { members, events, transactions, loans, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
   const { currentUser, currentMember, can } = useAuth();
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
@@ -202,8 +201,6 @@ export default function DashboardScreen() {
   }, [userDisplayName, userMemberId]);
   const canCreateMember = can("members.create") || can("members.manage");
   const canCreateFinance = can("finance.create") || can("finance.manage");
-  const canApproveMemberChanges = can("members.approve_changes");
-  const canProposeMemberChanges = can("members.propose_changes");
   const canViewOrgFinanceSummary = !isSystemAdmin && (
     can("finance.view_summary") ||
     can("finance.view_detail") ||
@@ -216,7 +213,6 @@ export default function DashboardScreen() {
   };
   const scrollRef = useRef<ScrollView>(null);
   const { scrollToTop } = useLocalSearchParams();
-  const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
   const [syncingNow, setSyncingNow] = useState(false);
   const [refreshingDashboard, setRefreshingDashboard] = useState(false);
 
@@ -314,16 +310,10 @@ export default function DashboardScreen() {
     }
   };
 
-  const loadMemberChangeLastSeen = useCallback(async () => {
-    const seenAt = (await AsyncStorage.getItem(MEMBER_CHANGE_LAST_SEEN_KEY)) || "";
-    setMemberChangeLastSeenAt(seenAt);
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
-      void loadMemberChangeLastSeen();
       void refreshData();
-    }, [loadMemberChangeLastSeen, refreshData])
+    }, [refreshData])
   );
 
   const handleDashboardRefresh = useCallback(async () => {
@@ -578,6 +568,39 @@ export default function DashboardScreen() {
     return rows.slice(0, 5);
   }, [notifications, currentUser?.id]);
 
+  const latestRequestNotifications = useMemo(() => requestNotificationItems.slice(0, 3), [requestNotificationItems]);
+  const latestEventItems = useMemo(() => recentEvents.slice(0, 3), [recentEvents]);
+
+  const latestMessageItems = useMemo(() => {
+    const me = String(currentUser?.id || "").trim();
+    if (!me) return [];
+    const threadMap = new Map<string, any>();
+    (chatThreads || []).forEach((t: any) => {
+      threadMap.set(String(t?.id || ""), t);
+    });
+    const rows = (chatMessages || [])
+      .filter((m: any) => {
+        const thread = threadMap.get(String(m?.threadId || ""));
+        if (!thread) return false;
+        const participants = Array.isArray(thread?.participantUserIds) ? thread.participantUserIds : [];
+        return participants.includes(me);
+      })
+      .sort((a: any, b: any) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime())
+      .slice(0, 3)
+      .map((m: any) => {
+        const thread = threadMap.get(String(m?.threadId || ""));
+        const title = String(thread?.title || thread?.name || "").trim();
+        return {
+          id: String(m?.id || ""),
+          title: title || "Message",
+          description: String(m?.text || "").trim(),
+          createdAt: String(m?.createdAt || ""),
+          threadId: String(m?.threadId || ""),
+        };
+      });
+    return rows;
+  }, [chatMessages, chatThreads, currentUser?.id]);
+
   const openRequestNotification = useCallback(async (item: any) => {
     const me = String(currentUser?.id || "").trim();
     if (me) {
@@ -711,48 +734,6 @@ export default function DashboardScreen() {
         return getAge(b.dob) - getAge(a.dob);
     });
   }, [members]);
-
-  const requestInbox = useMemo(() => {
-    const all = memberChangeRequests || [];
-    const visible = canApproveMemberChanges
-      ? all
-      : all.filter((item: any) => item.createdByUserId === currentUser?.id);
-    const pending = visible.filter((item: any) => item.status === "pending").length;
-    const approved = visible.filter((item: any) => item.status === "approved").length;
-    const rejected = visible.filter((item: any) => item.status === "rejected").length;
-    const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
-    const newPending = visible.filter((item: any) => {
-      if (item.status !== "pending") return false;
-      if (!memberChangeLastSeenAt) return true;
-      const created = new Date(item.createdAt || 0).getTime();
-      const seen = new Date(memberChangeLastSeenAt || 0).getTime();
-      return created > seen;
-    }).length;
-    return {
-      visibleCount: visible.length,
-      pending,
-      approved,
-      rejected,
-      cancelled,
-      newPending,
-    };
-  }, [memberChangeRequests, canApproveMemberChanges, currentUser?.id, memberChangeLastSeenAt]);
-
-  const auditRequestInbox = useMemo(() => {
-    const all = Array.isArray(auditChangeRequests) ? auditChangeRequests : [];
-    const canViewAllAudit = !isSystemAdmin && (
-      can("finance.view_detail") ||
-      can("finance.view_all") ||
-      can("finance.audit_flag")
-    );
-    const visible = canViewAllAudit ? all : all.filter((item: any) => item.createdByUserId === currentUser?.id);
-    const pending = visible.filter((item: any) => item.status === "pending").length;
-    const suspended = visible.filter((item: any) => item.status === "suspended").length;
-    const approved = visible.filter((item: any) => item.status === "approved").length;
-    const rejected = visible.filter((item: any) => item.status === "rejected").length;
-    const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
-    return { visibleCount: visible.length, pending, suspended, approved, rejected, cancelled };
-  }, [auditChangeRequests, currentUser?.id, can, isSystemAdmin]);
 
   // Schedule Birthday Notification
   useEffect(() => {
@@ -1295,72 +1276,77 @@ export default function DashboardScreen() {
         </Pressable>
       </View>
 
-      {requestNotificationItems.length > 0 ? (
-        <View style={styles.noticeListWrap}>
-          <Text style={styles.noticeListTitle}>🔔 အသိပေးချက်များ</Text>
-          {requestNotificationItems.map((item: any, index: number) => (
-            <Pressable
-              key={String(item?.id || `notice-${index}`)}
-              style={styles.noticeListItem}
-              onPress={() => void openRequestNotification(item)}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.noticeListItemTitle} numberOfLines={1}>{String(item?.title || "အသိပေးချက်")}</Text>
-                <Text style={styles.noticeListItemDesc} numberOfLines={2}>{String(item?.description || "-")}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+      <View style={styles.noticeTables}>
+        <View style={styles.noticeTable}>
+          <View style={styles.noticeTableHeader}>
+            <Text style={styles.noticeTableTitle}>📰 Event အသစ်</Text>
+            <Pressable onPress={() => router.push("/events" as any)}>
+              <Text style={styles.noticeTableLink}>အားလုံး</Text>
             </Pressable>
-          ))}
+          </View>
+          {latestEventItems.length === 0 ? (
+            <Text style={styles.noticeEmpty}>မရှိသေးပါ။</Text>
+          ) : (
+            latestEventItems.map((event, idx) => (
+              <Pressable key={String(event?.id || `event-${idx}`)} style={styles.noticeRowItem} onPress={() => router.push("/events" as any)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeItemTitle} numberOfLines={1}>{String(event?.title || event?.name || "Event")}</Text>
+                  <Text style={styles.noticeItemMeta} numberOfLines={1}>{String(event?.eventDate || event?.date || "")}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            ))
+          )}
         </View>
-      ) : null}
 
-      {(canApproveMemberChanges || canProposeMemberChanges) && (
-        <Pressable style={styles.requestInboxCard} onPress={() => router.push("/member-change-approvals" as any)}>
-          <View style={styles.requestInboxHeader}>
-            <View style={styles.requestInboxIconWrap}>
-              <Ionicons name="checkmark-done-outline" size={18} color={Colors.light.tint} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.requestInboxTitle}>
-                {canApproveMemberChanges ? "Member Change Approval Inbox" : "My Change Requests"}
-              </Text>
-              <Text style={styles.requestInboxSubtitle}>
-                Total: {requestInbox.visibleCount}
-                {requestInbox.newPending > 0 ? ` • New Pending: ${requestInbox.newPending}` : ""}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
+        <View style={styles.noticeTable}>
+          <View style={styles.noticeTableHeader}>
+            <Text style={styles.noticeTableTitle}>🔔 Request အသိပေး</Text>
+            <Pressable onPress={() => router.push("/notifications" as any)}>
+              <Text style={styles.noticeTableLink}>အားလုံး</Text>
+            </Pressable>
           </View>
-          <View style={styles.requestInboxStats}>
-            <Text style={styles.requestStatText}>Pending: {requestInbox.pending}</Text>
-            <Text style={styles.requestStatText}>Approved: {requestInbox.approved}</Text>
-            <Text style={styles.requestStatText}>Rejected: {requestInbox.rejected}</Text>
-            <Text style={styles.requestStatText}>Cancelled: {requestInbox.cancelled}</Text>
-          </View>
-        </Pressable>
-      )}
+          {latestRequestNotifications.length === 0 ? (
+            <Text style={styles.noticeEmpty}>မရှိသေးပါ။</Text>
+          ) : (
+            latestRequestNotifications.map((item: any, index: number) => (
+              <Pressable
+                key={String(item?.id || `notice-${index}`)}
+                style={styles.noticeRowItem}
+                onPress={() => void openRequestNotification(item)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeItemTitle} numberOfLines={1}>{String(item?.title || "အသိပေးချက်")}</Text>
+                  <Text style={styles.noticeItemMeta} numberOfLines={1}>{String(item?.description || "-")}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            ))
+          )}
+        </View>
 
-      {(can("finance.view_summary") || can("finance.view_detail") || can("finance.view_all") || can("finance.audit_flag")) && (
-        <Pressable style={styles.requestInboxCard} onPress={() => router.push("/audit-change-requests" as any)}>
-          <View style={styles.requestInboxHeader}>
-            <View style={styles.requestInboxIconWrap}>
-              <Ionicons name="flag-outline" size={18} color={Colors.light.tint} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.requestInboxTitle}>Audit Change Requests</Text>
-              <Text style={styles.requestInboxSubtitle}>Total: {auditRequestInbox.visibleCount}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
+        <View style={styles.noticeTable}>
+          <View style={styles.noticeTableHeader}>
+            <Text style={styles.noticeTableTitle}>💬 Message အသစ်</Text>
+            <Pressable onPress={() => router.push("/messages" as any)}>
+              <Text style={styles.noticeTableLink}>အားလုံး</Text>
+            </Pressable>
           </View>
-          <View style={styles.requestInboxStats}>
-            <Text style={styles.requestStatText}>Pending: {auditRequestInbox.pending}</Text>
-            <Text style={styles.requestStatText}>Suspended: {auditRequestInbox.suspended}</Text>
-            <Text style={styles.requestStatText}>Approved: {auditRequestInbox.approved}</Text>
-            <Text style={styles.requestStatText}>Rejected: {auditRequestInbox.rejected}</Text>
-            <Text style={styles.requestStatText}>Cancelled: {auditRequestInbox.cancelled}</Text>
-          </View>
-        </Pressable>
-      )}
+          {latestMessageItems.length === 0 ? (
+            <Text style={styles.noticeEmpty}>မရှိသေးပါ။</Text>
+          ) : (
+            latestMessageItems.map((item: any, idx: number) => (
+              <Pressable key={String(item?.id || `msg-${idx}`)} style={styles.noticeRowItem} onPress={() => router.push("/messages" as any)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeItemTitle} numberOfLines={1}>{String(item?.title || "Message")}</Text>
+                  <Text style={styles.noticeItemMeta} numberOfLines={1}>{String(item?.description || "-")}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            ))
+          )}
+        </View>
+      </View>
 
       {/* Birthday Alert Section */}
       {upcomingBirthdays.length > 0 && (
@@ -1503,18 +1489,19 @@ const styles = StyleSheet.create({
   noticeCard: { flex: 1, backgroundColor: "white", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 12 },
   noticeTitle: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   noticeCount: { fontSize: 20, color: Colors.light.text, fontFamily: "Inter_700Bold", marginTop: 4 },
-  noticeListWrap: {
+  noticeTables: { paddingHorizontal: 20, gap: 14, marginBottom: 10 },
+  noticeTable: {
     backgroundColor: "white",
     borderWidth: 1,
     borderColor: Colors.light.border,
     borderRadius: 14,
-    marginHorizontal: 20,
     padding: 12,
-    marginBottom: 18,
     gap: 8,
   },
-  noticeListTitle: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_700Bold" },
-  noticeListItem: {
+  noticeTableHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  noticeTableTitle: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_700Bold" },
+  noticeTableLink: { fontSize: 12, color: Colors.light.tint, fontFamily: "Inter_600SemiBold" },
+  noticeRowItem: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -1525,8 +1512,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: "#F8FAFC",
   },
-  noticeListItemTitle: { fontSize: 12.5, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
-  noticeListItemDesc: { marginTop: 2, fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  noticeItemTitle: { fontSize: 12.5, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  noticeItemMeta: { marginTop: 2, fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  noticeEmpty: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", paddingVertical: 4 },
   statCard: { width: "48%", marginBottom: 10, backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
   statIconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 10 },
   statValue: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
@@ -1578,51 +1566,4 @@ const styles = StyleSheet.create({
   birthdayDate: { fontSize: 12, color: "#991B1B", marginTop: 2, fontFamily: "Inter_500Medium" },
   wishBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#FECACA", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 4 },
   wishBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#B91C1C" },
-  requestInboxCard: {
-    backgroundColor: "white",
-    marginHorizontal: 20,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    padding: 14,
-    marginBottom: 20,
-  },
-  requestInboxHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  requestInboxIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: Colors.light.tint + "15",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  requestInboxTitle: {
-    color: Colors.light.text,
-    fontFamily: "Inter_600SemiBold",
-    fontSize: 14,
-  },
-  requestInboxSubtitle: {
-    color: Colors.light.textSecondary,
-    fontFamily: "Inter_500Medium",
-    fontSize: 12,
-  },
-  requestInboxStats: {
-    marginTop: 10,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  requestStatText: {
-    color: Colors.light.textSecondary,
-    fontFamily: "Inter_500Medium",
-    fontSize: 12,
-    backgroundColor: Colors.light.background,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
 });

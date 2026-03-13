@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useMemo, useState } from "react";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,9 +10,12 @@ import { resolveNotificationRoute } from "@/lib/notification-routing";
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
-  const { notifications = [], markNotificationRead } = useData() as any;
+  const { notifications = [], markNotificationRead, deleteNotificationsForUser } = useData() as any;
   const { currentUser } = useAuth();
   const me = String(currentUser?.id || "").trim();
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
 
   const visible = useMemo(() => {
     return [...(notifications || [])]
@@ -39,7 +42,49 @@ export default function NotificationsScreen() {
     }
   };
 
+  const selectedSet = useMemo(() => new Set((selectedIds || []).map((id) => String(id || ""))), [selectedIds]);
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev.map((row) => String(row || "")));
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return Array.from(next.values());
+    });
+  };
+  const selectAll = () => setSelectedIds(visible.map((item: any) => String(item?.id || "")).filter(Boolean));
+  const clearSelection = () => setSelectedIds([]);
+  const deleteSelected = async () => {
+    if (!me) return;
+    if (selectedIds.length === 0) {
+      return Alert.alert("လိုအပ်ချက်", "ဖျက်လိုသော အသိပေးချက်ကို ရွေးချယ်ပါ။");
+    }
+    const ok = Platform.OS === "web"
+      ? window.confirm(`ရွေးထားသော ${selectedIds.length} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`)
+      : await new Promise<boolean>((resolve) => {
+          Alert.alert("ဖျက်မည်", `ရွေးထားသော ${selectedIds.length} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`, [
+            { text: "မလုပ်တော့ပါ", style: "cancel", onPress: () => resolve(false) },
+            { text: "လုပ်မည်", style: "destructive", onPress: () => resolve(true) },
+          ]);
+        });
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await deleteNotificationsForUser(selectedIds, me);
+      clearSelection();
+      setSelectMode(false);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openNotification = async (item: any) => {
+    if (selectMode) {
+      toggleSelection(String(item?.id || ""));
+      return;
+    }
     await markNotificationRead(String(item?.id || ""), me);
     const target = resolveNotificationRoute(item);
     if (target.pathname === "/notifications") return;
@@ -60,12 +105,32 @@ export default function NotificationsScreen() {
           <Text style={styles.headerTitle}>အသိပေးချက်များ</Text>
           <Text style={styles.headerSub}>Unread: {unreadCount}</Text>
         </View>
+        <Pressable style={styles.headerBtn} onPress={() => setSelectMode((prev) => !prev)}>
+          <Ionicons name={selectMode ? "close-circle-outline" : "checkbox-outline"} size={22} color={Colors.light.textSecondary} />
+        </Pressable>
         <Pressable style={styles.headerBtn} onPress={() => void markAllRead()}>
           <Ionicons name="checkmark-done-outline" size={22} color={Colors.light.tint} />
         </Pressable>
       </View>
 
       <ScrollView contentContainerStyle={styles.body}>
+        {selectMode && (
+          <View style={styles.selectionBar}>
+            <Pressable style={styles.selectionBtn} onPress={selectAll}>
+              <Text style={styles.selectionBtnText}>Select All</Text>
+            </Pressable>
+            <Pressable style={styles.selectionBtn} onPress={clearSelection}>
+              <Text style={styles.selectionBtnText}>Deselect All</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.selectionBtn, styles.deleteBtn, (selectedIds.length === 0 || deleting) && { opacity: 0.6 }]}
+              disabled={selectedIds.length === 0 || deleting}
+              onPress={() => void deleteSelected()}
+            >
+              {deleting ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.deleteBtnText}>Delete Selected ({selectedIds.length})</Text>}
+            </Pressable>
+          </View>
+        )}
         {visible.length === 0 ? (
           <View style={styles.emptyWrap}>
             <Ionicons name="notifications-off-outline" size={42} color={Colors.light.textSecondary} />
@@ -75,6 +140,7 @@ export default function NotificationsScreen() {
           visible.map((item: any) => {
             const readBy = Array.isArray(item?.readByUserIds) ? item.readByUserIds.map((v: any) => String(v || "").trim()) : [];
             const unread = !readBy.includes(me);
+            const isSelected = selectedSet.has(String(item?.id || ""));
             return (
               <Pressable
                 key={String(item?.id || "")}
@@ -84,6 +150,9 @@ export default function NotificationsScreen() {
                 <View style={styles.row}>
                   <Text style={styles.title}>{String(item?.title || "-")}</Text>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    {selectMode ? (
+                      <Ionicons name={isSelected ? "checkbox" : "square-outline"} size={18} color={isSelected ? Colors.light.tint : Colors.light.textSecondary} />
+                    ) : null}
                     {unread ? <View style={styles.dot} /> : null}
                     <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
                   </View>
@@ -106,6 +175,18 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerSub: { fontSize: 12.5, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   body: { paddingHorizontal: 14, paddingBottom: 24 },
+  selectionBar: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 12 },
+  selectionBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#fff",
+  },
+  selectionBtnText: { fontSize: 12.5, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  deleteBtn: { backgroundColor: "#EF4444", borderColor: "#EF4444" },
+  deleteBtnText: { fontSize: 12.5, color: "#fff", fontFamily: "Inter_700Bold" },
   emptyWrap: { paddingTop: 80, alignItems: "center", gap: 8 },
   emptyText: { color: Colors.light.textSecondary, fontSize: 14, fontFamily: "Inter_500Medium" },
   card: {

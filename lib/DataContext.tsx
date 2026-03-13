@@ -271,6 +271,7 @@ interface DataContextValue {
   deleteChatMessage: (input: { messageId: string; deleterUserId: string }) => Promise<ChatMessage>;
   markChatThreadRead: (threadId: string, userId: string) => Promise<void>;
   markNotificationRead: (notificationId: string, userId: string) => Promise<void>;
+  deleteNotificationsForUser: (notificationIds: string[], userId: string) => Promise<void>;
   getLoanOutstanding: (loanId: string) => number;
   getLoanInterestDue: (loanId: string) => number;
   getCashBalance: () => number;
@@ -1097,6 +1098,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     void pushAllSyncTargets();
   }, [pushAllSyncTargets, refreshData]);
 
+  const deleteNotificationsForUser = useCallback(async (notificationIds: string[], userId: string) => {
+    lastLocalMutationAtRef.current = Date.now();
+    await store.deleteNotificationsForUser({ notificationIds, userId });
+    await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
+  }, [pushAllSyncTargets, refreshData]);
+
   // --- Calculations ---
   const getLoanOutstanding = (loanId: string) => {
     const loan = loans.find((l) => l.id === loanId);
@@ -1152,7 +1160,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createExpenseClaim, approveExpenseClaim, rejectExpenseClaim, disburseExpenseClaim,
     createMemberPaymentRequest, approveMemberPaymentRequest, rejectMemberPaymentRequest,
     createStandardAmountChangeRequest, approveStandardAmountChangeRequest, rejectStandardAmountChangeRequest,
-    createDirectChatThread, createGroupChatThread, sendChatMessage, updateChatMessage, deleteChatMessage, markChatThreadRead, markNotificationRead,
+    createDirectChatThread, createGroupChatThread, sendChatMessage, updateChatMessage, deleteChatMessage, markChatThreadRead, markNotificationRead, deleteNotificationsForUser,
     getLoanOutstanding, getLoanInterestDue,
     getCashBalance, getBankBalance, getTotalBalance,
     getEventAttendance, markAttendance,

@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.61",
-  "latestBuildNumber": "62",
+  "latestVersion": "1.1.62",
+  "latestBuildNumber": "63",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.61-202603130937.apk",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.62-202603131327.apk",
   "notes": "Version 1.1.58: One-time cleanup of test audit/change requests and related notifications (keeps execution logs for delete integrity), clears audit flags on transactions, and improves icon font loading on desktop/web.",
   "force": false,
-  "publishedAt": "2026-03-13T03:07:36.990Z"
+  "publishedAt": "2026-03-13T06:57:24.763Z"
 }

@@ -2650,6 +2650,43 @@ export async function markNotificationRead(notificationId: string, userId: strin
   await saveNotifications(rows);
 }
 
+export async function deleteNotificationsForUser(input: {
+  notificationIds: string[];
+  userId: string;
+}): Promise<{ removedIds: string[]; updatedIds: string[] }> {
+  const ids = new Set((input.notificationIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  const userId = String(input.userId || "").trim();
+  if (ids.size === 0 || !userId) return { removedIds: [], updatedIds: [] };
+
+  const rows = await getNotifications();
+  const removedIds: string[] = [];
+  const updatedIds: string[] = [];
+
+  const next = rows
+    .map((row) => {
+      const rowId = String(row?.id || "").trim();
+      if (!rowId || !ids.has(rowId)) return row;
+      const targetUserIds = Array.isArray(row?.targetUserIds) ? row.targetUserIds : [];
+      const readByUserIds = Array.isArray(row?.readByUserIds) ? row.readByUserIds : [];
+      const remainingTargets = targetUserIds.filter((id: any) => String(id || "").trim() !== userId);
+      const remainingReads = readByUserIds.filter((id: any) => String(id || "").trim() !== userId);
+      if (remainingTargets.length === 0) {
+        removedIds.push(rowId);
+        return null;
+      }
+      updatedIds.push(rowId);
+      return {
+        ...row,
+        targetUserIds: remainingTargets,
+        readByUserIds: remainingReads,
+      };
+    })
+    .filter(Boolean) as AppNotification[];
+
+  await saveNotifications(next);
+  return { removedIds, updatedIds };
+}
+
 async function pushSystemNotification(input: {
   title: string;
   description: string;

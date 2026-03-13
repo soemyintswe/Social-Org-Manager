@@ -49,9 +49,9 @@ export default function FloatingTabMenu({
         enabled: can("members.view_all") || can("members.view_self"),
       },
       {
-        name: "ပြောင်းလဲမှုတောင်းဆိုမှု",
+        name: "ပြင်ဆင်ရန်တောင်းဆိုမှု",
         icon: "checkmark-done-outline",
-        route: "/member-change-approvals",
+        route: "/requests",
         enabled: can("members.approve_changes") || can("members.propose_changes"),
       },
       {
