@@ -174,6 +174,7 @@ async function getAllSharedBackupKeys(): Promise<string[]> {
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
 const CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY = "@orghub_cloud_sync_last_remote_updated_at";
 const CLOUD_SYNC_LAST_REMOTE_HASH_KEY = "@orghub_cloud_sync_last_remote_hash";
+const AUDIT_TEST_CLEANUP_TOMBSTONES_KEY = "@orghub_audit_test_cleanup_tombstones_v1";
 const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || DEFAULT_LAN_SYNC_URL_BASE);
 const DEFAULT_CLOUD_SYNC_ENDPOINT = String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_ENDPOINT || DEFAULT_CLOUD_SYNC_ENDPOINT_BASE);
 
@@ -762,6 +763,12 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(remainingNotifications)),
     AsyncStorage.setItem(KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(remainingLogs)),
   ];
+  await appendAuditTestCleanupTombstones(
+    removedRequests.map((row: any) => ({
+      id: String(row?.id || "").trim() || undefined,
+      requestNumber: String(row?.requestNumber || "").trim() || undefined,
+    }))
+  );
   if (txChanged) {
     writes.push(AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(cleanedTransactions)));
   }
@@ -1525,6 +1532,7 @@ function normalizeAuditWorkflowStage(value: unknown, _kind: AuditChangeRequestKi
 export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
   const rows = await safeGet<AuditChangeRequest[]>(KEYS.AUDIT_CHANGE_REQUESTS, []);
   if (!Array.isArray(rows)) return [];
+  const tombstones = await getAuditTestCleanupTombstones();
   return rows
     .map((item: any) => ({
       ...item,
@@ -1547,6 +1555,13 @@ export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
       workflowStage: normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus),
     }))
     .filter((item: any) => String(item?.targetId || "").trim().length > 0)
+    .filter((item: any) => {
+      const id = String(item?.id || "").trim();
+      const requestNumber = String(item?.requestNumber || "").trim();
+      if (id && tombstones.idSet.has(id)) return false;
+      if (requestNumber && tombstones.numberSet.has(requestNumber)) return false;
+      return true;
+    })
     .sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 }
 
@@ -4535,6 +4550,66 @@ function parseJsonSafe<T>(value: unknown, fallback: T): T {
   return value as T;
 }
 
+type AuditTestCleanupTombstone = {
+  id?: string;
+  requestNumber?: string;
+};
+
+async function getAuditTestCleanupTombstones(): Promise<{ idSet: Set<string>; numberSet: Set<string> }> {
+  try {
+    const raw = await AsyncStorage.getItem(AUDIT_TEST_CLEANUP_TOMBSTONES_KEY);
+    const rows = parseJsonSafe<any[]>(raw, []);
+    const idSet = new Set<string>();
+    const numberSet = new Set<string>();
+    if (Array.isArray(rows)) {
+      rows.forEach((row) => {
+        if (typeof row === "string") {
+          const value = String(row || "").trim();
+          if (value) {
+            idSet.add(value);
+            numberSet.add(value);
+          }
+          return;
+        }
+        if (row && typeof row === "object") {
+          const id = String((row as AuditTestCleanupTombstone).id || "").trim();
+          const requestNumber = String((row as AuditTestCleanupTombstone).requestNumber || "").trim();
+          if (id) idSet.add(id);
+          if (requestNumber) numberSet.add(requestNumber);
+        }
+      });
+    }
+    return { idSet, numberSet };
+  } catch {
+    return { idSet: new Set(), numberSet: new Set() };
+  }
+}
+
+async function appendAuditTestCleanupTombstones(rows: AuditTestCleanupTombstone[]): Promise<void> {
+  if (!rows.length) return;
+  const existingRaw = await AsyncStorage.getItem(AUDIT_TEST_CLEANUP_TOMBSTONES_KEY);
+  const existing = parseJsonSafe<AuditTestCleanupTombstone[]>(existingRaw, []);
+  const next = Array.isArray(existing) ? [...existing] : [];
+  const seen = new Set<string>();
+  next.forEach((row) => {
+    const id = String(row?.id || "").trim();
+    const requestNumber = String(row?.requestNumber || "").trim();
+    if (id) seen.add(`id:${id}`);
+    if (requestNumber) seen.add(`no:${requestNumber}`);
+  });
+  rows.forEach((row) => {
+    const id = String(row?.id || "").trim();
+    const requestNumber = String(row?.requestNumber || "").trim();
+    const idKey = id ? `id:${id}` : "";
+    const noKey = requestNumber ? `no:${requestNumber}` : "";
+    if ((idKey && seen.has(idKey)) || (noKey && seen.has(noKey))) return;
+    if (idKey) seen.add(idKey);
+    if (noKey) seen.add(noKey);
+    next.push({ id: id || undefined, requestNumber: requestNumber || undefined });
+  });
+  await AsyncStorage.setItem(AUDIT_TEST_CLEANUP_TOMBSTONES_KEY, JSON.stringify(next));
+}
+
 function mergeRecordsById<T extends { id?: string }>(existing: T[], incoming: T[]): T[] {
   const result = [...existing];
   const indexById = new Map<string, number>();
@@ -4612,6 +4687,7 @@ export async function mergeData(jsonString: string): Promise<boolean> {
     const existingLogs = await getAuditExecutionLogs();
     const mergedLogs = mergeRecordsById(existingLogs, Array.isArray(incomingLogs) ? incomingLogs : []);
     const deletedIndex = collectDeletedTargetsFromExecutionLogs(mergedLogs);
+    const tombstones = await getAuditTestCleanupTombstones();
 
     const keys = Object.keys(exportObj || {}).filter((key) => isSharedBackupKey(key));
     let changed = false;
@@ -4648,6 +4724,15 @@ export async function mergeData(jsonString: string): Promise<boolean> {
       const existingParsed = parseJsonSafe<unknown>(existingRaw, existingRaw || null);
       const incomingParsed = parseJsonSafe<unknown>(incomingRaw, incomingRaw);
       let mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      if (key === KEYS.AUDIT_CHANGE_REQUESTS && Array.isArray(mergedValue)) {
+        mergedValue = (mergedValue as any[]).filter((row: any) => {
+          const id = String(row?.id || "").trim();
+          const requestNumber = String(row?.requestNumber || "").trim();
+          if (id && tombstones.idSet.has(id)) return false;
+          if (requestNumber && tombstones.numberSet.has(requestNumber)) return false;
+          return true;
+        });
+      }
       if (key === KEYS.TRANSACTIONS && Array.isArray(mergedValue)) {
         mergedValue = filterTransactionsByDeletedIndex(mergedValue as Transaction[], deletedIndex);
       }
