@@ -21,7 +21,7 @@ import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
-import { Transaction, Loan, type MemberPaymentRequestKind } from "@/lib/types";
+import { Transaction, Loan, type MemberPaymentRequestKind, type AuditChangeDrafts, normalizeOrgPosition } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "@/lib/loan-metrics";
 import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription } from "@/lib/transaction-display";
@@ -34,6 +34,14 @@ type FinanceViewScope = "all" | "self" | "member";
 type CategoryFilterOption = { id: string; label: string };
 type TransactionAmountView = "single" | "in_out" | "deposit_withdraw" | "loan_columns";
 type FinancePrintKind = "current" | "summary" | "details";
+type DeleteRequestFieldType = "text" | "date" | "amount" | "member" | "readonly" | "recordType" | "category" | "paymentMethod";
+type DeleteRequestFieldRow = {
+  key: string;
+  label: string;
+  type: DeleteRequestFieldType;
+  value: any;
+  display?: string;
+};
 const FINANCE_PAGE_SIZE = 40;
 
 const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} KS`;
@@ -398,6 +406,7 @@ export default function FinanceScreen() {
     auditChangeRequests,
     auditExecutionLogs,
     members,
+    users,
     removeTransaction,
     updateTransaction,
     createAuditChangeRequest,
@@ -423,10 +432,24 @@ export default function FinanceScreen() {
   const [auditTxn, setAuditTxn] = useState<Transaction | null>(null);
   const [auditNote, setAuditNote] = useState("");
   const [showDeleteRequestModal, setShowDeleteRequestModal] = useState(false);
-  const [deleteRequestType, setDeleteRequestType] = useState<"transaction" | "loan">("transaction");
-  const [deleteRequestTxn, setDeleteRequestTxn] = useState<Transaction | null>(null);
-  const [deleteRequestLoan, setDeleteRequestLoan] = useState<Loan | null>(null);
-  const [deleteRequestNote, setDeleteRequestNote] = useState("");
+    const [deleteRequestType, setDeleteRequestType] = useState<"transaction" | "loan">("transaction");
+    const [deleteRequestTxn, setDeleteRequestTxn] = useState<Transaction | null>(null);
+    const [deleteRequestLoan, setDeleteRequestLoan] = useState<Loan | null>(null);
+    const [deleteRequestNote, setDeleteRequestNote] = useState("");
+    const [deleteRequestSubmitting, setDeleteRequestSubmitting] = useState(false);
+    const [deleteRequestSubmitError, setDeleteRequestSubmitError] = useState<string | null>(null);
+    const [deleteRequestDraftValues, setDeleteRequestDraftValues] = useState<Record<string, any>>({});
+    const [deleteRequestActiveDateField, setDeleteRequestActiveDateField] = useState<string | null>(null);
+    const [showDeleteRequestMemberPicker, setShowDeleteRequestMemberPicker] = useState(false);
+    const [deleteRequestMemberSearch, setDeleteRequestMemberSearch] = useState("");
+    const [deleteRequestMemberField, setDeleteRequestMemberField] = useState<string>("");
+    const [showDeleteRequestTagPicker, setShowDeleteRequestTagPicker] = useState(false);
+    const [deleteRequestTagSearch, setDeleteRequestTagSearch] = useState("");
+    const [deleteRequestTagIds, setDeleteRequestTagIds] = useState<string[]>([]);
+    const [showDeleteRequestOptionPicker, setShowDeleteRequestOptionPicker] = useState(false);
+    const [deleteRequestOptionField, setDeleteRequestOptionField] = useState<string>("");
+    const [deleteRequestOptionTitle, setDeleteRequestOptionTitle] = useState<string>("");
+    const [deleteRequestOptionItems, setDeleteRequestOptionItems] = useState<CategoryFilterOption[]>([]);
   const [viewScope, setViewScope] = useState<FinanceViewScope>("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [keywordSearch, setKeywordSearch] = useState("");
@@ -434,10 +457,12 @@ export default function FinanceScreen() {
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [computeReady, setComputeReady] = useState(false);
-  const [visibleListCount, setVisibleListCount] = useState(FINANCE_PAGE_SIZE);
-  const [visibleLoanTxnCount, setVisibleLoanTxnCount] = useState(FINANCE_PAGE_SIZE);
-  const [showPrintPicker, setShowPrintPicker] = useState(false);
-  const [printing, setPrinting] = useState(false);
+    const [visibleListCount, setVisibleListCount] = useState(FINANCE_PAGE_SIZE);
+    const [visibleLoanTxnCount, setVisibleLoanTxnCount] = useState(FINANCE_PAGE_SIZE);
+    const [showPrintPicker, setShowPrintPicker] = useState(false);
+    const [printing, setPrinting] = useState(false);
+
+    const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -640,83 +665,153 @@ export default function FinanceScreen() {
     Alert.alert("ဖြုတ်ပြီးပါပြီ", "Audit Flag ကိုဖြုတ်ပြီးပါပြီ။");
   };
 
-  const openDeleteRequestForTxn = (txn: Transaction) => {
-    setDeleteRequestType("transaction");
-    setDeleteRequestTxn(txn);
-    setDeleteRequestLoan(null);
-    setDeleteRequestNote("");
-    setShowDeleteRequestModal(true);
-  };
-
-  const openDeleteRequestForLoan = (loan: Loan) => {
-    setDeleteRequestType("loan");
-    setDeleteRequestTxn(null);
-    setDeleteRequestLoan(loan);
-    setDeleteRequestNote("");
-    setShowDeleteRequestModal(true);
-  };
-
-  const submitDeleteRequest = async () => {
-    if (!currentUser?.id) return;
-    const note = deleteRequestNote.trim();
-    if (!note) {
-      Alert.alert("လိုအပ်ချက်", "Delete Request အကြောင်းပြချက် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
-      return;
-    }
-
-    try {
-      if (deleteRequestType === "transaction") {
-        if (!deleteRequestTxn) return;
-        await createAuditChangeRequest({
-          requestKind: "delete",
-          targetType: "transaction",
-          targetId: deleteRequestTxn.id,
-          transactionId: deleteRequestTxn.id,
-          relatedLoanId: String((deleteRequestTxn as any)?.loanId || "").trim() || undefined,
-          auditNote: note,
-          createdByUserId: currentUser.id,
-          createdByMemberId: currentUser.memberId,
-          createdByDisplayName: currentUser.displayName,
-        });
-        await updateTransaction(deleteRequestTxn.id, {
-          auditFlagged: true,
-          auditNote: note,
-          auditFlaggedByUserId: currentUser.id,
-          auditFlaggedAt: new Date().toISOString(),
-        } as Partial<Transaction>);
-      } else {
-        if (!deleteRequestLoan) return;
-        await createAuditChangeRequest({
-          requestKind: "delete",
-          targetType: "loan",
-          targetId: deleteRequestLoan.id,
-          transactionId: undefined,
-          relatedLoanId: deleteRequestLoan.id,
-          auditNote: note,
-          createdByUserId: currentUser.id,
-          createdByMemberId: currentUser.memberId,
-          createdByDisplayName: currentUser.displayName,
-        });
-      }
-
-      setShowDeleteRequestModal(false);
-      setDeleteRequestTxn(null);
+    const openDeleteRequestForTxn = (txn: Transaction) => {
+      setDeleteRequestType("transaction");
+      setDeleteRequestTxn(txn);
       setDeleteRequestLoan(null);
       setDeleteRequestNote("");
-      Alert.alert("ပို့ပြီးပါပြီ", "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။");
-    } catch (error: any) {
-      const reason = String(error?.message || "");
-      if (reason.includes("request_conflict_in_progress")) {
-        Alert.alert("မရပါ", "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။");
+      setDeleteRequestSubmitError(null);
+      setDeleteRequestDraftValues({});
+      setDeleteRequestTagIds([]);
+      setShowDeleteRequestModal(true);
+    };
+
+    const openDeleteRequestForLoan = (loan: Loan) => {
+      setDeleteRequestType("loan");
+      setDeleteRequestTxn(null);
+      setDeleteRequestLoan(loan);
+      setDeleteRequestNote("");
+      setDeleteRequestSubmitError(null);
+      setDeleteRequestDraftValues({});
+      setDeleteRequestTagIds([]);
+      setShowDeleteRequestModal(true);
+    };
+
+    const buildDeleteRequestDrafts = (): AuditChangeDrafts | undefined => {
+      const role = myRole === "chairperson" ? "chairperson" : myRole === "auditor" ? "auditor" : myRole === "treasurer" ? "treasurer" : null;
+      if (!role || !currentUser?.id) return undefined;
+      const values = { ...(deleteRequestDraftValues || {}) };
+      if (!Object.keys(values).length) return undefined;
+      return {
+        [role]: {
+          values,
+          note: deleteRequestNote.trim() || undefined,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    };
+
+    const resolveDeleteRequestTagUserIds = (): string[] => {
+      if (!deleteRequestTagIds.length) return [];
+      const ids = deleteRequestTagIds
+        .map((memberId) => users.find((user: any) => String(user?.memberId || "") === String(memberId))?.id)
+        .filter(Boolean) as string[];
+      return Array.from(new Set(ids));
+    };
+
+    const submitDeleteRequest = async () => {
+      if (!currentUser?.id) {
+        setDeleteRequestSubmitError("အသုံးပြုသူမရှိပါ။");
         return;
       }
-      if (reason.includes("already_deleted")) {
-        Alert.alert("မရပါ", "ဤစာရင်းသည် ပယ်ဖျက်ပြီးဖြစ်သောကြောင့် Delete Request ထပ်မတင်နိုင်ပါ။");
+      if (deleteRequestSubmitting) return;
+      const note = deleteRequestNote.trim();
+      if (!note) {
+        const message = "Delete Request အကြောင်းပြချက် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။";
+        setDeleteRequestSubmitError(message);
+        if (!showWebAlert(message)) {
+          Alert.alert("လိုအပ်ချက်", message);
+        }
         return;
       }
-      Alert.alert("အမှား", "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
-    }
-  };
+
+      try {
+        setDeleteRequestSubmitError(null);
+        setDeleteRequestSubmitting(true);
+        const drafts = buildDeleteRequestDrafts();
+        const tagUserIds = resolveDeleteRequestTagUserIds();
+        if (deleteRequestType === "transaction") {
+          if (!deleteRequestTxn) return;
+          await createAuditChangeRequest({
+            requestKind: "delete",
+            targetType: "transaction",
+            targetId: deleteRequestTxn.id,
+            transactionId: deleteRequestTxn.id,
+            relatedLoanId: String((deleteRequestTxn as any)?.loanId || "").trim() || undefined,
+            auditNote: note,
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+            createdByDisplayName: currentUser.displayName,
+            drafts,
+            tagUserIds,
+          });
+          await updateTransaction(deleteRequestTxn.id, {
+            auditFlagged: true,
+            auditNote: note,
+            auditFlaggedByUserId: currentUser.id,
+            auditFlaggedAt: new Date().toISOString(),
+          } as Partial<Transaction>);
+        } else {
+          if (!deleteRequestLoan) return;
+          await createAuditChangeRequest({
+            requestKind: "delete",
+            targetType: "loan",
+            targetId: deleteRequestLoan.id,
+            transactionId: undefined,
+            relatedLoanId: deleteRequestLoan.id,
+            auditNote: note,
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+            createdByDisplayName: currentUser.displayName,
+            drafts,
+            tagUserIds,
+          });
+        }
+
+        const handleDone = () => {
+          setShowDeleteRequestModal(false);
+          setDeleteRequestTxn(null);
+          setDeleteRequestLoan(null);
+          setDeleteRequestNote("");
+          setDeleteRequestDraftValues({});
+          setDeleteRequestTagIds([]);
+        };
+        if (showWebAlert("Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။")) {
+          handleDone();
+        } else {
+          Alert.alert("ပို့ပြီးပါပြီ", "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။", [
+            { text: "OK", onPress: handleDone },
+          ]);
+        }
+      } catch (error: any) {
+        const reason = String(error?.message || "");
+        if (reason.includes("request_conflict_in_progress")) {
+          const message = "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။";
+          setDeleteRequestSubmitError(message);
+          if (!showWebAlert(message)) {
+            Alert.alert("မရပါ", message);
+          }
+          return;
+        }
+        if (reason.includes("already_deleted")) {
+          const message = "ဤစာရင်းသည် ပယ်ဖျက်ပြီးဖြစ်သောကြောင့် Delete Request ထပ်မတင်နိုင်ပါ။";
+          setDeleteRequestSubmitError(message);
+          if (!showWebAlert(message)) {
+            Alert.alert("မရပါ", message);
+          }
+          return;
+        }
+        setDeleteRequestSubmitError("Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
+        if (!showWebAlert("Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။")) {
+          Alert.alert("အမှား", "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
+        }
+      } finally {
+        setDeleteRequestSubmitting(false);
+      }
+    };
 
   const getMemberName = useCallback(
     (id?: string) => {
@@ -741,6 +836,325 @@ export default function FinanceScreen() {
       return id.includes(needle) || name.includes(needle);
     });
   }, [members, memberSearch]);
+
+    const deleteRequestRows: DeleteRequestFieldRow[] = useMemo(() => {
+      if (deleteRequestType === "transaction" && deleteRequestTxn) {
+        const txn: any = deleteRequestTxn;
+        const memberId = String(txn?.memberId || "");
+        const memberName = getMemberName(memberId) || txn?.payerPayee || memberId || "-";
+        const rawType = String(txn?.type || "").toLowerCase();
+        const recordType = rawType === "expense" ? "expense" : rawType === "transfer" ? "transfer" : "income";
+        const normalizedCategory = normalizeFinanceCategory(txn?.category, txn?.categoryLabel);
+        const categoryLabel = getLocalizedTransactionCategoryLabel(txn?.category, txn?.categoryLabel);
+        const relatedIds = Array.isArray(txn?.relatedIds)
+          ? txn.relatedIds
+          : Array.isArray(txn?.linkedTransactionIds)
+            ? txn.linkedTransactionIds
+            : [];
+        return [
+          { key: "type", label: "စာရင်းအမျိုးအစား", type: "recordType", value: recordType },
+          { key: "category", label: "အမျိုးအစား", type: "category", value: normalizedCategory || "-", display: categoryLabel || String(normalizedCategory || "-") },
+          { key: "description", label: "အကြောင်းအရာ", type: "text", value: String(txn?.description || txn?.notes || "-") },
+          { key: "memberId", label: "အသင်းဝင်", type: "member", value: memberId, display: memberName },
+          { key: "payerPayee", label: "ပေးသွင်းသူ", type: "member", value: String(txn?.payerPayee || "-"), display: String(txn?.payerPayee || "-") },
+          { key: "date", label: "ရက်စွဲ", type: "date", value: String(txn?.date || "-") },
+          { key: "amount", label: "ပမာဏ", type: "amount", value: Number(txn?.amount || 0) },
+          { key: "direction", label: "အဝင်/အထွက်", type: "readonly", value: String(txn?.type || "") === "expense" ? "အထွက်" : "အဝင်" },
+          { key: "paymentMethod", label: "ငွေပေးချေမှု", type: "paymentMethod", value: String(txn?.paymentMethod || "cash").toLowerCase() },
+          { key: "accountName", label: "အကောင့်/ဘဏ်", type: "readonly", value: String(txn?.accountName || txn?.account || txn?.bankAccount || "-") },
+          { key: "receiptNumber", label: "ပြေစာ", type: "text", value: String(txn?.receiptNumber || "-") },
+          {
+            key: "feePeriodStart",
+            label: "လစဉ်ကြေးကာလ (From)",
+            type: "date",
+            value: String(txn?.feePeriodStart || "-"),
+          },
+          {
+            key: "feePeriodEnd",
+            label: "လစဉ်ကြေးကာလ (To)",
+            type: "date",
+            value: String(txn?.feePeriodEnd || "-"),
+          },
+          { key: "notes", label: "မှတ်ချက်", type: "text", value: String(txn?.notes || "-") },
+          { key: "relatedIds", label: "Related IDs", type: "readonly", value: relatedIds.length ? relatedIds.join(", ") : "-" },
+        ];
+      }
+      if (deleteRequestType === "loan" && deleteRequestLoan) {
+        const loan: any = deleteRequestLoan;
+        const memberId = String(loan?.memberId || "");
+        const memberName = getMemberName(memberId) || memberId || "-";
+        const relatedIds = Array.isArray(loan?.relatedIds)
+          ? loan.relatedIds
+          : Array.isArray(loan?.linkedTransactionIds)
+            ? loan.linkedTransactionIds
+            : [];
+        return [
+          { key: "memberId", label: "အသင်းဝင်", type: "member", value: memberId, display: memberName },
+          { key: "principal", label: "အရင်း", type: "amount", value: Number(loan?.principal ?? loan?.amount ?? 0) },
+          { key: "issueDate", label: "ထုတ်ချေးရက်စွဲ", type: "date", value: String(loan?.issueDate || loan?.date || "-") },
+          { key: "dueDate", label: "သတ်မှတ်ရက်", type: "date", value: String(loan?.dueDate || "-") },
+          { key: "interestRate", label: "အတိုးနှုန်း (%)", type: "text", value: String(loan?.interestRate ?? "-") },
+          { key: "notes", label: "မှတ်ချက်", type: "text", value: String(loan?.notes || loan?.description || "-") },
+          { key: "relatedIds", label: "Related IDs", type: "readonly", value: relatedIds.length ? relatedIds.join(", ") : "-" },
+        ];
+      }
+      return [];
+    }, [deleteRequestType, deleteRequestTxn, deleteRequestLoan, getMemberName]);
+
+    useEffect(() => {
+      if (!showDeleteRequestModal) return;
+      const base: Record<string, any> = {};
+      deleteRequestRows.forEach((row) => {
+        base[row.key] = row.value;
+        if (row.key === "category" && row.display) {
+          base.categoryLabel = row.display;
+        }
+      });
+      setDeleteRequestDraftValues(base);
+    }, [showDeleteRequestModal, deleteRequestTxn?.id, deleteRequestLoan?.id, deleteRequestRows]);
+
+    const deleteEditRole =
+      myRole === "chairperson" ? "chairperson" : myRole === "auditor" ? "auditor" : myRole === "treasurer" ? "treasurer" : null;
+
+    const formatDeleteFieldValue = (row: DeleteRequestFieldRow, value: any) => {
+      if (row.key === "direction") {
+        const rawType = String(deleteRequestDraftValues.type || value || "").toLowerCase();
+        return rawType === "expense" ? "အထွက်" : "အဝင်";
+      }
+      if (row.type === "recordType") {
+        const v = String(value || "").toLowerCase();
+        if (v === "expense") return "အသုံးစာရင်း";
+        if (v === "transfer") return "ဘဏ်သွင်း/ဘဏ်ထုတ်";
+        return "ရငွေစာရင်း";
+      }
+      if (row.type === "paymentMethod") {
+        const v = String(value || "").toLowerCase();
+        return v === "bank" ? "ဘဏ် (Bank)" : "ငွေသား (Cash)";
+      }
+      if (row.type === "category") {
+        const v = String(value || "").toLowerCase();
+        const all = [...INCOME_CATEGORY_FILTERS, ...EXPENSE_CATEGORY_FILTERS, ...TRANSFER_CATEGORY_FILTERS];
+        const found = all.find((item) => item.id === v);
+        return found ? found.label : row.display || v || "-";
+      }
+      if (row.type === "amount") {
+        const amount = Number(value || 0);
+        return `${amount.toLocaleString()} KS`;
+      }
+      if (row.type === "member") {
+        const memberId = String(value || "").trim();
+        if (row.key === "payerPayee") {
+          return String(value || row.display || "-");
+        }
+        return getMemberName(memberId) || row.display || memberId || "-";
+      }
+      if (row.type === "date") {
+        return String(value || "-");
+      }
+      return String(value || "-");
+    };
+
+    const updateDeleteRequestDraftValue = (fieldKey: string, value: any) => {
+      setDeleteRequestDraftValues((prev) => ({ ...prev, [fieldKey]: value }));
+    };
+
+    const applyDeleteRequestOptionSelection = (fieldKey: string, value: string, label?: string) => {
+      setDeleteRequestDraftValues((prev) => {
+        const next = { ...prev, [fieldKey]: value };
+        if (fieldKey === "type") {
+          const nextType = String(value || "").toLowerCase();
+          const options =
+            nextType === "expense"
+              ? EXPENSE_CATEGORY_FILTERS
+              : nextType === "transfer"
+                ? TRANSFER_CATEGORY_FILTERS
+                : INCOME_CATEGORY_FILTERS;
+          if (!options.find((opt) => opt.id === String(prev.category || ""))) {
+            next.category = options[0]?.id || "";
+            next.categoryLabel = options[0]?.label || "";
+          }
+        }
+        if (fieldKey === "category") {
+          next.categoryLabel = label || next.categoryLabel;
+        }
+        return next;
+      });
+    };
+
+    const showWebAlert = (message: string) => {
+      if (Platform.OS !== "web") return false;
+      const alertFn = (globalThis as any)?.alert;
+      if (typeof alertFn === "function") {
+        alertFn(message);
+        return true;
+      }
+      return false;
+    };
+
+    const openDeleteRequestDatePicker = (fieldKey: string) => {
+      setDeleteRequestActiveDateField(fieldKey);
+    };
+
+    const handleDeleteRequestDatePicked = (event: any, selected?: Date) => {
+      if (!deleteRequestActiveDateField) return;
+      if (event?.type === "dismissed") {
+        setDeleteRequestActiveDateField(null);
+        return;
+      }
+      const next = selected || new Date();
+      const y = next.getFullYear();
+      const m = String(next.getMonth() + 1).padStart(2, "0");
+      const d = String(next.getDate()).padStart(2, "0");
+      updateDeleteRequestDraftValue(deleteRequestActiveDateField, `${y}-${m}-${d}`);
+      setDeleteRequestActiveDateField(null);
+    };
+
+    const openDeleteRequestMemberPicker = (fieldKey: string) => {
+      setDeleteRequestMemberField(fieldKey);
+      setShowDeleteRequestMemberPicker(true);
+    };
+
+    const openDeleteRequestOptionPicker = (fieldKey: string, title: string, items: CategoryFilterOption[]) => {
+      setDeleteRequestOptionField(fieldKey);
+      setDeleteRequestOptionTitle(title);
+      setDeleteRequestOptionItems(items);
+      setShowDeleteRequestOptionPicker(true);
+    };
+
+    const currentDeleteRequestRecordType = useMemo(() => {
+      if (deleteRequestType !== "transaction" || !deleteRequestTxn) return "income";
+      const draft = String(deleteRequestDraftValues.type || "").toLowerCase();
+      if (draft) return draft;
+      const raw = String((deleteRequestTxn as any)?.type || "").toLowerCase();
+      return raw === "expense" || raw === "transfer" ? raw : "income";
+    }, [deleteRequestType, deleteRequestTxn, deleteRequestDraftValues.type]);
+
+    const deleteRequestCategoryOptions = useMemo(() => {
+      if (currentDeleteRequestRecordType === "expense") return EXPENSE_CATEGORY_FILTERS;
+      if (currentDeleteRequestRecordType === "transfer") return TRANSFER_CATEGORY_FILTERS;
+      return INCOME_CATEGORY_FILTERS;
+    }, [currentDeleteRequestRecordType]);
+
+    const deleteRequestMemberOptions = useMemo(() => {
+      const needle = deleteRequestMemberSearch.trim().toLowerCase();
+      const list = [...(members || [])];
+      if (!needle) return list;
+      return list.filter((member: any) => {
+        const id = String(member.id || "").toLowerCase();
+        const name = String(member.name || "").toLowerCase();
+        return id.includes(needle) || name.includes(needle);
+      });
+    }, [members, deleteRequestMemberSearch]);
+
+    const deleteRequestTagOptions = useMemo(() => {
+      const needle = deleteRequestTagSearch.trim().toLowerCase();
+      const list = [...(members || [])];
+      if (!needle) return list;
+      return list.filter((member: any) => {
+        const id = String(member.id || "").toLowerCase();
+        const name = String(member.name || "").toLowerCase();
+        return id.includes(needle) || name.includes(needle);
+      });
+    }, [members, deleteRequestTagSearch]);
+
+    const selectedDeleteRequestTagNames = useMemo(() => {
+      if (!deleteRequestTagIds.length) return "";
+      return deleteRequestTagIds
+        .map((id) => getMemberName(id) || id)
+        .filter(Boolean)
+        .join(", ");
+    }, [deleteRequestTagIds, getMemberName]);
+
+    const renderDeleteRoleCell = (role: "treasurer" | "auditor" | "chairperson", row: DeleteRequestFieldRow) => {
+      const canEdit = deleteEditRole === role && !!deleteEditRole;
+      const rawValue = role === deleteEditRole ? deleteRequestDraftValues[row.key] ?? row.value : row.value;
+
+      if (!canEdit || row.type === "readonly") {
+        return <Text style={styles.auditTableValue}>{formatDeleteFieldValue(row, rawValue)}</Text>;
+      }
+
+      if (row.type === "member") {
+        return (
+          <Pressable style={styles.auditTablePicker} onPress={() => openDeleteRequestMemberPicker(row.key)}>
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "date") {
+        if (Platform.OS === "web") {
+          return (
+            <TextInput
+              style={styles.auditTableInput}
+              value={String(rawValue ?? "")}
+              onChangeText={(text) => updateDeleteRequestDraftValue(row.key, text)}
+              placeholder="YYYY-MM-DD"
+            />
+          );
+        }
+        return (
+          <Pressable style={styles.auditTablePicker} onPress={() => openDeleteRequestDatePicker(row.key)}>
+            <Text style={styles.auditTablePickerText}>{String(rawValue || "-")}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "recordType") {
+        return (
+          <Pressable
+            style={styles.auditTablePicker}
+            onPress={() =>
+              openDeleteRequestOptionPicker("type", "စာရင်းအမျိုးအစား", [
+                { id: "income", label: "ရငွေစာရင်း" },
+                { id: "expense", label: "အသုံးစာရင်း" },
+                { id: "transfer", label: "ဘဏ်သွင်း/ဘဏ်ထုတ်" },
+              ])
+            }
+          >
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "paymentMethod") {
+        return (
+          <Pressable
+            style={styles.auditTablePicker}
+            onPress={() =>
+              openDeleteRequestOptionPicker("paymentMethod", "ငွေပေးချေမှု ပုံစံ", [
+                { id: "cash", label: "ငွေသား (Cash)" },
+                { id: "bank", label: "ဘဏ် (Bank)" },
+              ])
+            }
+          >
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "category") {
+        return (
+          <Pressable
+            style={styles.auditTablePicker}
+            onPress={() =>
+              openDeleteRequestOptionPicker("category", "အမျိုးအစားရွေးချယ်ရန်", deleteRequestCategoryOptions)
+            }
+          >
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      return (
+        <TextInput
+          style={styles.auditTableInput}
+          value={String(rawValue ?? "")}
+          onChangeText={(text) => updateDeleteRequestDraftValue(row.key, row.type === "amount" ? text.replace(/[^0-9.]/g, "") : text)}
+          keyboardType={row.type === "amount" ? "decimal-pad" : "default"}
+          placeholder="-"
+        />
+      );
+    };
   const showInlineMemberResults = useMemo(
     () => viewScope === "member" && memberSearch.trim().length > 0,
     [viewScope, memberSearch]
@@ -2130,12 +2544,12 @@ export default function FinanceScreen() {
         </View>
       </Modal>
 
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={showDeleteRequestModal}
-        onRequestClose={() => setShowDeleteRequestModal(false)}
-      >
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestModal}
+          onRequestClose={() => setShowDeleteRequestModal(false)}
+        >
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
@@ -2154,24 +2568,257 @@ export default function FinanceScreen() {
             <Text style={styles.requestMetaText}>
               {deleteRequestType === "loan" ? String(deleteRequestLoan?.id || "-") : String(deleteRequestTxn?.id || "-")}
             </Text>
-            <Text style={styles.label}>ဖျက်လိုသော အကြောင်းပြချက် (Audit ထံပေးပို့မည်)</Text>
-            <TextInput
-              style={[styles.input, styles.auditNoteInput]}
-              value={deleteRequestNote}
-              onChangeText={setDeleteRequestNote}
-              multiline
-              numberOfLines={4}
-              placeholder="ဥပမာ - ပြေစာမှားတင်ထားမိသည် / duplicate entry"
-            />
-            <Pressable style={[styles.saveBtn, { backgroundColor: "#D97706" }]} onPress={submitDeleteRequest}>
-              <Text style={styles.saveBtnText}>Delete Request ပေးပို့မည်</Text>
-            </Pressable>
+      {deleteRequestRows.length > 0 ? (
+        <>
+          <Text style={styles.label}>အသေးစိတ် (ဇယား)</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.auditTable}>
+                    <View style={[styles.auditTableRow, styles.auditTableHeaderRow]}>
+                      <View style={[styles.auditTableCell, styles.auditTableLabelCell]}>
+                        <Text style={styles.auditTableHeaderText}>အချက်</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>မူလစာရင်း</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>ဘဏ္ဍာရေးမှူး</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>စာရင်းစစ်</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>ဥက္ကဌ</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>မှတ်ချက်</Text>
+                      </View>
+                    </View>
+                      {deleteRequestRows.map((row, index) => (
+                        <View key={row.key} style={styles.auditTableRow}>
+                          <View style={[styles.auditTableCell, styles.auditTableLabelCell]}>
+                            <Text style={styles.auditTableLabelText}>{row.label}</Text>
+                          </View>
+                          <View style={styles.auditTableCell}>
+                            <Text style={styles.auditTableValue}>{formatDeleteFieldValue(row, row.value)}</Text>
+                          </View>
+                          <View style={styles.auditTableCell}>{renderDeleteRoleCell("treasurer", row)}</View>
+                          <View style={styles.auditTableCell}>{renderDeleteRoleCell("auditor", row)}</View>
+                          <View style={styles.auditTableCell}>{renderDeleteRoleCell("chairperson", row)}</View>
+                          <View style={styles.auditTableCell}>
+                            <Text style={styles.auditTableNoteText}>{index === 0 ? (deleteRequestNote || "-") : "-"}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </>
+      ) : null}
+      {deleteRequestActiveDateField && Platform.OS !== "web" ? (
+        <DateTimePicker
+          value={(() => {
+            const raw = deleteRequestDraftValues[deleteRequestActiveDateField] ?? deleteRequestRows.find((row) => row.key === deleteRequestActiveDateField)?.value;
+            const parsed = new Date(raw || "");
+            return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+          })()}
+          mode="date"
+          display="default"
+          onChange={handleDeleteRequestDatePicked}
+        />
+      ) : null}
+      <Text style={styles.label}>ဖျက်လိုသော အကြောင်းပြချက် (Audit ထံပေးပို့မည်)</Text>
+      <TextInput
+        style={[styles.input, styles.auditNoteInput]}
+        value={deleteRequestNote}
+        onChangeText={setDeleteRequestNote}
+                multiline
+                numberOfLines={4}
+                placeholder="ဥပမာ - ပြေစာမှားတင်ထားမိသည် / duplicate entry"
+              />
+              <Text style={styles.label}>အသိပေးရန် Member များ (Optional)</Text>
+              <Pressable style={styles.tagPickerBtn} onPress={() => setShowDeleteRequestTagPicker(true)}>
+                <Ionicons name="people" size={16} color="#0F766E" />
+                <Text style={styles.tagPickerBtnText}>Member ရွေးချယ်ရန်</Text>
+              </Pressable>
+              <Text style={styles.tagPickerSelectedText}>
+                {selectedDeleteRequestTagNames ? selectedDeleteRequestTagNames : "မရွေးရသေးပါ"}
+              </Text>
+              {deleteRequestSubmitError ? (
+                <Text style={styles.submitErrorText}>{deleteRequestSubmitError}</Text>
+              ) : null}
+              <Pressable
+                style={[styles.saveBtn, { backgroundColor: "#D97706" }, deleteRequestSubmitting && styles.saveBtnDisabled]}
+                onPress={submitDeleteRequest}
+                disabled={deleteRequestSubmitting}
+              >
+                {deleteRequestSubmitting ? (
+                  <View style={styles.saveBtnContent}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={[styles.saveBtnText, { marginLeft: 8 }]}>ပို့နေပါသည်...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.saveBtnText}>Delete Request ပေးပို့မည်</Text>
+                )}
+              </Pressable>
             <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestModal(false)}>
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </Modal>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestTagPicker}
+          onRequestClose={() => setShowDeleteRequestTagPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestTagPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Member ID / Full Name ရှာပါ"
+                value={deleteRequestTagSearch}
+                onChangeText={setDeleteRequestTagSearch}
+              />
+              <View style={styles.tagPickerActions}>
+                <Pressable
+                  style={styles.tagPickerMiniBtn}
+                  onPress={() => setDeleteRequestTagIds(deleteRequestTagOptions.map((m: any) => String(m.id)))}
+                >
+                  <Text style={styles.tagPickerMiniBtnText}>Select All</Text>
+                </Pressable>
+                <Pressable style={styles.tagPickerMiniBtn} onPress={() => setDeleteRequestTagIds([])}>
+                  <Text style={styles.tagPickerMiniBtnText}>Clear</Text>
+                </Pressable>
+              </View>
+              <FlatList
+                data={deleteRequestTagOptions}
+                keyExtractor={(item: any) => String(item.id)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: any }) => {
+                  const id = String(item.id || "");
+                  const selected = deleteRequestTagIds.includes(id);
+                  return (
+                    <Pressable
+                      style={styles.tagPickerRow}
+                      onPress={() =>
+                        setDeleteRequestTagIds((prev) =>
+                          selected ? prev.filter((value) => value !== id) : [...prev, id]
+                        )
+                      }
+                    >
+                      <Ionicons name={selected ? "checkbox" : "square-outline"} size={20} color={selected ? "#0F766E" : "#94A3B8"} />
+                      <View style={{ marginLeft: 10 }}>
+                        <Text style={styles.memberOptionName}>{item.name || "-"}</Text>
+                        <Text style={styles.memberOptionId}>{item.id || "-"}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                }}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                    <Text style={{ color: Colors.light.textSecondary }}>မတွေ့ပါ</Text>
+                  </View>
+                }
+              />
+              <Pressable style={styles.saveBtn} onPress={() => setShowDeleteRequestTagPicker(false)}>
+                <Text style={styles.saveBtnText}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestOptionPicker}
+          onRequestClose={() => setShowDeleteRequestOptionPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestOptionPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{deleteRequestOptionTitle || "ရွေးချယ်ရန်"}</Text>
+              <FlatList
+                data={deleteRequestOptionItems}
+                keyExtractor={(item: any) => String(item.id)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: any }) => (
+                  <Pressable
+                    style={styles.memberOptionRow}
+                    onPress={() => {
+                      applyDeleteRequestOptionSelection(deleteRequestOptionField, item.id, item.label);
+                      setShowDeleteRequestOptionPicker(false);
+                    }}
+                  >
+                    <Text style={styles.memberOptionName}>{item.label}</Text>
+                    <Text style={styles.memberOptionId}>{item.id}</Text>
+                  </Pressable>
+                )}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                    <Text style={{ color: Colors.light.textSecondary }}>မတွေ့ပါ</Text>
+                  </View>
+                }
+              />
+              <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestOptionPicker(false)}>
+                <Text style={styles.cancelBtnText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestMemberPicker}
+          onRequestClose={() => setShowDeleteRequestMemberPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestMemberPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Member ID / Full Name ရှာပါ"
+                value={deleteRequestMemberSearch}
+                onChangeText={setDeleteRequestMemberSearch}
+              />
+              <FlatList
+                data={deleteRequestMemberOptions}
+                keyExtractor={(item: any) => String(item.id)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: any }) => (
+                  <Pressable
+                    style={styles.memberOptionRow}
+                    onPress={() => {
+                      const field = deleteRequestMemberField;
+                      const memberId = String(item.id || "");
+                      if (field === "payerPayee") {
+                        updateDeleteRequestDraftValue(field, String(item.name || memberId || ""));
+                      } else {
+                        updateDeleteRequestDraftValue(field, memberId);
+                      }
+                      setShowDeleteRequestMemberPicker(false);
+                    }}
+                  >
+                    <Text style={styles.memberOptionName}>{item.name || "-"}</Text>
+                    <Text style={styles.memberOptionId}>{item.id || "-"}</Text>
+                  </Pressable>
+                )}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                    <Text style={{ color: Colors.light.textSecondary }}>မတွေ့ပါ</Text>
+                  </View>
+                }
+              />
+              <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestMemberPicker(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
 
       <Modal
         animationType="slide"
@@ -2762,12 +3409,125 @@ const styles = StyleSheet.create({
   },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 6, marginTop: 10 },
   requestMetaText: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_600SemiBold", marginBottom: 2 },
+  auditTable: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+    minWidth: 860,
+    marginTop: 6,
+  },
+  auditTableRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  auditTableHeaderRow: {
+    backgroundColor: "#F1F5F9",
+  },
+  auditTableCell: {
+    minWidth: 130,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRightWidth: 1,
+    borderRightColor: Colors.light.border,
+    justifyContent: "center",
+  },
+  auditTableLabelCell: {
+    minWidth: 150,
+  },
+  auditTableHeaderText: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  auditTableLabelText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  auditTableValue: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
+  auditTableNoteText: {
+    fontSize: 11.5,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.textSecondary,
+  },
+  auditTableInput: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
+  auditTablePicker: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    justifyContent: "center",
+  },
+  auditTablePickerText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
   input: { backgroundColor: "#F8FAFC", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: Colors.light.border },
   auditNoteInput: { minHeight: 96, textAlignVertical: "top" },
   saveBtn: { backgroundColor: Colors.light.tint, paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 20 },
   saveBtnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  saveBtnContent: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  saveBtnDisabled: { opacity: 0.7 },
   clearFlagBtn: { backgroundColor: "#EF4444", paddingVertical: 12, borderRadius: 12, alignItems: "center", marginTop: 8 },
   clearFlagBtnText: { color: "#fff", fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  tagPickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F0FDFA",
+  },
+  tagPickerBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#0F766E" },
+  tagPickerSelectedText: { marginTop: 6, fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
+  tagPickerActions: { flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 6 },
+  tagPickerMiniBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  tagPickerMiniBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  tagPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  submitErrorText: {
+    marginTop: 6,
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#B91C1C",
+  },
   memberOptionRow: {
     paddingVertical: 10,
     borderBottomWidth: 1,

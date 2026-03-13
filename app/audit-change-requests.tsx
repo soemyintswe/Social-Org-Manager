@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
@@ -22,6 +23,14 @@ import { useAuth } from "@/lib/AuthContext";
 import { normalizeOrgPosition, type AuditChangeRequestStatus, type AuditChangeWorkflowStage } from "@/lib/types";
 
 const STATUS_ORDER: AuditChangeRequestStatus[] = ["pending", "suspended", "approved", "rejected", "cancelled"];
+type DraftRoleKey = "treasurer" | "auditor" | "chairperson";
+type AuditFieldType = "text" | "date" | "amount" | "member" | "payment" | "readonly";
+
+const DRAFT_ROLE_LABELS: Record<DraftRoleKey, string> = {
+  treasurer: "ဘဏ္ဍာရေးမှူး",
+  auditor: "စာရင်းစစ်",
+  chairperson: "ဥက္ကဌ",
+};
 
 function statusLabel(status: AuditChangeRequestStatus): string {
   if (status === "pending") return "စောင့်ဆိုင်း";
@@ -86,6 +95,7 @@ export default function AuditChangeRequestsScreen() {
     addAuditChangeRequestMessage,
     changeAuditChangeRequestStatus,
     applyAuditChangeRequestPatch,
+    saveAuditChangeRequestDraft,
     deleteAuditChangeRequestsForTesting,
     forwardAuditChangeRequestToChair,
     sendAuditRequestBackToTreasurer,
@@ -98,18 +108,12 @@ export default function AuditChangeRequestsScreen() {
   const [statusFilter, setStatusFilter] = useState<"all" | AuditChangeRequestStatus>("all");
   const [selectedRequestId, setSelectedRequestId] = useState<string>("");
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [showFixModal, setShowFixModal] = useState(false);
   const [messageNote, setMessageNote] = useState("");
   const [decisionNote, setDecisionNote] = useState("");
   const [forwardToUserId, setForwardToUserId] = useState("");
   const [tagUserIds, setTagUserIds] = useState<string[]>([]);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [showTagPicker, setShowTagPicker] = useState(false);
-  const [fixPayerPayee, setFixPayerPayee] = useState("");
-  const [fixAmount, setFixAmount] = useState("");
-  const [fixDate, setFixDate] = useState("");
-  const [fixReceipt, setFixReceipt] = useState("");
-  const [fixNotes, setFixNotes] = useState("");
   const [showCreateDeleteModal, setShowCreateDeleteModal] = useState(false);
   const [createDeleteTargetType, setCreateDeleteTargetType] = useState<"transaction" | "loan">("transaction");
   const [createDeleteTargetId, setCreateDeleteTargetId] = useState("");
@@ -120,6 +124,16 @@ export default function AuditChangeRequestsScreen() {
   const [testSelectMode, setTestSelectMode] = useState(false);
   const [selectedTestRequestIds, setSelectedTestRequestIds] = useState<string[]>([]);
   const [testDeleteBusy, setTestDeleteBusy] = useState(false);
+  const [draftEdits, setDraftEdits] = useState<Record<DraftRoleKey, Record<string, any>>>({
+    treasurer: {},
+    auditor: {},
+    chairperson: {},
+  });
+  const [activeDatePicker, setActiveDatePicker] = useState<{ role: DraftRoleKey; fieldKey: string } | null>(null);
+  const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [memberPickerRole, setMemberPickerRole] = useState<DraftRoleKey | null>(null);
+  const [memberPickerField, setMemberPickerField] = useState<string>("");
+  const draftSaveTimers = React.useRef<Record<string, any>>({});
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
   const isTreasurer = myRole === "treasurer";
@@ -319,6 +333,23 @@ export default function AuditChangeRequestsScreen() {
   );
   const requestKind = String(selectedRequest?.requestKind || "update");
   const isDeleteRequest = requestKind === "delete";
+  const selectedDrafts = useMemo(
+    () => ({
+      treasurer: selectedRequest?.drafts?.treasurer?.values || {},
+      auditor: selectedRequest?.drafts?.auditor?.values || {},
+      chairperson: selectedRequest?.drafts?.chairperson?.values || {},
+    }),
+    [selectedRequest?.drafts]
+  );
+
+  React.useEffect(() => {
+    if (!selectedRequest) return;
+    setDraftEdits({
+      treasurer: { ...(selectedDrafts.treasurer || {}) },
+      auditor: { ...(selectedDrafts.auditor || {}) },
+      chairperson: { ...(selectedDrafts.chairperson || {}) },
+    });
+  }, [selectedRequest?.id, selectedDrafts.treasurer, selectedDrafts.auditor, selectedDrafts.chairperson]);
 
   const selectedTxn = useMemo(
     () => transactions.find((row: any) => String(row?.id || "") === String(selectedRequest?.transactionId || "")) || null,
@@ -348,11 +379,6 @@ export default function AuditChangeRequestsScreen() {
     if (latestRevision?.before) return latestRevision.before;
     return selectedRequest?.targetType === "loan" ? selectedLoan : selectedTxn;
   }, [latestRevision, selectedLoan, selectedTxn, selectedRequest?.targetType]);
-  const compareUpdated = useMemo(() => {
-    if (latestRevision?.after) return latestRevision.after;
-    if (isDeleteRequest) return { __action: "delete" };
-    return null;
-  }, [latestRevision, isDeleteRequest]);
   const activeUsers = useMemo(
     () => (Array.isArray(users) ? users : []).filter((row: any) => row?.isActive !== false),
     [users]
@@ -400,42 +426,198 @@ export default function AuditChangeRequestsScreen() {
     return `${name}${memberId ? ` (${memberId})` : ""} • ${roleLabel}`;
   };
 
-  const renderSnapshotFields = (snapshot: any, targetType: string) => {
-    if (!snapshot) {
-      return <Text style={styles.compareEmpty}>မသတ်မှတ်ရသေးပါ။</Text>;
+  const toYmd = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+  const ymdToDate = (value?: string): Date => {
+    const text = String(value || "").trim();
+    const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (!match) return new Date();
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  };
+
+  const txnFieldDefs: { key: string; label: string; type: AuditFieldType }[] = [
+    { key: "categoryLabel", label: "အမျိုးအစား", type: "text" },
+    { key: "description", label: "အကြောင်းအရာ", type: "text" },
+    { key: "memberId", label: "အသင်းဝင်", type: "member" },
+    { key: "payerPayee", label: "ပေးသွင်းသူ", type: "text" },
+    { key: "date", label: "ရက်စွဲ", type: "date" },
+    { key: "amount", label: "ပမာဏ", type: "amount" },
+    { key: "paymentMethod", label: "ငွေပေးချေမှု", type: "payment" },
+    { key: "receiptNumber", label: "ပြေစာ", type: "text" },
+    { key: "feePeriodStart", label: "လစဉ်ကြေးကာလ (From)", type: "date" },
+    { key: "feePeriodEnd", label: "လစဉ်ကြေးကာလ (To)", type: "date" },
+    { key: "notes", label: "မှတ်ချက်", type: "text" },
+    { key: "relatedIds", label: "Related IDs", type: "readonly" },
+  ];
+
+  const loanFieldDefs: { key: string; label: string; type: AuditFieldType }[] = [
+    { key: "memberId", label: "အသင်းဝင်", type: "member" },
+    { key: "principal", label: "အရင်း", type: "amount" },
+    { key: "issueDate", label: "ထုတ်ပေးရက်", type: "date" },
+    { key: "dueDate", label: "သတ်မှတ်ရက်", type: "date" },
+    { key: "interestRate", label: "အတိုးနှုန်း (%)", type: "amount" },
+    { key: "notes", label: "မှတ်ချက်", type: "text" },
+    { key: "relatedIds", label: "Related IDs", type: "readonly" },
+  ];
+
+  const fieldDefs = selectedRequest?.targetType === "loan" ? loanFieldDefs : txnFieldDefs;
+
+  const canEditTreasurerDraft =
+    isTreasurer &&
+    !!selectedRequest &&
+    !isDeleteRequest &&
+    (!selectedRequest.workflowStage ||
+      selectedRequest.workflowStage === "treasurer_execution" ||
+      selectedRequest.workflowStage === "pending");
+  const canEditAuditorDraft =
+    isAuditor &&
+    !!selectedRequest &&
+    !isDeleteRequest &&
+    (!selectedRequest.workflowStage ||
+      selectedRequest.workflowStage === "auditor_review" ||
+      selectedRequest.workflowStage === "pending");
+  const canEditChairDraft =
+    isChair &&
+    !!selectedRequest &&
+    !isDeleteRequest &&
+    (!selectedRequest.workflowStage ||
+      selectedRequest.workflowStage === "chair_approval" ||
+      selectedRequest.workflowStage === "pending");
+
+  const memberOptions = useMemo(
+    () =>
+      (Array.isArray(members) ? members : [])
+        .map((row: any) => ({
+          id: String(row?.id || "").trim(),
+          name: String(row?.name || row?.fullName || row?.displayName || "").trim(),
+        }))
+        .filter((row: any) => row.id),
+    [members]
+  );
+
+  const formatFieldValue = (value: any, field: { key: string; type: AuditFieldType }) => {
+    if (value == null || value === "") return "-";
+    if (field.type === "amount") {
+      const n = Number(value);
+      return Number.isFinite(n) ? `${n.toLocaleString()} KS` : String(value);
     }
-    if (String(snapshot?.__action || "") === "delete") {
-      return <Text style={[styles.compareText, styles.compareDelete]}>ဖျက်သိမ်းမည်</Text>;
+    if (field.type === "member") {
+      const id = String(value || "");
+      const name = memberNameById.get(id);
+      return name ? `${name} (${id})` : id || "-";
     }
-    if (targetType === "loan") {
-      const memberId = String(snapshot?.memberId || snapshot?.__linkedTransactions?.[0]?.memberId || "").trim();
-      const memberName = memberNameById.get(memberId) || memberId || "-";
-      const principal = Number(snapshot?.principal ?? snapshot?.amount ?? 0);
-      const issueDate = String(snapshot?.issueDate || snapshot?.date || "-");
-      return (
-        <View>
-          <Text style={styles.compareText}>အသင်းဝင်: {memberName}</Text>
-          <Text style={styles.compareText}>အရင်း: {principal.toLocaleString()} KS</Text>
-          <Text style={styles.compareText}>ရက်စွဲ: {issueDate}</Text>
-        </View>
-      );
+    if (Array.isArray(value)) return value.join(", ");
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  };
+
+  const getOriginalValue = (fieldKey: string) => {
+    if (fieldKey === "relatedIds") {
+      const base = compareOriginal as any;
+      const related =
+        base?.relatedIds ||
+        base?.linkedTransactionIds ||
+        (selectedRequest?.relatedLoanId ? [selectedRequest.relatedLoanId] : []);
+      return related || [];
+    }
+    return (compareOriginal as any)?.[fieldKey];
+  };
+
+  const getDraftValue = (role: DraftRoleKey, fieldKey: string) => {
+    const roleDraft = draftEdits[role] || {};
+    if (fieldKey in roleDraft) return roleDraft[fieldKey];
+    return getOriginalValue(fieldKey);
+  };
+
+  const scheduleDraftSave = (role: DraftRoleKey, values: Record<string, any>) => {
+    if (!selectedRequest || !currentUser?.id) return;
+    const key = `${role}`;
+    if (draftSaveTimers.current[key]) {
+      clearTimeout(draftSaveTimers.current[key]);
+    }
+    draftSaveTimers.current[key] = setTimeout(() => {
+      saveAuditChangeRequestDraft({
+        requestId: selectedRequest.id,
+        role,
+        values,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+      }).catch(() => null);
+    }, 450);
+  };
+
+  const updateDraftValue = (role: DraftRoleKey, fieldKey: string, value: any) => {
+    setDraftEdits((prev) => {
+      const nextRole = { ...(prev[role] || {}), [fieldKey]: value };
+      scheduleDraftSave(role, nextRole);
+      return { ...prev, [role]: nextRole };
+    });
+  };
+
+  const openDatePicker = (role: DraftRoleKey, fieldKey: string) => {
+    setActiveDatePicker({ role, fieldKey });
+  };
+
+  const handleDatePicked = (event: any, selected?: Date) => {
+    if (!activeDatePicker) return;
+    if (event?.type === "dismissed") {
+      setActiveDatePicker(null);
+      return;
+    }
+    const next = selected || new Date();
+    updateDraftValue(activeDatePicker.role, activeDatePicker.fieldKey, toYmd(next));
+    setActiveDatePicker(null);
+  };
+
+  const openMemberSelect = (role: DraftRoleKey, fieldKey: string) => {
+    setMemberPickerRole(role);
+    setMemberPickerField(fieldKey);
+    setShowMemberPicker(true);
+  };
+
+  const notePreview = latestMessageNote || selectedRequest?.auditNote || "-";
+
+  const renderDraftCell = (role: DraftRoleKey, field: { key: string; label: string; type: AuditFieldType }) => {
+    const canEdit =
+      role === "treasurer"
+        ? canEditTreasurerDraft
+        : role === "auditor"
+          ? canEditAuditorDraft
+          : canEditChairDraft;
+    const rawValue = getDraftValue(role, field.key);
+    if (isDeleteRequest || field.type === "readonly") {
+      return <Text style={styles.auditTableValue}>{formatFieldValue(rawValue, field)}</Text>;
+    }
+    if (!canEdit) {
+      return <Text style={styles.auditTableValue}>{formatFieldValue(rawValue, field)}</Text>;
     }
 
-    const payer = String(snapshot?.payerPayee || snapshot?.payerName || "-");
-    const category = String(snapshot?.categoryLabel || snapshot?.category || "-");
-    const amount = Number(snapshot?.amount ?? 0);
-    const date = String(snapshot?.date || "-");
-    const receipt = String(snapshot?.receiptNumber || "-");
-    const notes = String(snapshot?.notes || snapshot?.description || "-");
+    if (field.type === "member") {
+      return (
+        <Pressable style={styles.auditTablePicker} onPress={() => openMemberSelect(role, field.key)}>
+          <Text style={styles.auditTablePickerText}>{formatFieldValue(rawValue, field)}</Text>
+          <Ionicons name="chevron-down" size={14} color={Colors.light.textSecondary} />
+        </Pressable>
+      );
+    }
+    if (field.type === "date") {
+      return (
+        <Pressable style={styles.auditTablePicker} onPress={() => openDatePicker(role, field.key)}>
+          <Text style={styles.auditTablePickerText}>{String(rawValue || "") || "-"}</Text>
+          <Ionicons name="calendar-outline" size={14} color={Colors.light.textSecondary} />
+        </Pressable>
+      );
+    }
     return (
-      <View>
-        <Text style={styles.compareText}>အမျိုးအစား: {category}</Text>
-        <Text style={styles.compareText}>ပေးသွင်းသူ: {payer}</Text>
-        <Text style={styles.compareText}>ပမာဏ: {amount.toLocaleString()} KS</Text>
-        <Text style={styles.compareText}>ရက်စွဲ: {date}</Text>
-        <Text style={styles.compareText}>ပြေစာ: {receipt || "-"}</Text>
-        <Text style={styles.compareText}>မှတ်ချက်: {notes || "-"}</Text>
-      </View>
+      <TextInput
+        style={styles.auditTableInput}
+        value={rawValue == null ? "" : String(rawValue)}
+        onChangeText={(text) => updateDraftValue(role, field.key, text)}
+        keyboardType={field.type === "amount" ? "decimal-pad" : "default"}
+        placeholder={field.type === "amount" ? "0" : "-"}
+      />
     );
   };
 
@@ -446,19 +628,6 @@ export default function AuditChangeRequestsScreen() {
     setForwardToUserId("");
     setTagUserIds([]);
     setShowDetailModal(true);
-  };
-
-  const openFixModal = () => {
-    if (!selectedTxn) {
-      Alert.alert("မတွေ့ပါ", "ပြင်ဆင်ရန် transaction မတွေ့ပါ။");
-      return;
-    }
-    setFixPayerPayee(String((selectedTxn as any)?.payerPayee || ""));
-    setFixAmount(String((selectedTxn as any)?.amount ?? ""));
-    setFixDate(String((selectedTxn as any)?.date || ""));
-    setFixReceipt(String((selectedTxn as any)?.receiptNumber || ""));
-    setFixNotes(String((selectedTxn as any)?.notes || ""));
-    setShowFixModal(true);
   };
 
   const openCreateDeleteRequestModal = () => {
@@ -703,28 +872,40 @@ export default function AuditChangeRequestsScreen() {
     setShowDetailModal(false);
     Alert.alert("ပြီးပါပြီ", "ပြင်ဆင်စရာမရှိသဖြင့် အတည်ပြုပြီးပါပြီ။");
   };
-  const submitFix = async () => {
-    if (!selectedRequest || !selectedTxn || !currentUser?.id) return;
+  const buildPatchFromDrafts = () => {
+    const chairDraft = selectedRequest?.drafts?.chairperson?.values || {};
+    const auditorDraft = selectedRequest?.drafts?.auditor?.values || {};
+    const treasurerDraft = selectedRequest?.drafts?.treasurer?.values || {};
+    const sourceDraft = Object.keys(chairDraft).length
+      ? chairDraft
+      : Object.keys(auditorDraft).length
+        ? auditorDraft
+        : treasurerDraft;
 
     const patch: Record<string, any> = {};
-    const payerPayee = fixPayerPayee.trim();
-    const date = fixDate.trim();
-    const receipt = fixReceipt.trim();
-    const notes = fixNotes.trim();
-    const amountNum = Number(fixAmount);
+    fieldDefs.forEach((field) => {
+      if (field.type === "readonly") return;
+      const originalValue = getOriginalValue(field.key);
+      const nextValue = field.key in sourceDraft ? (sourceDraft as any)[field.key] : originalValue;
+      if (field.type === "amount") {
+        const n1 = Number(originalValue);
+        const n2 = Number(nextValue);
+        if (Number.isFinite(n2) && n2 !== n1) patch[field.key] = n2;
+        return;
+      }
+      const a = String(originalValue ?? "");
+      const b = String(nextValue ?? "");
+      if (a !== b) patch[field.key] = b;
+    });
+    return patch;
+  };
 
-    if (payerPayee !== String((selectedTxn as any)?.payerPayee || "")) patch.payerPayee = payerPayee;
-    if (date !== String((selectedTxn as any)?.date || "")) patch.date = date;
-    if (receipt !== String((selectedTxn as any)?.receiptNumber || "")) patch.receiptNumber = receipt;
-    if (notes !== String((selectedTxn as any)?.notes || "")) patch.notes = notes;
-    if (Number.isFinite(amountNum) && amountNum >= 0 && amountNum !== Number((selectedTxn as any)?.amount || 0)) {
-      patch.amount = amountNum;
-    }
-
+  const submitApplyDraftPatch = async () => {
+    if (!selectedRequest || !selectedTxn || !currentUser?.id) return;
+    const patch = buildPatchFromDrafts();
     if (Object.keys(patch).length === 0) {
       return Alert.alert("အချက်အလက်မပြောင်းပါ", "ပြင်ဆင်ချက်မရှိသေးပါ။");
     }
-
     await applyAuditChangeRequestPatch({
       requestId: selectedRequest.id,
       byUserId: currentUser.id,
@@ -733,8 +914,6 @@ export default function AuditChangeRequestsScreen() {
       patch,
       note: decisionNote.trim() || "Audit flag ကိုပြင်ဆင်ပြီး အတည်ပြုပါသည်။",
     });
-
-    setShowFixModal(false);
     setShowDetailModal(false);
     setDecisionNote("");
     Alert.alert("ပြီးပါပြီ", "စာရင်းပြင်ဆင်ချက်ကို အတည်ပြုပြီးပါပြီ။");
@@ -786,11 +965,11 @@ export default function AuditChangeRequestsScreen() {
     clearTestSelections();
   };
 
-  const performTestCleanup = async () => {
+  const performTestCleanup = async (useAll: boolean) => {
     setTestDeleteBusy(true);
     try {
       const result = await deleteAuditChangeRequestsForTesting({
-        requestIds: selectedTestRequestIds,
+        requestIds: useAll ? [] : selectedTestRequestIds,
         byUserId: String(currentUser?.id || ""),
         byMemberId: currentUser?.memberId,
         byDisplayName: currentUser?.displayName,
@@ -809,26 +988,37 @@ export default function AuditChangeRequestsScreen() {
 
   const submitTestCleanup = async () => {
     if (!allowTestCleanup || testDeleteBusy) return;
-    if (selectedTestRequestIds.length === 0) {
-      Alert.alert("လိုအပ်ချက်", "ဖျက်လိုသော Request ကို ရွေးချယ်ပါ။");
+    const totalCount = allRequests.length;
+    const useAll = selectedTestRequestIds.length === 0;
+    const deleteCount = useAll ? totalCount : selectedTestRequestIds.length;
+    if (deleteCount === 0) {
+      Alert.alert("မတွေ့ပါ", "ဖျက်ရန် Request မရှိပါ။");
       return;
     }
     if (Platform.OS === "web") {
       const ok = typeof window !== "undefined"
-        ? window.confirm(`ရွေးထားသော ${selectedTestRequestIds.length} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`)
+        ? window.confirm(
+            useAll
+              ? `လက်ရှိ Request အားလုံး (${deleteCount}) ကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`
+              : `ရွေးထားသော ${deleteCount} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`
+          )
         : true;
       if (!ok) return;
-      await performTestCleanup();
+      await performTestCleanup(useAll);
       return;
     }
-    Alert.alert("Test Records ဖျက်မည်", `ရွေးထားသော ${selectedTestRequestIds.length} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`, [
+    Alert.alert(
+      "Test Records ဖျက်မည်",
+      useAll ? `လက်ရှိ Request အားလုံး (${deleteCount}) ကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?` : `ရွေးထားသော ${deleteCount} ခုကို ဖျက်ပါမည်။ ဆက်လုပ်မလား?`,
+      [
       { text: "မလုပ်တော့ပါ", style: "cancel" },
       {
         text: "ဖျက်မည်",
         style: "destructive",
-        onPress: () => void performTestCleanup(),
+        onPress: () => void performTestCleanup(useAll),
       },
-    ]);
+      ]
+    );
   };
 
   if (!canView) {
@@ -905,9 +1095,13 @@ export default function AuditChangeRequestsScreen() {
                   <Text style={styles.testCleanupMiniText}>Clear</Text>
                 </Pressable>
                 <Pressable
-                  style={[styles.testCleanupMiniBtn, styles.testCleanupDeleteBtn, (!selectedTestRequestIds.length || testDeleteBusy) && { opacity: 0.5 }]}
+                  style={[
+                    styles.testCleanupMiniBtn,
+                    styles.testCleanupDeleteBtn,
+                    ((selectedTestRequestIds.length === 0 && allRequests.length === 0) || testDeleteBusy) && { opacity: 0.5 },
+                  ]}
                   onPress={() => void submitTestCleanup()}
-                  disabled={!selectedTestRequestIds.length || testDeleteBusy}
+                  disabled={(selectedTestRequestIds.length === 0 && allRequests.length === 0) || testDeleteBusy}
                 >
                   {testDeleteBusy ? (
                     <View style={styles.testCleanupBusyRow}>
@@ -916,7 +1110,7 @@ export default function AuditChangeRequestsScreen() {
                     </View>
                   ) : (
                     <Text style={[styles.testCleanupMiniText, { color: "#fff" }]}>
-                      Delete Selected ({selectedTestRequestIds.length})
+                      Delete {selectedTestRequestIds.length ? "Selected" : "All"} ({selectedTestRequestIds.length || allRequests.length})
                     </Text>
                   )}
                 </Pressable>
@@ -1102,22 +1296,56 @@ export default function AuditChangeRequestsScreen() {
               Amount: {Number((selectedTxn as any)?.amount || (selectedLoan as any)?.principal || (selectedLoan as any)?.amount || 0).toLocaleString()} KS
             </Text>
 
-            <Text style={styles.sectionLabel}>မူလ / ပြင်ဆင်ချက် / အကြောင်းအရာ</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compareRow}>
-              <View style={styles.compareCol}>
-                <Text style={styles.compareTitle}>မူလစာရင်း</Text>
-                {renderSnapshotFields(compareOriginal, String(selectedRequest?.targetType || "transaction"))}
-              </View>
-              <View style={styles.compareCol}>
-                <Text style={styles.compareTitle}>{isDeleteRequest ? "ဖျက်သိမ်းမှု" : "ပြင်ဆင်မည့်စာရင်း"}</Text>
-                {renderSnapshotFields(compareUpdated, String(selectedRequest?.targetType || "transaction"))}
-              </View>
-              <View style={styles.compareCol}>
-                <Text style={styles.compareTitle}>အကြောင်းအရာ</Text>
-                <Text style={styles.compareText}>Audit Note: {selectedRequest?.auditNote || "-"}</Text>
-                <Text style={styles.compareText}>နောက်ဆုံးမှတ်ချက်: {latestMessageNote || "-"}</Text>
+            <Text style={styles.sectionLabel}>မူလ / ပြင်ဆင်မည့်စာရင်း (ဇယား)</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.auditTable}>
+                <View style={[styles.auditTableRow, styles.auditTableHeaderRow]}>
+                  <View style={[styles.auditTableCell, styles.auditTableLabelCell]}>
+                    <Text style={styles.auditTableHeaderText}>အချက်</Text>
+                  </View>
+                  <View style={styles.auditTableCell}>
+                    <Text style={styles.auditTableHeaderText}>မူလစာရင်း</Text>
+                  </View>
+                  <View style={styles.auditTableCell}>
+                    <Text style={styles.auditTableHeaderText}>ဘဏ္ဍာရေးမှူး</Text>
+                  </View>
+                  <View style={styles.auditTableCell}>
+                    <Text style={styles.auditTableHeaderText}>စာရင်းစစ်</Text>
+                  </View>
+                  <View style={styles.auditTableCell}>
+                    <Text style={styles.auditTableHeaderText}>ဥက္ကဌ</Text>
+                  </View>
+                  <View style={styles.auditTableCell}>
+                    <Text style={styles.auditTableHeaderText}>မှတ်ချက်</Text>
+                  </View>
+                </View>
+                {fieldDefs.map((field, index) => (
+                  <View key={field.key} style={styles.auditTableRow}>
+                    <View style={[styles.auditTableCell, styles.auditTableLabelCell]}>
+                      <Text style={styles.auditTableLabelText}>{field.label}</Text>
+                    </View>
+                    <View style={styles.auditTableCell}>
+                      <Text style={styles.auditTableValue}>{formatFieldValue(getOriginalValue(field.key), field)}</Text>
+                    </View>
+                    <View style={styles.auditTableCell}>{renderDraftCell("treasurer", field)}</View>
+                    <View style={styles.auditTableCell}>{renderDraftCell("auditor", field)}</View>
+                    <View style={styles.auditTableCell}>{renderDraftCell("chairperson", field)}</View>
+                    <View style={styles.auditTableCell}>
+                      <Text style={styles.auditTableNoteText}>{index === 0 ? notePreview : "-"}</Text>
+                    </View>
+                  </View>
+                ))}
               </View>
             </ScrollView>
+
+            {activeDatePicker ? (
+              <DateTimePicker
+                value={ymdToDate(String(getDraftValue(activeDatePicker.role, activeDatePicker.fieldKey) || ""))}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                onChange={handleDatePicked}
+              />
+            ) : null}
 
             <Text style={styles.sectionLabel}>Decision Note</Text>
             <TextInput
@@ -1149,6 +1377,11 @@ export default function AuditChangeRequestsScreen() {
                   </Pressable>
                 </View>
                 <View style={styles.actionRow}>
+                  <Pressable style={[styles.actionBtn, { backgroundColor: "#F59E0B" }]} onPress={() => void submitStatus("suspended")}>
+                    <Text style={styles.actionBtnText}>ဆိုင်းငံ့မည်</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.actionRow}>
                   <Pressable style={[styles.actionBtn, { backgroundColor: "#475569" }]} onPress={() => void submitReturnToAuditor()}>
                     <Text style={styles.actionBtnText}>စာရင်းစစ်ထံ ပြန်ပို့</Text>
                   </Pressable>
@@ -1161,7 +1394,7 @@ export default function AuditChangeRequestsScreen() {
 
             {canTreasurerApplyUpdate ? (
               <View style={styles.actionRow}>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={openFixModal}>
+                <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={() => void submitApplyDraftPatch()}>
                   <Text style={styles.actionBtnText}>ပြင်ဆင်ပြီး အတည်ပြု</Text>
                 </Pressable>
                 <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B" }]} onPress={() => void submitNoChangeApproval()}>
@@ -1284,34 +1517,42 @@ export default function AuditChangeRequestsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal animationType="slide" transparent visible={showFixModal} onRequestClose={() => setShowFixModal(false)}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
-          style={styles.modalOverlay}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowFixModal(false)} />
-          <ScrollView style={styles.modalCard} contentContainerStyle={{ paddingBottom: insets.bottom + 16 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalTitle}>မှတ်တမ်းတိုက်ရိုက်ပြင်ဆင်ရန်</Text>
-            <Text style={styles.sectionLabel}>ပေးသွင်းသူ/ထုတ်ယူသူ</Text>
-            <TextInput style={styles.input} value={fixPayerPayee} onChangeText={setFixPayerPayee} />
-            <Text style={styles.sectionLabel}>ပမာဏ</Text>
-            <TextInput style={styles.input} value={fixAmount} onChangeText={setFixAmount} keyboardType="decimal-pad" />
-            <Text style={styles.sectionLabel}>ရက်စွဲ</Text>
-            <TextInput style={styles.input} value={fixDate} onChangeText={setFixDate} placeholder="YYYY-MM-DD" />
-            <Text style={styles.sectionLabel}>ပြေစာအမှတ်</Text>
-            <TextInput style={styles.input} value={fixReceipt} onChangeText={setFixReceipt} />
-            <Text style={styles.sectionLabel}>မှတ်ချက်</Text>
-            <TextInput style={[styles.input, styles.noteInput]} value={fixNotes} onChangeText={setFixNotes} multiline />
-
-            <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981", marginTop: 8 }]} onPress={() => void submitFix()}>
-              <Text style={styles.actionBtnText}>ပြင်ဆင်ချက် အတည်ပြုမည်</Text>
+      <Modal animationType="fade" transparent visible={showMemberPicker} onRequestClose={() => setShowMemberPicker(false)}>
+        <View style={styles.pickerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowMemberPicker(false)} />
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle}>အသင်းဝင်ရွေးရန်</Text>
+            <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
+              {memberOptions.map((member) => {
+                const selected = String(member.id || "") === String(getDraftValue(memberPickerRole || "treasurer", memberPickerField) || "");
+                return (
+                  <Pressable
+                    key={member.id}
+                    style={[styles.pickerItem, selected && styles.pickerItemActive]}
+                    onPress={() => {
+                      if (!memberPickerRole) return;
+                      updateDraftValue(memberPickerRole, memberPickerField, member.id);
+                      setShowMemberPicker(false);
+                    }}
+                  >
+                    <Text style={[styles.pickerItemText, selected && styles.pickerItemTextActive]}>
+                      {member.name} ({member.id})
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              {memberOptions.length === 0 ? (
+                <View style={styles.emptyWrap}>
+                  <Ionicons name="people-outline" size={24} color={Colors.light.textSecondary} />
+                  <Text style={styles.emptyText}>အသင်းဝင်စာရင်းမရှိပါ</Text>
+                </View>
+              ) : null}
+            </ScrollView>
+            <Pressable style={styles.closeBtn} onPress={() => setShowMemberPicker(false)}>
+              <Text style={styles.closeBtnText}>Close</Text>
             </Pressable>
-            <Pressable style={styles.closeBtn} onPress={() => setShowFixModal(false)}>
-              <Text style={styles.closeBtnText}>Cancel</Text>
-            </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
+          </View>
+        </View>
       </Modal>
 
       <Modal animationType="slide" transparent visible={showCreateDeleteModal} onRequestClose={() => setShowCreateDeleteModal(false)}>
@@ -1644,6 +1885,82 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 22, color: Colors.light.text, fontFamily: "Inter_700Bold", marginBottom: 8 },
   modalMeta: { fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", marginBottom: 4 },
   sectionLabel: { marginTop: 12, marginBottom: 6, color: Colors.light.text, fontFamily: "Inter_600SemiBold", fontSize: 13 },
+  auditTable: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+    minWidth: 920,
+  },
+  auditTableRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  auditTableHeaderRow: {
+    backgroundColor: "#F1F5F9",
+  },
+  auditTableCell: {
+    minWidth: 140,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRightWidth: 1,
+    borderRightColor: Colors.light.border,
+    justifyContent: "center",
+  },
+  auditTableLabelCell: {
+    minWidth: 160,
+  },
+  auditTableHeaderText: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  auditTableLabelText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  auditTableValue: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
+  auditTableNoteText: {
+    fontSize: 11.5,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.textSecondary,
+  },
+  auditTableInput: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    color: Colors.light.text,
+    backgroundColor: "#fff",
+  },
+  auditTablePicker: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+    backgroundColor: "#fff",
+  },
+  auditTablePickerText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
   compareRow: { gap: 12, paddingBottom: 4 },
   compareCol: {
     width: 220,

@@ -22,6 +22,7 @@ import type {
   AuditExecutionLog,
   AuditChangeRequestStatus,
   AuditChangeMessageType,
+  AuditChangeDrafts,
   ExpenseClaim,
   MemberPaymentRequest,
   MemberPaymentRequestKind,
@@ -107,6 +108,8 @@ interface DataContextValue {
     createdByUserId: string;
     createdByMemberId?: string;
     createdByDisplayName?: string;
+    drafts?: AuditChangeDrafts;
+    tagUserIds?: string[];
   }) => Promise<AuditChangeRequest>;
   addAuditChangeRequestMessage: (input: {
     requestId: string;
@@ -136,6 +139,15 @@ interface DataContextValue {
     byDisplayName?: string;
     patch: Record<string, any>;
     note?: string;
+  }) => Promise<void>;
+  saveAuditChangeRequestDraft: (input: {
+    requestId: string;
+    role: "treasurer" | "auditor" | "chairperson";
+    values: Record<string, any>;
+    note?: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
   }) => Promise<void>;
   deleteAuditChangeRequestsForTesting: (input: {
     requestIds: string[];
@@ -765,6 +777,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createdByUserId: string;
     createdByMemberId?: string;
     createdByDisplayName?: string;
+    drafts?: AuditChangeDrafts;
+    tagUserIds?: string[];
   }) => {
     const req = await store.createAuditChangeRequest(input);
     await refreshData({ skipPull: true });
@@ -809,6 +823,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
     note?: string;
   }) => {
     await store.applyAuditChangeRequestPatch(input);
+    await refreshData({ skipPull: true });
+  };
+
+  const saveAuditChangeRequestDraft = async (input: {
+    requestId: string;
+    role: "treasurer" | "auditor" | "chairperson";
+    values: Record<string, any>;
+    note?: string;
+    byUserId: string;
+    byMemberId?: string;
+    byDisplayName?: string;
+  }) => {
+    await store.saveAuditChangeRequestDraft(input);
     await refreshData({ skipPull: true });
   };
 
@@ -1154,6 +1181,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     createMemberChangeRequest, approveMemberChangeRequest, rejectMemberChangeRequest,
     withdrawMemberChangeRequest, assignMemberChangeRequest,
     createAuditChangeRequest, addAuditChangeRequestMessage, changeAuditChangeRequestStatus, applyAuditChangeRequestPatch,
+    saveAuditChangeRequestDraft,
     deleteAuditChangeRequestsForTesting,
     forwardAuditChangeRequestToChair, sendAuditRequestBackToTreasurer, sendAuditRequestBackToAuditor, chairReviewAuditRequest,
     forwardDeleteAuditRequestToChair, chairReviewDeleteAuditRequest, confirmDeleteAuditRequestExecution,

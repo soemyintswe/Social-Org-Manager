@@ -386,6 +386,21 @@ export interface AuditChangeRevision {
   createdAt: string;
 }
 
+export interface AuditChangeDraft {
+  values: Record<string, any>;
+  note?: string;
+  byUserId?: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  updatedAt: string;
+}
+
+export type AuditChangeDrafts = Partial<{
+  treasurer: AuditChangeDraft;
+  auditor: AuditChangeDraft;
+  chairperson: AuditChangeDraft;
+}>;
+
 export type AuditExecutionAction = "update_applied" | "delete_executed";
 
 export interface AuditExecutionLog {
@@ -440,6 +455,7 @@ export interface AuditChangeRequest {
   resolvedTransactionId?: string;
   messages: AuditChangeRequestMessage[];
   revisions: AuditChangeRevision[];
+  drafts?: AuditChangeDrafts;
 }
 
 export type AppNotificationCategory =

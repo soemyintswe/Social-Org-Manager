@@ -21,6 +21,7 @@ import {
   AuditChangeRequestMessage,
   AuditChangeRequestStatus,
   AuditChangeMessageType,
+  AuditChangeDrafts,
   AuditChangeRevision,
   AuditExecutionLog,
   AuditChangeRequestKind,
@@ -693,8 +694,6 @@ export async function deleteAuditChangeRequestsForTesting(input: {
   byDisplayName?: string;
 }): Promise<{ removedIds: string[] }> {
   const ids = new Set((input.requestIds || []).map((id) => String(id || "").trim()).filter(Boolean));
-  if (ids.size === 0) return { removedIds: [] };
-
   const [requests, notifications, executionLogs, transactions] = await Promise.all([
     getAuditChangeRequests(),
     getNotifications(),
@@ -702,24 +701,37 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     getTransactions(),
   ]);
 
+  const shouldRemoveAll = ids.size === 0;
   const removedRequests = (Array.isArray(requests) ? requests : []).filter((row: any) => {
+    if (shouldRemoveAll) return true;
     const rowId = String(row?.id || "").trim();
     const rowNo = String(row?.requestNumber || "").trim();
     return (rowId && ids.has(rowId)) || (rowNo && ids.has(rowNo));
   });
-  if (removedRequests.length === 0) return { removedIds: [] };
+  const totalRequestCount = Array.isArray(requests) ? requests.length : 0;
+  const removeAllArtifacts = shouldRemoveAll || (totalRequestCount > 0 && removedRequests.length === totalRequestCount);
+  if (!removeAllArtifacts && removedRequests.length === 0) return { removedIds: [] };
 
   const removedIdSet = new Set(removedRequests.map((row: any) => String(row?.id || "").trim()).filter(Boolean));
   const removedNoSet = new Set(removedRequests.map((row: any) => String(row?.requestNumber || "").trim()).filter(Boolean));
 
-  const remainingRequests = (Array.isArray(requests) ? requests : []).filter((row: any) => {
-    const rowId = String(row?.id || "").trim();
-    const rowNo = String(row?.requestNumber || "").trim();
-    if (rowId && (removedIdSet.has(rowId) || ids.has(rowId))) return false;
-    if (rowNo && (removedNoSet.has(rowNo) || ids.has(rowNo))) return false;
-    return true;
-  });
+  const remainingRequests = removeAllArtifacts
+    ? []
+    : (Array.isArray(requests) ? requests : []).filter((row: any) => {
+        const rowId = String(row?.id || "").trim();
+        const rowNo = String(row?.requestNumber || "").trim();
+        if (rowId && (removedIdSet.has(rowId) || ids.has(rowId))) return false;
+        if (rowNo && (removedNoSet.has(rowNo) || ids.has(rowNo))) return false;
+        return true;
+      });
   const remainingNotifications = (Array.isArray(notifications) ? notifications : []).filter((row: any) => {
+    if (removeAllArtifacts) {
+      const category = String(row?.category || "");
+      const relatedType = String(row?.relatedType || "");
+      if (category === "audit_change" || category === "delete_request" || relatedType === "audit_change_request") {
+        return false;
+      }
+    }
     const relatedId = String(row?.relatedId || "");
     if (relatedId && (removedIdSet.has(relatedId) || ids.has(relatedId))) return false;
     const title = String(row?.title || "");
@@ -728,15 +740,15 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     }
     return true;
   });
-  const remainingLogs = (Array.isArray(executionLogs) ? executionLogs : []).filter(
-    (log: any) => {
-      const reqId = String(log?.requestId || "").trim();
-      const reqNo = String(log?.requestNumber || "").trim();
-      if (reqId && (removedIdSet.has(reqId) || ids.has(reqId))) return false;
-      if (reqNo && (removedNoSet.has(reqNo) || ids.has(reqNo))) return false;
-      return true;
-    }
-  );
+  const remainingLogs = removeAllArtifacts
+    ? []
+    : (Array.isArray(executionLogs) ? executionLogs : []).filter((log: any) => {
+        const reqId = String(log?.requestId || "").trim();
+        const reqNo = String(log?.requestNumber || "").trim();
+        if (reqId && (removedIdSet.has(reqId) || ids.has(reqId))) return false;
+        if (reqNo && (removedNoSet.has(reqNo) || ids.has(reqNo))) return false;
+        return true;
+      });
 
   const targetTxnIds = new Set<string>();
   removedRequests.forEach((req: any) => {
@@ -1431,18 +1443,28 @@ function makePaymentRequestNumber(existing: MemberPaymentRequest[]): string {
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
 
-function makeAuditChangeRequestNumber(existing: AuditChangeRequest[]): string {
+function makeAuditChangeRequestNumber(
+  existing: AuditChangeRequest[],
+  tombstones?: { numberSet: Set<string> }
+): string {
   const today = new Date();
   const ymd = toYmd(today).replace(/-/g, "");
   const prefix = `AR-${ymd}-`;
-  let max = 0;
-  for (const item of existing) {
-    const value = String(item.requestNumber || "");
-    if (!value.startsWith(prefix)) continue;
+  const used = new Set<number>();
+  const capture = (value: string) => {
+    if (!value.startsWith(prefix)) return;
     const seq = Number(value.slice(prefix.length));
-    if (Number.isFinite(seq) && seq > max) max = seq;
+    if (Number.isFinite(seq) && seq > 0) used.add(seq);
+  };
+  for (const item of existing) {
+    capture(String(item.requestNumber || ""));
   }
-  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+  if (tombstones?.numberSet) {
+    tombstones.numberSet.forEach((value) => capture(String(value || "")));
+  }
+  let next = 1;
+  while (used.has(next)) next += 1;
+  return `${prefix}${String(next).padStart(4, "0")}`;
 }
 
 const AUDIT_PATCH_ALLOWED_FIELDS = [
@@ -1749,13 +1771,16 @@ export async function createAuditChangeRequest(input: {
   createdByUserId: string;
   createdByMemberId?: string;
   createdByDisplayName?: string;
+  drafts?: AuditChangeDrafts;
+  tagUserIds?: string[];
 }): Promise<AuditChangeRequest> {
-  const [requests, transactions, loans, deleteIndex, initiatorRole] = await Promise.all([
+  const [requests, transactions, loans, deleteIndex, initiatorRole, cleanupTombstones] = await Promise.all([
     getAuditChangeRequests(),
     getTransactions(),
     getLoans(),
     buildDeletedTargetIndexFromStorage(),
     resolveAuditInitiatorRole({ createdByUserId: input.createdByUserId, createdByMemberId: input.createdByMemberId }),
+    getAuditTestCleanupTombstones(),
   ]);
   const requestKind: AuditChangeRequestKind = normalizeAuditRequestKind(input.requestKind);
   const resolvedTargetType: AuditChangeTargetType = requestKind === "delete"
@@ -1817,12 +1842,13 @@ export async function createAuditChangeRequest(input: {
     byMemberId: input.createdByMemberId,
     byDisplayName: input.createdByDisplayName?.trim() || undefined,
     toRole: initialAssignedRole,
+    tagUserIds: input.tagUserIds && input.tagUserIds.length ? Array.from(new Set(input.tagUserIds)) : undefined,
     createdAt: now,
   };
 
   const request: AuditChangeRequest = {
     id: requestId,
-    requestNumber: makeAuditChangeRequestNumber(requests),
+    requestNumber: makeAuditChangeRequestNumber(requests, cleanupTombstones),
     requestKind,
     targetType: resolvedTargetType,
     targetId,
@@ -1840,6 +1866,7 @@ export async function createAuditChangeRequest(input: {
     assignedRole: initialAssignedRole,
     messages: [message],
     revisions: [],
+    drafts: input.drafts && Object.keys(input.drafts).length ? input.drafts : undefined,
   };
 
   await saveAuditChangeRequests([request, ...requests]);
@@ -2172,6 +2199,43 @@ export async function sendAuditRequestBackToAuditor(input: {
     relatedType: "audit_change_request",
     relatedId: req.id,
   });
+}
+
+export async function saveAuditChangeRequestDraft(input: {
+  requestId: string;
+  role: "treasurer" | "auditor" | "chairperson";
+  values: Record<string, any>;
+  note?: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  const now = new Date().toISOString();
+  const role = input.role;
+
+  const nextDraft = {
+    values: { ...(input.values || {}) },
+    note: String(input.note || "").trim() || undefined,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    updatedAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    drafts: {
+      ...(req.drafts || {}),
+      [role]: nextDraft,
+    },
+    updatedAt: now,
+  };
+
+  await saveAuditChangeRequests(requests);
 }
 
 export async function forwardDeleteAuditRequestToChair(input: {
