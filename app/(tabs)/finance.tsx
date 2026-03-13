@@ -13,6 +13,7 @@ import {
   TextInput,
   InteractionManager,
   KeyboardAvoidingView,
+  Keyboard,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -438,6 +439,10 @@ export default function FinanceScreen() {
     const [deleteRequestNote, setDeleteRequestNote] = useState("");
     const [deleteRequestSubmitting, setDeleteRequestSubmitting] = useState(false);
     const [deleteRequestSubmitError, setDeleteRequestSubmitError] = useState<string | null>(null);
+    const [deleteRequestSubmitStatus, setDeleteRequestSubmitStatus] = useState<{
+      type: "success" | "error";
+      message: string;
+    } | null>(null);
     const [deleteRequestDraftValues, setDeleteRequestDraftValues] = useState<Record<string, any>>({});
     const [deleteRequestActiveDateField, setDeleteRequestActiveDateField] = useState<string | null>(null);
     const [showDeleteRequestMemberPicker, setShowDeleteRequestMemberPicker] = useState(false);
@@ -671,6 +676,7 @@ export default function FinanceScreen() {
       setDeleteRequestLoan(null);
       setDeleteRequestNote("");
       setDeleteRequestSubmitError(null);
+      setDeleteRequestSubmitStatus(null);
       setDeleteRequestDraftValues({});
       setDeleteRequestTagIds([]);
       setShowDeleteRequestModal(true);
@@ -682,9 +688,28 @@ export default function FinanceScreen() {
       setDeleteRequestLoan(loan);
       setDeleteRequestNote("");
       setDeleteRequestSubmitError(null);
+      setDeleteRequestSubmitStatus(null);
       setDeleteRequestDraftValues({});
       setDeleteRequestTagIds([]);
       setShowDeleteRequestModal(true);
+    };
+
+    const resetDeleteRequestModal = () => {
+      setShowDeleteRequestModal(false);
+      setDeleteRequestTxn(null);
+      setDeleteRequestLoan(null);
+      setDeleteRequestNote("");
+      setDeleteRequestDraftValues({});
+      setDeleteRequestTagIds([]);
+      setDeleteRequestSubmitStatus(null);
+    };
+
+    const handleDeleteRequestStatusOk = () => {
+      const status = deleteRequestSubmitStatus;
+      setDeleteRequestSubmitStatus(null);
+      if (status?.type === "success") {
+        resetDeleteRequestModal();
+      }
     };
 
     const buildDeleteRequestDrafts = (): AuditChangeDrafts | undefined => {
@@ -714,7 +739,9 @@ export default function FinanceScreen() {
 
     const submitDeleteRequest = async () => {
       if (!currentUser?.id) {
-        setDeleteRequestSubmitError("အသုံးပြုသူမရှိပါ။");
+        const message = "အသုံးပြုသူမရှိပါ။";
+        setDeleteRequestSubmitError(message);
+        setDeleteRequestSubmitStatus({ type: "error", message });
         return;
       }
       if (deleteRequestSubmitting) return;
@@ -722,14 +749,13 @@ export default function FinanceScreen() {
       if (!note) {
         const message = "Delete Request အကြောင်းပြချက် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။";
         setDeleteRequestSubmitError(message);
-        if (!showWebAlert(message)) {
-          Alert.alert("လိုအပ်ချက်", message);
-        }
+        setDeleteRequestSubmitStatus({ type: "error", message });
         return;
       }
 
       try {
         setDeleteRequestSubmitError(null);
+        setDeleteRequestSubmitStatus(null);
         setDeleteRequestSubmitting(true);
         const drafts = buildDeleteRequestDrafts();
         const tagUserIds = resolveDeleteRequestTagUserIds();
@@ -771,43 +797,27 @@ export default function FinanceScreen() {
           });
         }
 
-        const handleDone = () => {
-          setShowDeleteRequestModal(false);
-          setDeleteRequestTxn(null);
-          setDeleteRequestLoan(null);
-          setDeleteRequestNote("");
-          setDeleteRequestDraftValues({});
-          setDeleteRequestTagIds([]);
-        };
-        if (showWebAlert("Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။")) {
-          handleDone();
-        } else {
-          Alert.alert("ပို့ပြီးပါပြီ", "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။", [
-            { text: "OK", onPress: handleDone },
-          ]);
-        }
+        setDeleteRequestSubmitStatus({
+          type: "success",
+          message: "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။",
+        });
       } catch (error: any) {
         const reason = String(error?.message || "");
         if (reason.includes("request_conflict_in_progress")) {
           const message = "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။";
           setDeleteRequestSubmitError(message);
-          if (!showWebAlert(message)) {
-            Alert.alert("မရပါ", message);
-          }
+          setDeleteRequestSubmitStatus({ type: "error", message });
           return;
         }
         if (reason.includes("already_deleted")) {
           const message = "ဤစာရင်းသည် ပယ်ဖျက်ပြီးဖြစ်သောကြောင့် Delete Request ထပ်မတင်နိုင်ပါ။";
           setDeleteRequestSubmitError(message);
-          if (!showWebAlert(message)) {
-            Alert.alert("မရပါ", message);
-          }
+          setDeleteRequestSubmitStatus({ type: "error", message });
           return;
         }
-        setDeleteRequestSubmitError("Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
-        if (!showWebAlert("Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။")) {
-          Alert.alert("အမှား", "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။");
-        }
+        const message = "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။";
+        setDeleteRequestSubmitError(message);
+        setDeleteRequestSubmitStatus({ type: "error", message });
       } finally {
         setDeleteRequestSubmitting(false);
       }
@@ -2645,9 +2655,25 @@ export default function FinanceScreen() {
               {deleteRequestSubmitError ? (
                 <Text style={styles.submitErrorText}>{deleteRequestSubmitError}</Text>
               ) : null}
+              {deleteRequestSubmitStatus ? (
+                <View
+                  style={[
+                    styles.submitStatusBox,
+                    deleteRequestSubmitStatus.type === "success" ? styles.submitStatusSuccess : styles.submitStatusError,
+                  ]}
+                >
+                  <Text style={styles.submitStatusText}>{deleteRequestSubmitStatus.message}</Text>
+                  <Pressable style={styles.submitStatusOkBtn} onPress={handleDeleteRequestStatusOk}>
+                    <Text style={styles.submitStatusOkText}>OK</Text>
+                  </Pressable>
+                </View>
+              ) : null}
               <Pressable
                 style={[styles.saveBtn, { backgroundColor: "#D97706" }, deleteRequestSubmitting && styles.saveBtnDisabled]}
-                onPress={submitDeleteRequest}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  submitDeleteRequest();
+                }}
                 disabled={deleteRequestSubmitting}
               >
                 {deleteRequestSubmitting ? (
@@ -3527,6 +3553,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
     color: "#B91C1C",
+  },
+  submitStatusBox: {
+    marginTop: 10,
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    gap: 8,
+  },
+  submitStatusSuccess: {
+    backgroundColor: "#ECFDF3",
+    borderColor: "#86EFAC",
+  },
+  submitStatusError: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+  },
+  submitStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  submitStatusOkBtn: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.light.tint,
+  },
+  submitStatusOkText: {
+    color: "#fff",
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
   },
   memberOptionRow: {
     paddingVertical: 10,

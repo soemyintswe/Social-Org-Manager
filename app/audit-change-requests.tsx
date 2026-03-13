@@ -24,7 +24,34 @@ import { normalizeOrgPosition, type AuditChangeRequestStatus, type AuditChangeWo
 
 const STATUS_ORDER: AuditChangeRequestStatus[] = ["pending", "suspended", "approved", "rejected", "cancelled"];
 type DraftRoleKey = "treasurer" | "auditor" | "chairperson";
-type AuditFieldType = "text" | "date" | "amount" | "member" | "payment" | "readonly";
+type AuditFieldType = "text" | "date" | "amount" | "member" | "payment" | "readonly" | "recordType" | "category";
+
+type CategoryFilterOption = { id: string; label: string };
+
+const INCOME_CATEGORY_FILTERS: CategoryFilterOption[] = [
+  { id: "member_fees", label: "လစဉ်ကြေးရငွေ" },
+  { id: "donations", label: "အလှူငွေရရှိ" },
+  { id: "bank_interest", label: "ဘဏ်တိုးရငွေ" },
+  { id: "other_income", label: "အခြားရငွေ" },
+  { id: "loan_repayment", label: "ချေးငွေပြန်ဆပ်ရရှိငွေ" },
+  { id: "interest_income", label: "အတိုးရငွေ" },
+];
+const EXPENSE_CATEGORY_FILTERS: CategoryFilterOption[] = [
+  { id: "health_support", label: "ကျန်းမာရေးထောက်ပံ့ငွေ" },
+  { id: "education_support", label: "ပညာရေးထောက်ပံ့ငွေ" },
+  { id: "funeral_support", label: "နာရေးကူညီငွေ" },
+  { id: "loan_disbursement", label: "ချေးငွေထုတ်ပေးငွေ" },
+  { id: "bank_fees", label: "ဘဏ်စရိတ်ပေးငွေ" },
+  { id: "general_expense", label: "အထွေထွေအသုံးစရိတ်" },
+  { id: "other_expense", label: "အခြားအသုံးစရိတ်" },
+  { id: "entertainment", label: "ဧည့်ခံစရိတ်" },
+  { id: "donation_expense", label: "လှူဒါန်းငွေ" },
+];
+const TRANSFER_CATEGORY_FILTERS: CategoryFilterOption[] = [
+  { id: "bank_deposit", label: "ဘဏ်သို့ ငွေသွင်းခြင်း (Deposit)" },
+  { id: "bank_withdraw", label: "ဘဏ်မှ ငွေထုတ်ခြင်း (Withdraw)" },
+  { id: "bank_interest", label: "ဘဏ်တိုးရငွေ (Bank Interest)" },
+];
 
 const DRAFT_ROLE_LABELS: Record<DraftRoleKey, string> = {
   treasurer: "ဘဏ္ဍာရေးမှူး",
@@ -133,6 +160,11 @@ export default function AuditChangeRequestsScreen() {
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [memberPickerRole, setMemberPickerRole] = useState<DraftRoleKey | null>(null);
   const [memberPickerField, setMemberPickerField] = useState<string>("");
+  const [showOptionPicker, setShowOptionPicker] = useState(false);
+  const [optionPickerRole, setOptionPickerRole] = useState<DraftRoleKey | null>(null);
+  const [optionPickerField, setOptionPickerField] = useState<string>("");
+  const [optionPickerTitle, setOptionPickerTitle] = useState("");
+  const [optionPickerItems, setOptionPickerItems] = useState<CategoryFilterOption[]>([]);
   const draftSaveTimers = React.useRef<Record<string, any>>({});
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
@@ -437,10 +469,11 @@ export default function AuditChangeRequestsScreen() {
   };
 
   const txnFieldDefs: { key: string; label: string; type: AuditFieldType }[] = [
-    { key: "categoryLabel", label: "အမျိုးအစား", type: "text" },
+    { key: "type", label: "စာရင်းအမျိုးအစား", type: "recordType" },
+    { key: "category", label: "အမျိုးအစား", type: "category" },
     { key: "description", label: "အကြောင်းအရာ", type: "text" },
     { key: "memberId", label: "အသင်းဝင်", type: "member" },
-    { key: "payerPayee", label: "ပေးသွင်းသူ", type: "text" },
+    { key: "payerPayee", label: "ပေးသွင်းသူ", type: "member" },
     { key: "date", label: "ရက်စွဲ", type: "date" },
     { key: "amount", label: "ပမာဏ", type: "amount" },
     { key: "paymentMethod", label: "ငွေပေးချေမှု", type: "payment" },
@@ -466,21 +499,18 @@ export default function AuditChangeRequestsScreen() {
   const canEditTreasurerDraft =
     isTreasurer &&
     !!selectedRequest &&
-    !isDeleteRequest &&
     (!selectedRequest.workflowStage ||
       selectedRequest.workflowStage === "treasurer_execution" ||
       selectedRequest.workflowStage === "pending");
   const canEditAuditorDraft =
     isAuditor &&
     !!selectedRequest &&
-    !isDeleteRequest &&
     (!selectedRequest.workflowStage ||
       selectedRequest.workflowStage === "auditor_review" ||
       selectedRequest.workflowStage === "pending");
   const canEditChairDraft =
     isChair &&
     !!selectedRequest &&
-    !isDeleteRequest &&
     (!selectedRequest.workflowStage ||
       selectedRequest.workflowStage === "chair_approval" ||
       selectedRequest.workflowStage === "pending");
@@ -496,8 +526,42 @@ export default function AuditChangeRequestsScreen() {
     [members]
   );
 
+  const categoryLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    [...INCOME_CATEGORY_FILTERS, ...EXPENSE_CATEGORY_FILTERS, ...TRANSFER_CATEGORY_FILTERS].forEach((opt) => {
+      map.set(String(opt.id || "").toLowerCase(), opt.label);
+    });
+    return map;
+  }, []);
+
+  const getCategoryOptionsForType = (recordType: string) => {
+    if (recordType === "expense") return EXPENSE_CATEGORY_FILTERS;
+    if (recordType === "transfer") return TRANSFER_CATEGORY_FILTERS;
+    return INCOME_CATEGORY_FILTERS;
+  };
+
+  const getEffectiveRecordType = (role: DraftRoleKey) => {
+    const raw = String(getDraftValue(role, "type") || "").toLowerCase() || String(getOriginalValue("type") || "").toLowerCase();
+    return raw === "expense" || raw === "transfer" ? raw : "income";
+  };
+
   const formatFieldValue = (value: any, field: { key: string; type: AuditFieldType }) => {
     if (value == null || value === "") return "-";
+    if (field.type === "recordType") {
+      const v = String(value || "").toLowerCase();
+      if (v === "expense") return "အသုံးစာရင်း";
+      if (v === "transfer") return "ဘဏ်သွင်း/ဘဏ်ထုတ်";
+      return "ရငွေစာရင်း";
+    }
+    if (field.type === "payment") {
+      const v = String(value || "").toLowerCase();
+      return v === "bank" ? "ဘဏ် (Bank)" : "ငွေသား (Cash)";
+    }
+    if (field.type === "category") {
+      const v = String(value || "").toLowerCase();
+      const label = categoryLabelById.get(v) || String((compareOriginal as any)?.categoryLabel || "");
+      return label || String(value || "-");
+    }
     if (field.type === "amount") {
       const n = Number(value);
       return Number.isFinite(n) ? `${n.toLocaleString()} KS` : String(value);
@@ -505,6 +569,7 @@ export default function AuditChangeRequestsScreen() {
     if (field.type === "member") {
       const id = String(value || "");
       const name = memberNameById.get(id);
+      if (field.key === "payerPayee") return String(value || "-");
       return name ? `${name} (${id})` : id || "-";
     }
     if (Array.isArray(value)) return value.join(", ");
@@ -520,6 +585,10 @@ export default function AuditChangeRequestsScreen() {
         base?.linkedTransactionIds ||
         (selectedRequest?.relatedLoanId ? [selectedRequest.relatedLoanId] : []);
       return related || [];
+    }
+    if (fieldKey === "category") {
+      const base = compareOriginal as any;
+      return base?.category || base?.categoryLabel || "";
     }
     return (compareOriginal as any)?.[fieldKey];
   };
@@ -548,9 +617,20 @@ export default function AuditChangeRequestsScreen() {
     }, 450);
   };
 
-  const updateDraftValue = (role: DraftRoleKey, fieldKey: string, value: any) => {
+  const updateDraftValue = (role: DraftRoleKey, fieldKey: string, value: any, label?: string) => {
     setDraftEdits((prev) => {
       const nextRole = { ...(prev[role] || {}), [fieldKey]: value };
+      if (fieldKey === "type") {
+        const nextType = String(value || "").toLowerCase();
+        const options = getCategoryOptionsForType(nextType);
+        if (!options.find((opt) => opt.id === String(nextRole.category || ""))) {
+          nextRole.category = options[0]?.id || "";
+          nextRole.categoryLabel = options[0]?.label || "";
+        }
+      }
+      if (fieldKey === "category") {
+        nextRole.categoryLabel = label || nextRole.categoryLabel;
+      }
       scheduleDraftSave(role, nextRole);
       return { ...prev, [role]: nextRole };
     });
@@ -577,6 +657,19 @@ export default function AuditChangeRequestsScreen() {
     setShowMemberPicker(true);
   };
 
+  const openOptionPicker = (
+    role: DraftRoleKey,
+    fieldKey: string,
+    title: string,
+    items: CategoryFilterOption[]
+  ) => {
+    setOptionPickerRole(role);
+    setOptionPickerField(fieldKey);
+    setOptionPickerTitle(title);
+    setOptionPickerItems(items);
+    setShowOptionPicker(true);
+  };
+
   const notePreview = latestMessageNote || selectedRequest?.auditNote || "-";
 
   const renderDraftCell = (role: DraftRoleKey, field: { key: string; label: string; type: AuditFieldType }) => {
@@ -586,8 +679,8 @@ export default function AuditChangeRequestsScreen() {
         : role === "auditor"
           ? canEditAuditorDraft
           : canEditChairDraft;
-    const rawValue = getDraftValue(role, field.key);
-    if (isDeleteRequest || field.type === "readonly") {
+    const rawValue = getDraftValue(role, field.key) ?? getOriginalValue(field.key);
+    if (field.type === "readonly") {
       return <Text style={styles.auditTableValue}>{formatFieldValue(rawValue, field)}</Text>;
     }
     if (!canEdit) {
@@ -597,6 +690,53 @@ export default function AuditChangeRequestsScreen() {
     if (field.type === "member") {
       return (
         <Pressable style={styles.auditTablePicker} onPress={() => openMemberSelect(role, field.key)}>
+          <Text style={styles.auditTablePickerText}>{formatFieldValue(rawValue, field)}</Text>
+          <Ionicons name="chevron-down" size={14} color={Colors.light.textSecondary} />
+        </Pressable>
+      );
+    }
+    if (field.type === "recordType") {
+      return (
+        <Pressable
+          style={styles.auditTablePicker}
+          onPress={() =>
+            openOptionPicker(role, field.key, "စာရင်းအမျိုးအစား", [
+              { id: "income", label: "ရငွေစာရင်း" },
+              { id: "expense", label: "အသုံးစာရင်း" },
+              { id: "transfer", label: "ဘဏ်သွင်း/ဘဏ်ထုတ်" },
+            ])
+          }
+        >
+          <Text style={styles.auditTablePickerText}>{formatFieldValue(rawValue, field)}</Text>
+          <Ionicons name="chevron-down" size={14} color={Colors.light.textSecondary} />
+        </Pressable>
+      );
+    }
+    if (field.type === "payment") {
+      return (
+        <Pressable
+          style={styles.auditTablePicker}
+          onPress={() =>
+            openOptionPicker(role, field.key, "ငွေပေးချေမှု ပုံစံ", [
+              { id: "cash", label: "ငွေသား (Cash)" },
+              { id: "bank", label: "ဘဏ် (Bank)" },
+            ])
+          }
+        >
+          <Text style={styles.auditTablePickerText}>{formatFieldValue(rawValue, field)}</Text>
+          <Ionicons name="chevron-down" size={14} color={Colors.light.textSecondary} />
+        </Pressable>
+      );
+    }
+    if (field.type === "category") {
+      const recordType = getEffectiveRecordType(role);
+      return (
+        <Pressable
+          style={styles.auditTablePicker}
+          onPress={() =>
+            openOptionPicker(role, field.key, "အမျိုးအစားရွေးချယ်ရန်", getCategoryOptionsForType(recordType))
+          }
+        >
           <Text style={styles.auditTablePickerText}>{formatFieldValue(rawValue, field)}</Text>
           <Ionicons name="chevron-down" size={14} color={Colors.light.textSecondary} />
         </Pressable>
@@ -1529,11 +1669,16 @@ export default function AuditChangeRequestsScreen() {
                   <Pressable
                     key={member.id}
                     style={[styles.pickerItem, selected && styles.pickerItemActive]}
-                    onPress={() => {
-                      if (!memberPickerRole) return;
-                      updateDraftValue(memberPickerRole, memberPickerField, member.id);
-                      setShowMemberPicker(false);
-                    }}
+                onPress={() => {
+                  if (!memberPickerRole) return;
+                  const field = memberPickerField;
+                  if (field === "payerPayee") {
+                    updateDraftValue(memberPickerRole, field, member.name || member.id);
+                  } else {
+                    updateDraftValue(memberPickerRole, field, member.id);
+                  }
+                  setShowMemberPicker(false);
+                }}
                   >
                     <Text style={[styles.pickerItemText, selected && styles.pickerItemTextActive]}>
                       {member.name} ({member.id})
@@ -1549,6 +1694,47 @@ export default function AuditChangeRequestsScreen() {
               ) : null}
             </ScrollView>
             <Pressable style={styles.closeBtn} onPress={() => setShowMemberPicker(false)}>
+              <Text style={styles.closeBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="fade" transparent visible={showOptionPicker} onRequestClose={() => setShowOptionPicker(false)}>
+        <View style={styles.pickerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowOptionPicker(false)} />
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle}>{optionPickerTitle || "ရွေးချယ်ရန်"}</Text>
+            <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
+              {optionPickerItems.map((item) => {
+                const selected =
+                  String(item.id || "") ===
+                  String(
+                    getDraftValue(optionPickerRole || "treasurer", optionPickerField) ||
+                      ""
+                  );
+                return (
+                  <Pressable
+                    key={item.id}
+                    style={[styles.pickerItem, selected && styles.pickerItemActive]}
+                    onPress={() => {
+                      if (!optionPickerRole) return;
+                      updateDraftValue(optionPickerRole, optionPickerField, item.id, item.label);
+                      setShowOptionPicker(false);
+                    }}
+                  >
+                    <Text style={[styles.pickerItemText, selected && styles.pickerItemTextActive]}>{item.label}</Text>
+                  </Pressable>
+                );
+              })}
+              {optionPickerItems.length === 0 ? (
+                <View style={styles.emptyWrap}>
+                  <Ionicons name="list-outline" size={24} color={Colors.light.textSecondary} />
+                  <Text style={styles.emptyText}>ရွေးချယ်စရာမရှိပါ</Text>
+                </View>
+              ) : null}
+            </ScrollView>
+            <Pressable style={styles.closeBtn} onPress={() => setShowOptionPicker(false)}>
               <Text style={styles.closeBtnText}>Close</Text>
             </Pressable>
           </View>
