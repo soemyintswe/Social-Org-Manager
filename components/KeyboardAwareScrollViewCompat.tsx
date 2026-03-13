@@ -1,5 +1,5 @@
 // template
-import { Platform, ScrollView, ScrollViewProps, KeyboardAvoidingView } from "react-native";
+import { ScrollView, ScrollViewProps } from "react-native";
 
 type Props = ScrollViewProps & { bottomOffset?: number };
 

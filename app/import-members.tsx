@@ -6,7 +6,6 @@ import {
   TextInput,
   Pressable,
   Alert,
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -52,7 +51,7 @@ export default function ImportMembersScreen() {
         },
         { text: "OK" },
       ]);
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "Backup ပြုလုပ်မရနိုင်ပါ။");
     }
   };

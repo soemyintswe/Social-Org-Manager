@@ -86,14 +86,14 @@ interface OrgEventNotice {
   funeralMemorialTime?: string;
   readBy?: Record<string, { userId: string; memberId?: string; displayName?: string; readAt: string }>;
   reactions?: Record<string, "like" | "love" | "sad">;
-  comments?: Array<{
+  comments?: {
     id: string;
     userId: string;
     memberId?: string;
     displayName?: string;
     message: string;
     createdAt: string;
-  }>;
+  }[];
 }
 
 const CUSTOM_TOPIC_KEY = "@org_notice_custom_topics";
@@ -305,6 +305,64 @@ export default function EventsScreen() {
       ["1", "true", "yes", "open"].includes(String(params?.openCreate || "").trim().toLowerCase()));
   const claimPrefillTopic = mapClaimCategoryToTopic(String(params?.claimCategory || ""));
 
+  const resetForm = useCallback(() => {
+    setEditingId(null);
+    setTopic(PRESET_TOPICS[0]);
+    setSummary("");
+    setDetail("");
+    setEventDate(formatYmd(new Date()));
+    setEventTime(formatHm(new Date()));
+    setEventLocation("");
+    setEventLocationMapUrl("");
+    setImages([]);
+    setNewCustomTopic("");
+    setNewCustomRelation("");
+    setNewCustomCondition("");
+    setSelectedSubjectMemberId(currentUser?.memberId || "");
+    setSubjectMemberNameInput(String(currentMemberRecord?.name || currentUser?.displayName || ""));
+    setSubjectMemberIdInput(String(currentMemberRecord?.id || currentUser?.memberId || ""));
+    setHealthPatientName("");
+    setHealthPatientMemberId("");
+    setHealthPatientAge("");
+    setHealthRelation(PRESET_RELATIONS[0]);
+    setHealthIllnessSummary("");
+    setHealthCondition(PRESET_HEALTH_CONDITIONS[0]);
+    setHealthTreatmentType("hospital");
+    setHealthFacilityName("");
+    setHealthFacilityLocation("");
+    setHealthFacilityMapUrl("");
+    setHealthStartDate(formatYmd(new Date()));
+    setHealthEndDate("");
+    setHealthProgressStatus("ကုသနေဆဲ");
+    setFuneralDeceasedName("");
+    setFuneralAge("");
+    setFuneralDeceasedDate(formatYmd(new Date()));
+    setFuneralRelation(PRESET_RELATIONS[0]);
+    setFuneralIllnessSummary("");
+    setFuneralBurialDate(formatYmd(new Date()));
+    setFuneralBurialTime(formatHm(new Date()));
+    setFuneralCemetery("");
+    setFuneralCemeteryMapUrl("");
+    setFuneralTransportLocation("");
+    setFuneralTransportMapUrl("");
+    setFuneralTransportDate(formatYmd(new Date()));
+    setFuneralTransportTime(formatHm(new Date()));
+    setFuneralMemorialLocation("");
+    setFuneralMemorialMapUrl("");
+    setFuneralMemorialDate(formatYmd(new Date()));
+    setFuneralMemorialTime(formatHm(new Date()));
+    setSelectedSenderMemberId(currentUser?.memberId || "");
+    setSenderNameInput(currentUser?.displayName || "");
+    setSenderMemberIdInput(currentUser?.memberId || "");
+    setSenderPhoneInput(String(currentMemberRecord?.phone || ""));
+  }, [
+    currentUser?.memberId,
+    currentUser?.displayName,
+    currentMemberRecord?.name,
+    currentMemberRecord?.id,
+    currentMemberRecord?.phone,
+  ]);
+
   useEffect(() => {
     if (!launchedFromClaim || claimPrefillApplied) return;
     if (!canCreateEvent) {
@@ -316,7 +374,7 @@ export default function EventsScreen() {
     if (claimPrefillTopic) setTopic(claimPrefillTopic);
     setModalVisible(true);
     setClaimPrefillApplied(true);
-  }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic]);
+  }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic, resetForm]);
 
   useEffect(() => {
     if (!launchedFromQuickAction || quickCreateApplied) return;
@@ -328,7 +386,7 @@ export default function EventsScreen() {
     resetForm();
     setModalVisible(true);
     setQuickCreateApplied(true);
-  }, [launchedFromQuickAction, quickCreateApplied, canCreateEvent]);
+  }, [launchedFromQuickAction, quickCreateApplied, canCreateEvent, resetForm]);
 
   useEffect(() => {
     let mounted = true;
@@ -420,58 +478,6 @@ export default function EventsScreen() {
       ),
     [events]
   );
-
-  const resetForm = () => {
-    setEditingId(null);
-    setTopic(PRESET_TOPICS[0]);
-    setSummary("");
-    setDetail("");
-    setEventDate(formatYmd(new Date()));
-    setEventTime(formatHm(new Date()));
-    setEventLocation("");
-    setEventLocationMapUrl("");
-    setImages([]);
-    setNewCustomTopic("");
-    setNewCustomRelation("");
-    setNewCustomCondition("");
-    setSelectedSubjectMemberId(currentUser?.memberId || "");
-    setSubjectMemberNameInput(String(currentMemberRecord?.name || currentUser?.displayName || ""));
-    setSubjectMemberIdInput(String(currentMemberRecord?.id || currentUser?.memberId || ""));
-    setHealthPatientName("");
-    setHealthPatientMemberId("");
-    setHealthPatientAge("");
-    setHealthRelation(PRESET_RELATIONS[0]);
-    setHealthIllnessSummary("");
-    setHealthCondition(PRESET_HEALTH_CONDITIONS[0]);
-    setHealthTreatmentType("hospital");
-    setHealthFacilityName("");
-    setHealthFacilityLocation("");
-    setHealthFacilityMapUrl("");
-    setHealthStartDate(formatYmd(new Date()));
-    setHealthEndDate("");
-    setHealthProgressStatus("ကုသနေဆဲ");
-    setFuneralDeceasedName("");
-    setFuneralAge("");
-    setFuneralDeceasedDate(formatYmd(new Date()));
-    setFuneralRelation(PRESET_RELATIONS[0]);
-    setFuneralIllnessSummary("");
-    setFuneralBurialDate(formatYmd(new Date()));
-    setFuneralBurialTime(formatHm(new Date()));
-    setFuneralCemetery("");
-    setFuneralCemeteryMapUrl("");
-    setFuneralTransportLocation("");
-    setFuneralTransportMapUrl("");
-    setFuneralTransportDate(formatYmd(new Date()));
-    setFuneralTransportTime(formatHm(new Date()));
-    setFuneralMemorialLocation("");
-    setFuneralMemorialMapUrl("");
-    setFuneralMemorialDate(formatYmd(new Date()));
-    setFuneralMemorialTime(formatHm(new Date()));
-    setSelectedSenderMemberId(currentUser?.memberId || "");
-    setSenderNameInput(currentUser?.displayName || "");
-    setSenderMemberIdInput(currentUser?.memberId || "");
-    setSenderPhoneInput(String(currentMemberRecord?.phone || ""));
-  };
 
   const pickImages = async () => {
     try {

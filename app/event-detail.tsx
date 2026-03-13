@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { secureRandomToken } from "@/lib/secure-random";
 
 interface OrgEventNotice {
   id: string;
@@ -214,7 +215,7 @@ export default function EventDetailScreen() {
       });
       try {
         await editEvent(String(id), { comments: next });
-      } catch (error) {
+      } catch {
         setCommentText(draftText);
         setCommentImage(draftImage);
         setReplyTarget(draftReply);
@@ -230,7 +231,7 @@ export default function EventDetailScreen() {
           comments: [
             ...comments,
             {
-              id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              id: `${Date.now()}_${secureRandomToken(6)}`,
               userId: actorUserId,
               memberId: actorMemberId || undefined,
               displayName: actorDisplayName || undefined,
@@ -244,7 +245,7 @@ export default function EventDetailScreen() {
             },
           ],
         });
-      } catch (error) {
+      } catch {
         setCommentText(draftText);
         setCommentImage(draftImage);
         setReplyTarget(draftReply);

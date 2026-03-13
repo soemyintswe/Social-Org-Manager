@@ -233,14 +233,14 @@ export default function ExpenseClaimsScreen() {
     if (claimRule && claimRule.enabled && Number(claimRule.amount || 0) > 0) {
       setRequestedAmount(String(claimRule.amount));
     }
-  }, [claimRule?.key, claimRule?.amount, claimRule?.enabled]);
+  }, [claimRule]);
 
   useEffect(() => {
     if (!selectedEvent) return;
     if (normalizeText(reason)) return;
     const text = normalizeText(selectedEvent?.summary) || normalizeText(selectedEvent?.detail) || normalizeText(selectedEvent?.description);
     if (text) setReason(text);
-  }, [selectedEvent?.id]);
+  }, [selectedEvent, reason]);
 
   const visibleClaims = useMemo(() => {
     const rows: ExpenseClaim[] = [...(expenseClaims || [])].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -291,18 +291,9 @@ export default function ExpenseClaimsScreen() {
     };
   }, [
     claimantType,
-    currentMember?.name,
-    currentMember?.id,
-    currentMember?.nrc,
-    currentMember?.phone,
-    (currentMember as any)?.address,
-    currentUser?.displayName,
-    currentUser?.memberId,
-    selectedMember?.name,
-    selectedMember?.id,
-    selectedMember?.nrc,
-    selectedMember?.phone,
-    (selectedMember as any)?.address,
+    currentMember,
+    currentUser,
+    selectedMember,
     familyClaimantName,
     manualName,
     manualNrc,

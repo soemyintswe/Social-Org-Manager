@@ -25,7 +25,6 @@ export default function RequestsScreen() {
   const [activeTab, setActiveTab] = useState<"member" | "audit">("member");
 
   const canApproveMemberChanges = can("members.approve_changes");
-  const canProposeMemberChanges = can("members.propose_changes");
   const canViewAuditRequests =
     can("finance.view_all") ||
     can("finance.view_detail") ||

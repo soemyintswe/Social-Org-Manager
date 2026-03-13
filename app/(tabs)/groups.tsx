@@ -55,7 +55,7 @@ function GroupCard({ group, memberCount, onPress, onDelete }: {
 
 export default function GroupsScreen() {
   const insets = useSafeAreaInsets();
-  const { groups, members, removeGroup, loading } = useData();
+  const { groups, removeGroup, loading } = useData();
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   if (loading) {

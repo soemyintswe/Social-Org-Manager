@@ -105,7 +105,7 @@ export default function AddLoanScreen() {
       Alert.alert("အောင်မြင်ပါသည်", "ချေးငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
 
-    } catch (error) {
+    } catch {
       Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);

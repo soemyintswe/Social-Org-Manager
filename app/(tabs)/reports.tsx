@@ -38,6 +38,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
+import { secureRandomToken } from "@/lib/secure-random";
 import AccessDenied from "@/components/AccessDenied";
 import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
 import { toEnglishDigits } from "@/lib/member-utils";
@@ -2211,7 +2212,7 @@ export default function ReportsScreen() {
     if (newRateScope === "member") {
       selectedMemberIds.forEach((memberId, index) => {
         nextRateRules.push({
-          id: `fee-rate-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          id: `fee-rate-${Date.now()}-${index}-${secureRandomToken(6)}`,
           scope: "member",
           ...baseRule,
           memberId,
@@ -2220,7 +2221,7 @@ export default function ReportsScreen() {
       });
     } else {
       nextRateRules.push({
-        id: `fee-rate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: `fee-rate-${Date.now()}-${secureRandomToken(6)}`,
         scope: newRateScope,
         ...baseRule,
       } as MonthlyFeeRateRule);
@@ -2279,7 +2280,7 @@ export default function ReportsScreen() {
     if (newReliefScope === "member") {
       selectedMemberIds.forEach((memberId, index) => {
         nextReliefRules.push({
-          id: `fee-relief-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          id: `fee-relief-${Date.now()}-${index}-${secureRandomToken(6)}`,
           scope: "member",
           ...baseRule,
           memberId,
@@ -2288,7 +2289,7 @@ export default function ReportsScreen() {
       });
     } else {
       nextReliefRules.push({
-        id: `fee-relief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: `fee-relief-${Date.now()}-${secureRandomToken(6)}`,
         scope: newReliefScope,
         ...baseRule,
       } as MonthlyFeeReliefRule);

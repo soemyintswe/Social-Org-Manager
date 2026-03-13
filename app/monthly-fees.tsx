@@ -7,6 +7,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { isCommitteePosition } from "@/lib/access-control";
+import { secureRandomToken } from "@/lib/secure-random";
 import {
   MonthlyFeePolicyRequest,
   MonthlyFeeRateRule,
@@ -96,7 +97,7 @@ function monthKey(year: number, monthIdx: number): string {
 }
 
 function requestId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${prefix}-${Date.now()}-${secureRandomToken(6)}`;
 }
 
 function MemberNamesReadMore({

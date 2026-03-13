@@ -742,7 +742,7 @@ export default function DashboardScreen() {
       const isExpoGo = Constants.appOwnership === 'expo';
       if (upcomingBirthdays.length > 0 && Platform.OS !== 'web' && !(Platform.OS === 'android' && isExpoGo)) {
         try {
-          const Notifications = require('expo-notifications');
+          const Notifications = await import("expo-notifications");
           
           Notifications.setNotificationHandler({
             handleNotification: async () => ({
@@ -792,7 +792,7 @@ export default function DashboardScreen() {
       if (!currentUser?.id) return;
       if (!Array.isArray(events) || events.length === 0) return;
       try {
-        const Notifications = require('expo-notifications');
+        const Notifications = await import("expo-notifications");
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,
@@ -864,7 +864,7 @@ export default function DashboardScreen() {
       if (!me) return;
       if (!Array.isArray(notifications) || notifications.length === 0) return;
       try {
-        const Notifications = require("expo-notifications");
+        const Notifications = await import("expo-notifications");
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,
@@ -947,7 +947,7 @@ export default function DashboardScreen() {
       if (!me) return;
       if (!Array.isArray(chatThreads) || !Array.isArray(chatMessages) || chatMessages.length === 0) return;
       try {
-        const Notifications = require("expo-notifications");
+        const Notifications = await import("expo-notifications");
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,
@@ -1036,7 +1036,7 @@ export default function DashboardScreen() {
       if (!currentUser?.id) return;
       if (!Array.isArray(events) || events.length === 0) return;
       try {
-        const Notifications = require('expo-notifications');
+        const Notifications = await import("expo-notifications");
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,

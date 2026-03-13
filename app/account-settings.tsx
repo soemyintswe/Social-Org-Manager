@@ -46,6 +46,36 @@ import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "
 const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
 const LAN_QR_PREFIX = "ORGHUB_LAN:";
 
+const normalizeUrl = (raw: string): string => {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  return withProtocol.replace(/\/+$/, "");
+};
+
+const encodeLanShareId = (url: string): string => {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return "";
+  const stripped = normalized.replace(/^https?:\/\//i, "");
+  const encoded = stripped
+    .replace(/\./g, "-")
+    .replace(/:/g, "_")
+    .replace(/\//g, "~");
+  return `LAN-${encoded}`;
+};
+
+const decodeLanShareId = (input: string): string => {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  const cleaned = raw.toUpperCase().startsWith("LAN-") ? raw.slice(4) : raw;
+  if (!cleaned) return "";
+  const restored = cleaned
+    .replace(/~/g, "/")
+    .replace(/_/g, ":")
+    .replace(/-/g, ".");
+  return normalizeUrl(restored);
+};
+
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { accountSettings, updateAccountSettings, refreshData, createDirectChatThread, sendChatMessage } = useData();
@@ -69,11 +99,7 @@ export default function AccountSettingsScreen() {
   const [resettingPassword, setResettingPassword] = useState(false);
   const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
   const [syncEnabled, setSyncEnabled] = useState(accountSettings.syncEnabled !== false);
-  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(accountSettings.cloudSyncEnabled === true);
   const [cloudSyncEndpoint, setCloudSyncEndpoint] = useState(accountSettings.cloudSyncEndpoint || DEFAULT_CLOUD_SYNC_ENDPOINT);
-  const [cloudSyncApiKey, setCloudSyncApiKey] = useState(accountSettings.cloudSyncApiKey || "");
-  const [cloudSyncGoogleAccountEmail, setCloudSyncGoogleAccountEmail] = useState(accountSettings.cloudSyncGoogleAccountEmail || "");
-  const [cloudSyncFolderName, setCloudSyncFolderName] = useState(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
   const [receivingBankName, setReceivingBankName] = useState(accountSettings.receivingBankName || "");
   const [receivingBankAccountNumber, setReceivingBankAccountNumber] = useState(accountSettings.receivingBankAccountNumber || "");
   const [receivingBankAccountName, setReceivingBankAccountName] = useState(accountSettings.receivingBankAccountName || "");
@@ -119,36 +145,6 @@ export default function AccountSettingsScreen() {
     return `ORG${token}${suffix}`;
   };
 
-  const normalizeUrl = (raw: string): string => {
-    const trimmed = String(raw || "").trim();
-    if (!trimmed) return "";
-    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-    return withProtocol.replace(/\/+$/, "");
-  };
-
-  const encodeLanShareId = (url: string): string => {
-    const normalized = normalizeUrl(url);
-    if (!normalized) return "";
-    const stripped = normalized.replace(/^https?:\/\//i, "");
-    const encoded = stripped
-      .replace(/\./g, "-")
-      .replace(/:/g, "_")
-      .replace(/\//g, "~");
-    return `LAN-${encoded}`;
-  };
-
-  const decodeLanShareId = (input: string): string => {
-    const raw = String(input || "").trim();
-    if (!raw) return "";
-    const cleaned = raw.toUpperCase().startsWith("LAN-") ? raw.slice(4) : raw;
-    if (!cleaned) return "";
-    const restored = cleaned
-      .replace(/~/g, "/")
-      .replace(/_/g, ":")
-      .replace(/-/g, ".");
-    return normalizeUrl(restored);
-  };
-
   const syncSourceLabel = (source: "managed_remote_config" | "local_settings" | "default"): string => {
     if (source === "managed_remote_config") return "Firebase Remote Config";
     if (source === "local_settings") return "Local Account Settings";
@@ -179,11 +175,7 @@ export default function AccountSettingsScreen() {
   React.useEffect(() => {
     setSyncServerUrl(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
     setSyncEnabled(accountSettings.syncEnabled !== false);
-    setCloudSyncEnabled(accountSettings.cloudSyncEnabled === true);
     setCloudSyncEndpoint(accountSettings.cloudSyncEndpoint || DEFAULT_CLOUD_SYNC_ENDPOINT);
-    setCloudSyncApiKey(accountSettings.cloudSyncApiKey || "");
-    setCloudSyncGoogleAccountEmail(accountSettings.cloudSyncGoogleAccountEmail || "");
-    setCloudSyncFolderName(accountSettings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
     setReceivingBankName(accountSettings.receivingBankName || "");
     setReceivingBankAccountNumber(accountSettings.receivingBankAccountNumber || "");
     setReceivingBankAccountName(accountSettings.receivingBankAccountName || "");
@@ -199,11 +191,7 @@ export default function AccountSettingsScreen() {
   }, [
     accountSettings.syncServerUrl,
     accountSettings.syncEnabled,
-    accountSettings.cloudSyncEnabled,
     accountSettings.cloudSyncEndpoint,
-    accountSettings.cloudSyncApiKey,
-    accountSettings.cloudSyncGoogleAccountEmail,
-    accountSettings.cloudSyncFolderName,
     accountSettings.receivingBankName,
     accountSettings.receivingBankAccountNumber,
     accountSettings.receivingBankAccountName,
@@ -331,7 +319,10 @@ export default function AccountSettingsScreen() {
     return `${LAN_QR_PREFIX}${normalized}`;
   }, [syncServerUrl]);
 
-  const lanShareId = useMemo(() => encodeLanShareId(syncServerUrl || DEFAULT_LAN_SYNC_URL), [syncServerUrl]);
+  const lanShareId = useMemo(
+    () => encodeLanShareId(syncServerUrl || DEFAULT_LAN_SYNC_URL),
+    [syncServerUrl]
+  );
 
   const handleApplyLanShareId = () => {
     const resolved = decodeLanShareId(lanShareIdInput);

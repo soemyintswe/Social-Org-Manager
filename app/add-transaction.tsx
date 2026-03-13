@@ -200,7 +200,7 @@ export default function AddTransactionScreen() {
       try {
         const stored = await AsyncStorage.getItem("@custom_categories");
         if (stored) setCustomCategories(JSON.parse(stored));
-      } catch (e) {}
+      } catch {}
     };
     loadCustomCategories();
   }, []);
@@ -296,7 +296,7 @@ export default function AddTransactionScreen() {
       }
       Alert.alert("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
-    } catch (error) {
+    } catch {
       Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);

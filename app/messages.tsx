@@ -162,7 +162,7 @@ export default function MessagesScreen() {
         });
       }
       await markChatThreadRead(selectedThreadId, meUserId);
-    } catch (error) {
+    } catch {
       setMessageText(draftText);
       setMessageImage(draftImage);
       setReplyTarget(draftReply);

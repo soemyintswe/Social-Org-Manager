@@ -1,3 +1,5 @@
+import { secureRandomInt } from "./secure-random";
+
 export type SyncQueueJobOptions = {
   attempts?: number;
   baseDelayMs?: number;
@@ -11,7 +13,8 @@ function sleep(ms: number): Promise<void> {
 function backoffDelay(attempt: number, baseDelayMs: number, maxDelayMs: number): number {
   const exp = Math.min(attempt, 8);
   const raw = baseDelayMs * Math.pow(2, exp);
-  const jitter = Math.floor(raw * 0.2 * Math.random());
+  const jitterFactor = secureRandomInt(1000) / 1000;
+  const jitter = Math.floor(raw * 0.2 * jitterFactor);
   return Math.min(maxDelayMs, raw + jitter);
 }
 

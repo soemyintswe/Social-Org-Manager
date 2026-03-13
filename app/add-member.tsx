@@ -25,6 +25,7 @@ import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { isCommitteePosition } from "@/lib/access-control";
 import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
+import { secureRandomInt, secureRandomToken } from "@/lib/secure-random";
 import {
   ORG_POSITION_LABELS,
   OrgPosition,
@@ -110,7 +111,7 @@ function toFamilyFormRows(input: unknown): FamilyFormMember[] {
       const name = String(item.name || "").trim();
       if (!name) return null;
       return {
-        _localId: String(item.id || `fm-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`),
+        _localId: String(item.id || `fm-${Date.now()}-${index}-${secureRandomToken(6)}`),
         id: item.id ? String(item.id) : undefined,
         name,
         gender: item.gender === "male" || item.gender === "female" || item.gender === "other" ? item.gender : "other",
@@ -199,7 +200,7 @@ export default function AddMemberScreen() {
     setFamilyMembers((prev) => [
       ...prev,
       {
-        _localId: `fm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        _localId: `fm-${Date.now()}-${secureRandomToken(6)}`,
         name: "",
         gender: "other",
         relation: "",
@@ -348,7 +349,7 @@ export default function AddMemberScreen() {
     try {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+      const randomColor = AVATAR_COLORS[secureRandomInt(AVATAR_COLORS.length)];
 
       const memberData: any = {
         id: memberId,
