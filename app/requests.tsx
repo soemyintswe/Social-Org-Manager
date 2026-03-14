@@ -152,12 +152,21 @@ export default function RequestsScreen() {
               <Text style={styles.emptyText}>Request မရှိသေးပါ။</Text>
             ) : (
               auditRequests.slice(0, 8).map((row: any) => (
-                <View key={row.id} style={styles.listCard}>
+                <Pressable
+                  key={row.id}
+                  style={styles.listCard}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/audit-change-requests",
+                      params: { requestId: String(row?.id || "") },
+                    } as any)
+                  }
+                >
                   <Text style={styles.listTitle}>{String(row?.requestNumber || row?.id || "Audit Request")}</Text>
                   <Text style={styles.listMeta}>Type: {String(row?.requestKind || "update")} • Status: {String(row?.status || "pending")}</Text>
                   {!!row?.amount && <Text style={styles.listMeta}>Amount: {Number(row?.amount || 0).toLocaleString()} KS</Text>}
                   {!!row?.createdAt && <Text style={styles.listMeta}>Date: {formatDateTime(row?.createdAt)}</Text>}
-                </View>
+                </Pressable>
               ))
             )}
           </>

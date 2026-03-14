@@ -809,6 +809,12 @@ export default function FinanceScreen() {
           setDeleteRequestSubmitStatus({ type: "error", message });
           return;
         }
+        if (reason.includes("request_finalized_locked")) {
+          const message = "ဤစာရင်းကို ဥက္ကဌဆုံးဖြတ်ပြီးဖြစ်သောကြောင့် Request ထပ်မတင်နိုင်ပါ။";
+          setDeleteRequestSubmitError(message);
+          setDeleteRequestSubmitStatus({ type: "error", message });
+          return;
+        }
         if (reason.includes("already_deleted")) {
           const message = "ဤစာရင်းသည် ပယ်ဖျက်ပြီးဖြစ်သောကြောင့် Delete Request ထပ်မတင်နိုင်ပါ။";
           setDeleteRequestSubmitError(message);

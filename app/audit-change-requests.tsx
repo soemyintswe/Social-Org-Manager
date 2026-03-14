@@ -62,7 +62,7 @@ const DRAFT_ROLE_LABELS: Record<DraftRoleKey, string> = {
 function statusLabel(status: AuditChangeRequestStatus): string {
   if (status === "pending") return "စောင့်ဆိုင်း";
   if (status === "approved") return "လက်ခံပြီး";
-  if (status === "rejected") return "ကန့်ကွက်";
+  if (status === "rejected") return "ခွင့်မပြု";
   if (status === "cancelled") return "ရုပ်သိမ်း";
   if (status === "suspended") return "ဆိုင်းငံ့";
   return status;
@@ -279,7 +279,20 @@ export default function AuditChangeRequestsScreen() {
 
   const visibleExecutionLogs = useMemo(() => {
     const list = Array.isArray(auditExecutionLogs) ? [...auditExecutionLogs] : [];
-    list.sort((a: any, b: any) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime());
+    const statusWeight = (status?: AuditChangeRequestStatus) => {
+      if (status === "pending") return 0;
+      if (status === "suspended") return 1;
+      if (status === "approved") return 2;
+      if (status === "rejected") return 3;
+      if (status === "cancelled") return 4;
+      return 5;
+    };
+    list.sort((a: any, b: any) => {
+      const wa = statusWeight(a?.statusAtExecution as AuditChangeRequestStatus);
+      const wb = statusWeight(b?.statusAtExecution as AuditChangeRequestStatus);
+      if (wa !== wb) return wa - wb;
+      return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
+    });
     if (canView) return list;
     const myId = String(currentUser?.id || "");
     return list.filter((row: any) => String(row?.byUserId || "") === myId);
@@ -895,21 +908,61 @@ export default function AuditChangeRequestsScreen() {
     setTagUserIds([]);
   };
 
+  const handleAuditRequestError = (error: any) => {
+    const reason = String(error?.message || error || "").trim();
+    if (!reason) {
+      Alert.alert("မအောင်မြင်ပါ", "လုပ်ဆောင်ရာတွင် အမှားရှိပါသည်။");
+      return;
+    }
+    if (reason.includes("duplicate_receipt")) {
+      return Alert.alert(
+        "ပြေစာအမှတ် ထပ်နေပါသည်",
+        "ပြေစာအမှတ် ထပ်နေပါသည်။ မတူညီသော ပြေစာအမှတ် သို့မဟုတ် A/B ကဲ့သို့ suffix ထည့်ပြီး ပြန်လည်ကြိုးစားပါ။"
+      );
+    }
+    if (reason.includes("request_finalized_locked")) {
+      return Alert.alert("တင်လို့မရပါ", "ဤစာရင်းတွင် ဥက္ကဌဆုံးဖြတ်ပြီးဖြစ်သောကြောင့် Request ထပ်မလုပ်နိုင်ပါ။");
+    }
+    if (reason.includes("request_not_ready_for_execution")) {
+      return Alert.alert("လုပ်ဆောင်လို့မရပါ", "လုပ်ငန်းစဉ်အဆင့် မပြည့်သေးပါ။");
+    }
+    if (reason.includes("invalid_stage")) {
+      return Alert.alert("လုပ်ဆောင်လို့မရပါ", "လုပ်ငန်းစဉ်အဆင့် မမှန်ပါ။");
+    }
+    if (reason.includes("note_required")) {
+      return Alert.alert("လိုအပ်ချက်", "မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
+    }
+    Alert.alert("မအောင်မြင်ပါ", reason);
+  };
+
+  const runAuditAction = async (fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (error: any) {
+      handleAuditRequestError(error);
+    }
+  };
+
   const submitStatus = async (status: AuditChangeRequestStatus) => {
     if (!selectedRequest || !currentUser?.id) return;
     const note = decisionNote.trim();
-    await changeAuditChangeRequestStatus({
-      requestId: selectedRequest.id,
-      status,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      note,
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await changeAuditChangeRequestStatus({
+        requestId: selectedRequest.id,
+        status,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note,
+        tagUserIds: tagTargets,
+      });
+      setDecisionNote("");
+      setTagUserIds([]);
+      if (["approved", "rejected", "cancelled"].includes(status)) {
+        setShowDetailModal(false);
+      }
     });
-    setDecisionNote("");
-    if (["approved", "rejected", "cancelled"].includes(status)) {
-      setShowDetailModal(false);
-    }
   };
 
   const submitForwardToChair = async () => {
@@ -918,15 +971,20 @@ export default function AuditChangeRequestsScreen() {
     if (!note) {
       return Alert.alert("လိုအပ်ချက်", "Chair ထံတင်ပြရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
-    await forwardAuditChangeRequestToChair({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      note,
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await forwardAuditChangeRequestToChair({
+        requestId: selectedRequest.id,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note,
+        tagUserIds: tagTargets,
+      });
+      setMessageNote("");
+      setDecisionNote("");
+      setTagUserIds([]);
     });
-    setMessageNote("");
-    setDecisionNote("");
   };
 
   const submitChairDecision = async (approved: boolean) => {
@@ -954,15 +1012,20 @@ export default function AuditChangeRequestsScreen() {
     if (!note) {
       return Alert.alert("လိုအပ်ချက်", "Treasurer ထံပြန်ပေးပို့ရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
-    await sendAuditRequestBackToTreasurer({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      note,
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await sendAuditRequestBackToTreasurer({
+        requestId: selectedRequest.id,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note,
+        tagUserIds: tagTargets,
+      });
+      setDecisionNote("");
+      setMessageNote("");
+      setTagUserIds([]);
     });
-    setDecisionNote("");
-    setMessageNote("");
   };
 
   const submitReturnToAuditor = async () => {
@@ -971,46 +1034,61 @@ export default function AuditChangeRequestsScreen() {
     if (!note) {
       return Alert.alert("လိုအပ်ချက်", "Audit ထံပြန်ပေးပို့ရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
-    await sendAuditRequestBackToAuditor({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      note,
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await sendAuditRequestBackToAuditor({
+        requestId: selectedRequest.id,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note,
+        tagUserIds: tagTargets,
+      });
+      setDecisionNote("");
+      setMessageNote("");
+      setTagUserIds([]);
     });
-    setDecisionNote("");
-    setMessageNote("");
   };
 
   const submitConfirmDeleteExecution = async () => {
     if (!selectedRequest || !currentUser?.id) return;
     const note = decisionNote.trim() || "ဥက္ကဌအတည်ပြုချက်အရ စာရင်းကို ပယ်ဖျက်ပြီးပါပြီ။";
-    await confirmDeleteAuditRequestExecution({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      note,
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await confirmDeleteAuditRequestExecution({
+        requestId: selectedRequest.id,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note,
+        tagUserIds: tagTargets,
+      });
+      setDecisionNote("");
+      setTagUserIds([]);
+      setShowDetailModal(false);
+      Alert.alert("ပြီးပါပြီ", "Delete ကိုအတည်ပြုပယ်ဖျက်ပြီးပါပြီ။");
     });
-    setDecisionNote("");
-    setShowDetailModal(false);
-    Alert.alert("ပြီးပါပြီ", "Delete ကိုအတည်ပြုပယ်ဖျက်ပြီးပါပြီ။");
   };
 
   const submitNoChangeApproval = async () => {
     if (!selectedRequest || !selectedTxn || !currentUser?.id) return;
     const note = decisionNote.trim() || "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပါသည်။";
-    await applyAuditChangeRequestPatch({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      patch: {},
-      note,
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await applyAuditChangeRequestPatch({
+        requestId: selectedRequest.id,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        patch: {},
+        note,
+        tagUserIds: tagTargets,
+      });
+      setDecisionNote("");
+      setTagUserIds([]);
+      setShowDetailModal(false);
+      Alert.alert("ပြီးပါပြီ", "ပြင်ဆင်စရာမရှိသဖြင့် အတည်ပြုပြီးပါပြီ။");
     });
-    setDecisionNote("");
-    setShowDetailModal(false);
-    Alert.alert("ပြီးပါပြီ", "ပြင်ဆင်စရာမရှိသဖြင့် အတည်ပြုပြီးပါပြီ။");
   };
   const buildPatchFromDrafts = () => {
     const chairDraft = selectedRequest?.drafts?.chairperson?.values || {};
@@ -1046,17 +1124,22 @@ export default function AuditChangeRequestsScreen() {
     if (Object.keys(patch).length === 0) {
       return Alert.alert("အချက်အလက်မပြောင်းပါ", "ပြင်ဆင်ချက်မရှိသေးပါ။");
     }
-    await applyAuditChangeRequestPatch({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      patch,
-      note: decisionNote.trim() || "Audit flag ကိုပြင်ဆင်ပြီး အတည်ပြုပါသည်။",
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(async () => {
+      await applyAuditChangeRequestPatch({
+        requestId: selectedRequest.id,
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        patch,
+        note: decisionNote.trim() || "Audit flag ကိုပြင်ဆင်ပြီး အတည်ပြုပါသည်။",
+        tagUserIds: tagTargets,
+      });
+      setShowDetailModal(false);
+      setDecisionNote("");
+      setTagUserIds([]);
+      Alert.alert("ပြီးပါပြီ", "စာရင်းပြင်ဆင်ချက်ကို အတည်ပြုပြီးပါပြီ။");
     });
-    setShowDetailModal(false);
-    setDecisionNote("");
-    Alert.alert("ပြီးပါပြီ", "စာရင်းပြင်ဆင်ချက်ကို အတည်ပြုပြီးပါပြီ။");
   };
 
   const selectedStage = String(selectedRequest?.workflowStage || "") as AuditChangeWorkflowStage;
@@ -1129,7 +1212,7 @@ export default function AuditChangeRequestsScreen() {
   const submitTestCleanup = async () => {
     if (!allowTestCleanup || testDeleteBusy) return;
     const totalCount = allRequests.length;
-    const useAll = selectedTestRequestIds.length === 0;
+    const useAll = testSelectMode || selectedTestRequestIds.length === 0;
     const deleteCount = useAll ? totalCount : selectedTestRequestIds.length;
     if (deleteCount === 0) {
       Alert.alert("မတွေ့ပါ", "ဖျက်ရန် Request မရှိပါ။");
@@ -1494,6 +1577,23 @@ export default function AuditChangeRequestsScreen() {
               onChangeText={setDecisionNote}
               placeholder="လက်ခံ/ကန့်ကွက်/ဆိုင်းငံ့ မှတ်ချက်"
             />
+            <Pressable style={styles.selectionInput} onPress={() => setShowTagPicker(true)}>
+              <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                {selectedTagUsers.length > 0
+                  ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
+                  : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
+              </Text>
+              <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
+            </Pressable>
+            {selectedTagUsers.length > 0 ? (
+              <View style={styles.tagPreviewWrap}>
+                {selectedTagUsers.map((user: any) => (
+                  <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
+                    <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
 
             {canAuditorForward ? (
               <View style={styles.actionRow}>
@@ -1582,23 +1682,6 @@ export default function AuditChangeRequestsScreen() {
                 </Text>
                 <Ionicons name="chevron-down" size={18} color={Colors.light.textSecondary} />
               </Pressable>
-            ) : null}
-            <Pressable style={styles.selectionInput} onPress={() => setShowTagPicker(true)}>
-              <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
-                {selectedTagUsers.length > 0
-                  ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
-                  : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
-              </Text>
-              <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
-            </Pressable>
-            {selectedTagUsers.length > 0 ? (
-              <View style={styles.tagPreviewWrap}>
-                {selectedTagUsers.map((user: any) => (
-                  <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
-                    <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
-                  </Pressable>
-                ))}
-              </View>
             ) : null}
             <View style={styles.actionRow}>
               <Pressable style={[styles.actionBtn, { backgroundColor: Colors.light.tint }]} onPress={() => void submitMessage(false)}>

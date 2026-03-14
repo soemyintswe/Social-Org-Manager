@@ -131,6 +131,7 @@ interface DataContextValue {
     byMemberId?: string;
     byDisplayName?: string;
     note?: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   applyAuditChangeRequestPatch: (input: {
     requestId: string;
@@ -139,6 +140,7 @@ interface DataContextValue {
     byDisplayName?: string;
     patch: Record<string, any>;
     note?: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   saveAuditChangeRequestDraft: (input: {
     requestId: string;
@@ -161,6 +163,7 @@ interface DataContextValue {
     byMemberId?: string;
     byDisplayName?: string;
     note: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   sendAuditRequestBackToTreasurer: (input: {
     requestId: string;
@@ -168,6 +171,7 @@ interface DataContextValue {
     byMemberId?: string;
     byDisplayName?: string;
     note: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   sendAuditRequestBackToAuditor: (input: {
     requestId: string;
@@ -175,6 +179,7 @@ interface DataContextValue {
     byMemberId?: string;
     byDisplayName?: string;
     note: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   chairReviewAuditRequest: (input: {
     requestId: string;
@@ -205,6 +210,7 @@ interface DataContextValue {
     byMemberId?: string;
     byDisplayName?: string;
     note?: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   createExpenseClaim: (input: Omit<ExpenseClaim, "id" | "claimNumber" | "status" | "createdAt" | "updatedAt">) => Promise<ExpenseClaim>;
   approveExpenseClaim: (input: { claimId: string; approverUserId: string; approvedAmount: number; approvalNote?: string }) => Promise<void>;
@@ -809,6 +815,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byMemberId?: string;
     byDisplayName?: string;
     note?: string;
+    tagUserIds?: string[];
   }) => {
     await store.changeAuditChangeRequestStatus(input);
     await refreshData({ skipPull: true });
@@ -821,6 +828,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byDisplayName?: string;
     patch: Record<string, any>;
     note?: string;
+    tagUserIds?: string[];
   }) => {
     await store.applyAuditChangeRequestPatch(input);
     await refreshData({ skipPull: true });
@@ -875,6 +883,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byMemberId?: string;
     byDisplayName?: string;
     note: string;
+    tagUserIds?: string[];
   }) => {
     await store.forwardAuditChangeRequestToChair(input);
     await refreshData({ skipPull: true });
@@ -886,6 +895,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byMemberId?: string;
     byDisplayName?: string;
     note: string;
+    tagUserIds?: string[];
   }) => {
     await store.sendAuditRequestBackToTreasurer(input);
     await refreshData({ skipPull: true });
@@ -897,6 +907,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byMemberId?: string;
     byDisplayName?: string;
     note: string;
+    tagUserIds?: string[];
   }) => {
     await store.sendAuditRequestBackToAuditor(input);
     await refreshData({ skipPull: true });
@@ -943,6 +954,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byMemberId?: string;
     byDisplayName?: string;
     note?: string;
+    tagUserIds?: string[];
   }) => {
     await store.confirmDeleteAuditRequestExecution(input);
     await refreshData({ skipPull: true });

@@ -1821,6 +1821,16 @@ export async function createAuditChangeRequest(input: {
   if (activeConflict) {
     throw new Error("request_conflict_in_progress");
   }
+  const finalizedConflict = requests.find((row: any) => {
+    const sameTarget =
+      String(row?.targetType || "") === resolvedTargetType &&
+      String(row?.targetId || "") === targetId;
+    if (!sameTarget) return false;
+    return ["approved", "rejected", "cancelled"].includes(String(row?.status || ""));
+  });
+  if (finalizedConflict) {
+    throw new Error("request_finalized_locked");
+  }
 
   const now = new Date().toISOString();
   const requestId = generateId();
@@ -1884,6 +1894,7 @@ export async function createAuditChangeRequest(input: {
     category: requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.createdByUserId,
     createdByMemberId: input.createdByMemberId,
+    targetUserIds: input.tagUserIds && input.tagUserIds.length ? Array.from(new Set(input.tagUserIds)) : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: request.id,
@@ -1968,6 +1979,7 @@ export async function changeAuditChangeRequestStatus(input: {
   byMemberId?: string;
   byDisplayName?: string;
   note?: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const requests = await getAuditChangeRequests();
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
@@ -1990,6 +2002,9 @@ export async function changeAuditChangeRequestStatus(input: {
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
     toRole: status === "suspended" ? "chairperson" : undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2036,6 +2051,9 @@ export async function changeAuditChangeRequestStatus(input: {
     category: "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
@@ -2048,6 +2066,7 @@ export async function forwardAuditChangeRequestToChair(input: {
   byMemberId?: string;
   byDisplayName?: string;
   note: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const requests = await getAuditChangeRequests();
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
@@ -2068,6 +2087,9 @@ export async function forwardAuditChangeRequestToChair(input: {
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
     toRole: "chairperson",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2089,6 +2111,9 @@ export async function forwardAuditChangeRequestToChair(input: {
     category: req.requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
@@ -2101,6 +2126,7 @@ export async function sendAuditRequestBackToTreasurer(input: {
   byMemberId?: string;
   byDisplayName?: string;
   note: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const requests = await getAuditChangeRequests();
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
@@ -2123,6 +2149,9 @@ export async function sendAuditRequestBackToTreasurer(input: {
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
     toRole: "treasurer",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2142,6 +2171,9 @@ export async function sendAuditRequestBackToTreasurer(input: {
     category: req.requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
@@ -2154,6 +2186,7 @@ export async function sendAuditRequestBackToAuditor(input: {
   byMemberId?: string;
   byDisplayName?: string;
   note: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const requests = await getAuditChangeRequests();
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
@@ -2176,6 +2209,9 @@ export async function sendAuditRequestBackToAuditor(input: {
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
     toRole: "auditor",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2195,6 +2231,9 @@ export async function sendAuditRequestBackToAuditor(input: {
     category: req.requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
@@ -2325,6 +2364,7 @@ export async function confirmDeleteAuditRequestExecution(input: {
   byMemberId?: string;
   byDisplayName?: string;
   note?: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const [requests, txns, loans, executionLogs] = await Promise.all([
     getAuditChangeRequests(),
@@ -2425,6 +2465,9 @@ export async function confirmDeleteAuditRequestExecution(input: {
     byUserId: input.byUserId,
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2461,6 +2504,9 @@ export async function confirmDeleteAuditRequestExecution(input: {
     category: "delete_request",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
@@ -2474,6 +2520,7 @@ export async function applyAuditChangeRequestPatch(input: {
   byDisplayName?: string;
   patch: Record<string, any>;
   note?: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const [requests, txns, executionLogs] = await Promise.all([
     getAuditChangeRequests(),
@@ -2494,6 +2541,16 @@ export async function applyAuditChangeRequestPatch(input: {
 
   const sanitizedPatch = sanitizeAuditPatch(input.patch || {});
   const hasPatchChanges = Object.keys(sanitizedPatch).length > 0;
+  const nextReceipt = String(sanitizedPatch.receiptNumber || "").trim();
+  const currentReceipt = String((currentTxn as any)?.receiptNumber || "").trim();
+  if (nextReceipt && nextReceipt.toLowerCase() !== currentReceipt.toLowerCase()) {
+    const duplicate = txns.find((row: any) => {
+      if (String(row?.id || "") === String(currentTxn?.id || "")) return false;
+      const existing = String(row?.receiptNumber || "").trim();
+      return existing && existing.toLowerCase() === nextReceipt.toLowerCase();
+    });
+    if (duplicate) throw new Error("duplicate_receipt");
+  }
 
   const before = pickTransactionAuditSnapshot(currentTxn);
   const afterTxn = {
@@ -2551,6 +2608,9 @@ export async function applyAuditChangeRequestPatch(input: {
     byUserId: input.byUserId,
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2584,6 +2644,9 @@ export async function applyAuditChangeRequestPatch(input: {
     category: "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,

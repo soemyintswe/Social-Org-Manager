@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.63",
-  "latestBuildNumber": "64",
+  "latestVersion": "1.1.64",
+  "latestBuildNumber": "65",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.63-202603140509.apk",
-  "notes": "Version 1.1.63: Delete Request submit flow improved with clear status/OK feedback. Audit/Delete detail table now pre-fills all role columns with original values and enables role-specific dropdown editors.",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.64-202603141535.apk",
+  "notes": "Version 1.1.64: Audit/Delete requests table pre-fills all role columns with original values, adds role-specific edit controls, improves submit flow feedback, and makes request list items open the detail view.",
   "force": false,
-  "publishedAt": "2026-03-13T22:46:28.3718177Z"
+  "publishedAt": "2026-03-14T09:05:53.586Z"
 }
