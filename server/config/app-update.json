@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.64",
-  "latestBuildNumber": "65",
+  "latestVersion": "1.1.65",
+  "latestBuildNumber": "66",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.64-202603141535.apk",
-  "notes": "Version 1.1.64: Audit/Delete requests table pre-fills all role columns with original values, adds role-specific edit controls, improves submit flow feedback, and makes request list items open the detail view.",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.65-202603151634.apk",
+  "notes": "Version 1.1.65: Hardens dashboard/member birthday calculations and event/member list safety checks to prevent blank screens.",
   "force": false,
-  "publishedAt": "2026-03-14T09:05:53.586Z"
+  "publishedAt": "2026-03-15T10:04:15.706Z"
 }

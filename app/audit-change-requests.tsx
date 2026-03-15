@@ -192,6 +192,8 @@ export default function AuditChangeRequestsScreen() {
     if (statusFilter === "all") return base;
     return base.filter((item: any) => item.status === statusFilter);
   }, [allRequests, canView, currentUser?.id, statusFilter]);
+  const testCleanupTotal =
+    allRequests.length + (Array.isArray(auditExecutionLogs) ? auditExecutionLogs.length : 0);
   const selectedTestRequestSet = useMemo(
     () => new Set((selectedTestRequestIds || []).map((id) => String(id || "")).filter(Boolean)),
     [selectedTestRequestIds]
@@ -397,20 +399,29 @@ export default function AuditChangeRequestsScreen() {
   }, [selectedRequest?.id, selectedDrafts.treasurer, selectedDrafts.auditor, selectedDrafts.chairperson]);
 
   const selectedTxn = useMemo(
-    () => transactions.find((row: any) => String(row?.id || "") === String(selectedRequest?.transactionId || "")) || null,
-    [transactions, selectedRequest?.transactionId]
+    () =>
+      transactions.find(
+        (row: any) =>
+          String(row?.id || "") ===
+          String(
+            selectedRequest?.transactionId ||
+              (selectedRequest?.targetType === "transaction" ? selectedRequest?.targetId : "") ||
+              ""
+          )
+      ) || null,
+    [transactions, selectedRequest?.transactionId, selectedRequest?.targetId, selectedRequest?.targetType]
   );
   const selectedLoan = useMemo(
     () => loans.find((row: any) => String(row?.id || "") === String(selectedRequest?.targetId || selectedRequest?.relatedLoanId || "")) || null,
     [loans, selectedRequest?.targetId, selectedRequest?.relatedLoanId]
   );
 
-  const selectedMemberName = useMemo(() => {
-    const memberId = String((selectedTxn as any)?.memberId || (selectedLoan as any)?.memberId || "");
-    if (!memberId) return "-";
-    const member = members.find((m: any) => String(m?.id || "") === memberId);
-    return member?.name || memberId;
-  }, [members, selectedTxn, selectedLoan]);
+  const executionLogOriginal = useMemo(() => {
+    if (!selectedRequest) return null;
+    const logs = Array.isArray(auditExecutionLogs) ? auditExecutionLogs : [];
+    const match = logs.find((log: any) => String(log?.requestId || "") === String(selectedRequest.id || "") && log?.before);
+    return match?.before || null;
+  }, [auditExecutionLogs, selectedRequest]);
   const latestRevision = useMemo(() => {
     if (!selectedRequest || !Array.isArray(selectedRequest.revisions) || selectedRequest.revisions.length === 0) return null;
     return selectedRequest.revisions[selectedRequest.revisions.length - 1];
@@ -422,8 +433,16 @@ export default function AuditChangeRequestsScreen() {
   }, [selectedRequest]);
   const compareOriginal = useMemo(() => {
     if (latestRevision?.before) return latestRevision.before;
+    if (selectedRequest?.originalSnapshot) return selectedRequest.originalSnapshot as any;
+    if (executionLogOriginal) return executionLogOriginal as any;
     return selectedRequest?.targetType === "loan" ? selectedLoan : selectedTxn;
-  }, [latestRevision, selectedLoan, selectedTxn, selectedRequest?.targetType]);
+  }, [latestRevision, selectedLoan, selectedTxn, selectedRequest?.targetType, selectedRequest?.originalSnapshot, executionLogOriginal]);
+  const selectedMemberName = useMemo(() => {
+    const memberId = String((compareOriginal as any)?.memberId || (selectedTxn as any)?.memberId || (selectedLoan as any)?.memberId || "");
+    if (!memberId) return "-";
+    const member = members.find((m: any) => String(m?.id || "") === memberId);
+    return member?.name || memberId;
+  }, [members, compareOriginal, selectedTxn, selectedLoan]);
   const activeUsers = useMemo(
     () => (Array.isArray(users) ? users : []).filter((row: any) => row?.isActive !== false),
     [users]
@@ -1201,7 +1220,10 @@ export default function AuditChangeRequestsScreen() {
       const cloudWarning = result.cloudPush && !result.cloudPush.ok
         ? `\nCloud Sync မလုပ်နိုင်ပါ။ (${result.cloudPush.reason || "unknown"})\n`
         : "";
-      Alert.alert("ပြီးစီးပါပြီ", `ဖျက်ပြီး Request အရေအတွက်: ${result.removedIds.length}${cloudWarning}`);
+      Alert.alert(
+        "ပြီးစီးပါပြီ",
+        `ဖျက်ပြီး Request အရေအတွက်: ${result.removedIds.length}\nဖျက်ပြီး Execution Log: ${result.removedLogCount}${cloudWarning}`
+      );
     } catch (e: any) {
       Alert.alert("မအောင်မြင်ပါ", String(e?.message || e || "Unknown error"));
     } finally {
@@ -1211,9 +1233,9 @@ export default function AuditChangeRequestsScreen() {
 
   const submitTestCleanup = async () => {
     if (!allowTestCleanup || testDeleteBusy) return;
-    const totalCount = allRequests.length;
-    const useAll = testSelectMode || selectedTestRequestIds.length === 0;
-    const deleteCount = useAll ? totalCount : selectedTestRequestIds.length;
+    const totalCount = allRequests.length + (Array.isArray(auditExecutionLogs) ? auditExecutionLogs.length : 0);
+    const useAll = true;
+    const deleteCount = totalCount;
     if (deleteCount === 0) {
       Alert.alert("မတွေ့ပါ", "ဖျက်ရန် Request မရှိပါ။");
       return;
@@ -1321,10 +1343,10 @@ export default function AuditChangeRequestsScreen() {
                   style={[
                     styles.testCleanupMiniBtn,
                     styles.testCleanupDeleteBtn,
-                    ((selectedTestRequestIds.length === 0 && allRequests.length === 0) || testDeleteBusy) && { opacity: 0.5 },
+                    (testCleanupTotal === 0 || testDeleteBusy) && { opacity: 0.5 },
                   ]}
                   onPress={() => void submitTestCleanup()}
-                  disabled={(selectedTestRequestIds.length === 0 && allRequests.length === 0) || testDeleteBusy}
+                  disabled={testCleanupTotal === 0 || testDeleteBusy}
                 >
                   {testDeleteBusy ? (
                     <View style={styles.testCleanupBusyRow}>
@@ -1333,7 +1355,7 @@ export default function AuditChangeRequestsScreen() {
                     </View>
                   ) : (
                     <Text style={[styles.testCleanupMiniText, { color: "#fff" }]}>
-                      Delete {selectedTestRequestIds.length ? "Selected" : "All"} ({selectedTestRequestIds.length || allRequests.length})
+                      Delete All ({testCleanupTotal})
                     </Text>
                   )}
                 </Pressable>
@@ -1397,49 +1419,6 @@ export default function AuditChangeRequestsScreen() {
           )}
         </View>
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Execution Log သီးခြားမှတ်တမ်း ({visibleExecutionLogs.length})</Text>
-          <Text style={[styles.sectionEmptyText, { color: consistencyReport.issueCount > 0 ? "#B91C1C" : "#0F766E" }]}>
-            Consistency Check: {consistencyReport.checked} ခုစစ်ပြီး • Issue {consistencyReport.issueCount} ခု
-          </Text>
-          {consistencyReport.issueCount > 0 ? (
-            <View style={[styles.auditHistoryCard, { borderLeftColor: "#B91C1C" }]}>
-              {consistencyReport.issues.slice(0, 5).map((issue: string, idx: number) => (
-                <Text key={`issue-${idx}`} style={[styles.auditHistoryMeta, { color: "#B91C1C" }]}>- {issue}</Text>
-              ))}
-            </View>
-          ) : null}
-          {pagedExecutionLogs.length === 0 ? (
-            <Text style={styles.sectionEmptyText}>Execution log မရှိသေးပါ။</Text>
-          ) : (
-            pagedExecutionLogs.map((log: any) => {
-              const requestNo = String(log?.requestNumber || log?.requestId || "-");
-              const action = String(log?.action || "");
-              const actionLabel = action === "delete_executed" ? "ပယ်ဖျက်ပြီး" : "ပြင်ဆင်ပြီး";
-              const amountBefore = Number(log?.before?.amount ?? log?.before?.principal ?? 0);
-              const amountAfter = Number(log?.after?.amount ?? 0);
-              return (
-                <Pressable key={`exec-log-${String(log?.id || requestNo)}`} style={styles.auditHistoryCard} onPress={() => openDetail(String(log?.requestId || ""))}>
-                  <Text style={styles.auditHistoryTitle}>{requestNo} • {actionLabel}</Text>
-                  <Text style={styles.auditHistoryMeta}>Target: {String(log?.targetType || "-")} / {String(log?.targetId || "-")}</Text>
-                  {action === "update_applied" ? (
-                    <Text style={styles.auditHistoryMeta}>ပမာဏ: {amountBefore.toLocaleString()} KS → {amountAfter.toLocaleString()} KS</Text>
-                  ) : (
-                    <Text style={styles.auditHistoryMeta}>ပယ်ဖျက်ပမာဏ: {amountBefore.toLocaleString()} KS</Text>
-                  )}
-                  <Text style={styles.auditHistoryMeta}>ဆောင်ရွက်သူ: {String(log?.byDisplayName || log?.byUserId || "-")}</Text>
-                  <Text style={styles.auditHistoryMeta}>ဆောင်ရွက်ချိန်: {fmtDateTime(log?.createdAt)}</Text>
-                </Pressable>
-              );
-            })
-          )}
-          {hasMoreExecutionLogs ? (
-            <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleExecutionLogCount((prev) => prev + 20)}>
-              <Text style={styles.loadMoreBtnText}>နောက်ထပ် မှတ်တမ်းများကြည့်ရန်</Text>
-            </Pressable>
-          ) : null}
-        </View>
-
         {visibleRequests.length === 0 ? (
           <View style={styles.emptyWrap}>
             <Ionicons name="document-text-outline" size={36} color={Colors.light.textSecondary} />
@@ -1495,6 +1474,49 @@ export default function AuditChangeRequestsScreen() {
             );
           })
         )}
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Execution Log သီးခြားမှတ်တမ်း ({visibleExecutionLogs.length})</Text>
+          <Text style={[styles.sectionEmptyText, { color: consistencyReport.issueCount > 0 ? "#B91C1C" : "#0F766E" }]}>
+            Consistency Check: {consistencyReport.checked} ခုစစ်ပြီး • Issue {consistencyReport.issueCount} ခု
+          </Text>
+          {consistencyReport.issueCount > 0 ? (
+            <View style={[styles.auditHistoryCard, { borderLeftColor: "#B91C1C" }]}>
+              {consistencyReport.issues.slice(0, 5).map((issue: string, idx: number) => (
+                <Text key={`issue-${idx}`} style={[styles.auditHistoryMeta, { color: "#B91C1C" }]}>- {issue}</Text>
+              ))}
+            </View>
+          ) : null}
+          {pagedExecutionLogs.length === 0 ? (
+            <Text style={styles.sectionEmptyText}>Execution log မရှိသေးပါ။</Text>
+          ) : (
+            pagedExecutionLogs.map((log: any) => {
+              const requestNo = String(log?.requestNumber || log?.requestId || "-");
+              const action = String(log?.action || "");
+              const actionLabel = action === "delete_executed" ? "ပယ်ဖျက်ပြီး" : "ပြင်ဆင်ပြီး";
+              const amountBefore = Number(log?.before?.amount ?? log?.before?.principal ?? 0);
+              const amountAfter = Number(log?.after?.amount ?? 0);
+              return (
+                <Pressable key={`exec-log-${String(log?.id || requestNo)}`} style={styles.auditHistoryCard} onPress={() => openDetail(String(log?.requestId || ""))}>
+                  <Text style={styles.auditHistoryTitle}>{requestNo} • {actionLabel}</Text>
+                  <Text style={styles.auditHistoryMeta}>Target: {String(log?.targetType || "-")} / {String(log?.targetId || "-")}</Text>
+                  {action === "update_applied" ? (
+                    <Text style={styles.auditHistoryMeta}>ပမာဏ: {amountBefore.toLocaleString()} KS → {amountAfter.toLocaleString()} KS</Text>
+                  ) : (
+                    <Text style={styles.auditHistoryMeta}>ပယ်ဖျက်ပမာဏ: {amountBefore.toLocaleString()} KS</Text>
+                  )}
+                  <Text style={styles.auditHistoryMeta}>ဆောင်ရွက်သူ: {String(log?.byDisplayName || log?.byUserId || "-")}</Text>
+                  <Text style={styles.auditHistoryMeta}>ဆောင်ရွက်ချိန်: {fmtDateTime(log?.createdAt)}</Text>
+                </Pressable>
+              );
+            })
+          )}
+          {hasMoreExecutionLogs ? (
+            <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleExecutionLogCount((prev) => prev + 20)}>
+              <Text style={styles.loadMoreBtnText}>နောက်ထပ် မှတ်တမ်းများကြည့်ရန်</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </ScrollView>
 
       <Modal animationType="slide" transparent visible={showDetailModal} onRequestClose={() => setShowDetailModal(false)}>
@@ -1513,10 +1535,14 @@ export default function AuditChangeRequestsScreen() {
             <Text style={styles.modalMeta}>Stage: {stageLabel(selectedRequest?.workflowStage as AuditChangeWorkflowStage)}</Text>
             <Text style={styles.modalMeta}>Audit Note: {selectedRequest?.auditNote || "-"}</Text>
             <Text style={styles.modalMeta}>Member: {selectedMemberName}</Text>
-            <Text style={styles.modalMeta}>Receipt: {String((selectedTxn as any)?.receiptNumber || "-")}</Text>
-            <Text style={styles.modalMeta}>Date: {String((selectedTxn as any)?.date || (selectedLoan as any)?.issueDate || "-")}</Text>
             <Text style={styles.modalMeta}>
-              Amount: {Number((selectedTxn as any)?.amount || (selectedLoan as any)?.principal || (selectedLoan as any)?.amount || 0).toLocaleString()} KS
+              Receipt: {String((compareOriginal as any)?.receiptNumber || (selectedTxn as any)?.receiptNumber || "-")}
+            </Text>
+            <Text style={styles.modalMeta}>
+              Date: {String((compareOriginal as any)?.date || (compareOriginal as any)?.issueDate || (selectedTxn as any)?.date || (selectedLoan as any)?.issueDate || "-")}
+            </Text>
+            <Text style={styles.modalMeta}>
+              Amount: {Number((compareOriginal as any)?.amount || (compareOriginal as any)?.principal || (compareOriginal as any)?.amount || (selectedTxn as any)?.amount || (selectedLoan as any)?.principal || (selectedLoan as any)?.amount || 0).toLocaleString()} KS
             </Text>
 
             <Text style={styles.sectionLabel}>မူလ / ပြင်ဆင်မည့်စာရင်း (ဇယား)</Text>

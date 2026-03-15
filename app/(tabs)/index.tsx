@@ -189,6 +189,7 @@ function QuickAction({
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { members, events, transactions, loans, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
+  const safeMembers = Array.isArray(members) ? members : [];
   const { currentUser, currentMember, can } = useAuth();
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
@@ -471,7 +472,7 @@ export default function DashboardScreen() {
     let male = 0;
     let female = 0;
     let other = 0;
-    (members || []).forEach((m: any) => {
+    safeMembers.forEach((m: any) => {
       const explicit = String(m?.gender || "").trim().toLowerCase();
       const resolved =
         explicit === "male" || explicit === "female" || explicit === "other"
@@ -486,7 +487,7 @@ export default function DashboardScreen() {
       }
     });
     return { male, female, other, total: members?.length || 0 };
-  }, [members]);
+  }, [safeMembers]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -662,16 +663,36 @@ export default function DashboardScreen() {
     return () => clearTimeout(timeout);
   }, [members, transactions, loans]);
 
-  const getAge = (dob: string) => {
-      const birthDate = parseGregorianDate(dob);
-      if (!birthDate) return 0;
-      const now = new Date();
-      let age = now.getFullYear() - birthDate.getFullYear();
-      const monthDiff = now.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      return age;
+  const getAgeYears = (dob: string): number | null => {
+    const birthDate = parseGregorianDate(dob);
+    if (!birthDate) return null;
+    const now = new Date();
+    let age = now.getFullYear() - birthDate.getFullYear();
+    const monthDiff = now.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age >= 0 ? age : null;
+  };
+
+  const getAgeBreakdown = (dob: string): { years: number; months: number; days: number } | null => {
+    const birthDate = parseGregorianDate(dob);
+    if (!birthDate) return null;
+    const now = new Date();
+    let years = now.getFullYear() - birthDate.getFullYear();
+    let months = now.getMonth() - birthDate.getMonth();
+    let days = now.getDate() - birthDate.getDate();
+    if (days < 0) {
+      const prevMonthDays = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+      days += prevMonthDays;
+      months -= 1;
+    }
+    if (months < 0) {
+      months += 12;
+      years -= 1;
+    }
+    if (years < 0) return null;
+    return { years, months, days };
   };
 
   const getOccurrenceDate = (dob: string) => {
@@ -714,9 +735,9 @@ export default function DashboardScreen() {
 
   // မွေးနေ့ရောက်တော့မည့်သူများကို တွက်ချက်ခြင်း (၁ လကြိုတင် / ၃ ရက်နောက်ကျ)
   const upcomingBirthdays = useMemo(() => {
-    if (!members) return [];
+    if (!safeMembers.length) return [];
     
-    const filtered = members.filter(
+    const filtered = safeMembers.filter(
       (m: any) => normalizeMemberStatus(m.status) === "active" && m.dob && getOccurrenceDate(m.dob) !== null
     );
 
@@ -731,9 +752,9 @@ export default function DashboardScreen() {
         const timeDiff = dateA.getTime() - dateB.getTime();
         if (timeDiff !== 0) return timeDiff;
 
-        return getAge(b.dob) - getAge(a.dob);
+        return (getAgeYears(b.dob) || 0) - (getAgeYears(a.dob) || 0);
     });
-  }, [members]);
+  }, [safeMembers]);
 
   // Schedule Birthday Notification
   useEffect(() => {
@@ -1364,7 +1385,11 @@ export default function DashboardScreen() {
                 <View>
                   <Text style={[styles.birthdayName, { color: Colors.light.text }]}>{m.name}</Text>
                   <Text style={[styles.birthdayDate, { color: getBirthdayColor(m.dob) }]}>
-                    {m.dob} • {getAge(m.dob)} နှစ်ပြည့်
+                    {m.dob} • {(() => {
+                      const age = getAgeBreakdown(m.dob);
+                      if (!age) return "အသက်မသိပါ။";
+                      return `${age.years} နှစ် ${age.months} လ ${age.days} ရက်`;
+                    })()}
                   </Text>
                 </View>
               </Pressable>

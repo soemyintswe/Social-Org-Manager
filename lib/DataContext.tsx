@@ -156,7 +156,7 @@ interface DataContextValue {
     byUserId: string;
     byMemberId?: string;
     byDisplayName?: string;
-  }) => Promise<{ removedIds: string[]; cloudPush?: { ok: boolean; reason?: string } }>;
+  }) => Promise<{ removedIds: string[]; removedLogCount: number; cloudPush?: { ok: boolean; reason?: string } }>;
   forwardAuditChangeRequestToChair: (input: {
     requestId: string;
     byUserId: string;

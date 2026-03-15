@@ -199,6 +199,8 @@ export default function EventsScreen() {
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
   const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
+  const safeEvents = Array.isArray(events) ? events : [];
+  const safeMembers = Array.isArray(members) ? members : [];
   const { can, currentUser } = useAuth();
   const canViewEvents = can("events.view_public");
   const canCreateOwnEvent = can("events.create_own");
@@ -285,8 +287,8 @@ export default function EventsScreen() {
   const allRelations = useMemo(() => mergeRelationOptions(customRelations, true), [customRelations]);
   const allHealthConditions = useMemo(() => [...PRESET_HEALTH_CONDITIONS, ...customConditions], [customConditions]);
   const senderMembers = useMemo(
-    () => [...(members || [])].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
-    [members]
+    () => [...safeMembers].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
+    [safeMembers]
   );
   const currentMemberRecord = useMemo(
     () => senderMembers.find((m: any) => String(m?.id) === String(currentUser?.memberId || "")),
@@ -473,10 +475,10 @@ export default function EventsScreen() {
   const canDeleteItem = (item: OrgEventNotice) => canDeleteAllEvent || (canDeleteOwnEvent && isOwnNotice(item));
   const visibleEvents = useMemo(
     () =>
-      [...(events || [])].filter(
+      [...safeEvents].filter(
         (item: any) => String(item?.location || "").trim().toLowerCase() !== "system"
       ),
-    [events]
+    [safeEvents]
   );
 
   const pickImages = async () => {
@@ -833,7 +835,7 @@ export default function EventsScreen() {
     };
 
     if (editingId) {
-      const existing = events.find((e: any) => e.id === editingId) as OrgEventNotice | undefined;
+      const existing = safeEvents.find((e: any) => e.id === editingId) as OrgEventNotice | undefined;
       if (!existing) {
         Alert.alert("အမှား", "သတင်းမတွေ့ပါ။");
         return;
@@ -865,7 +867,7 @@ export default function EventsScreen() {
   };
 
   const handleDelete = async (id: string) => {
-    const existing = events.find((e: any) => e.id === id) as OrgEventNotice | undefined;
+    const existing = safeEvents.find((e: any) => e.id === id) as OrgEventNotice | undefined;
     if (!existing || !canDeleteItem(existing)) {
       Alert.alert("ခွင့်မပြုပါ", "ဖျက်ခွင့် မရှိပါ။");
       return;

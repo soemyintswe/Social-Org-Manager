@@ -44,6 +44,7 @@ SplashScreen.preventAutoHideAsync();
 
 const APP_UPDATE_LAST_CHECKED_KEY = "@app_update_last_checked_at";
 const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
+const APP_UPDATE_RESUME_STATE_KEY = "@app_update_download_state";
 const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
 const UPDATE_INITIAL_CHECK_DELAY_MS = 4500;
@@ -137,6 +138,39 @@ function isLikelyGitLfsPointer(content: string): boolean {
   return text.startsWith("version https://git-lfs.github.com/spec/v1") && text.includes("oid sha256:");
 }
 
+type UpdateResumeState = {
+  url: string;
+  fileUri: string;
+  resumeData: string;
+  latestVersion: string;
+  latestBuildNumber?: string;
+  updatedAt: string;
+};
+
+async function loadUpdateResumeState(): Promise<UpdateResumeState | null> {
+  try {
+    const raw = await AsyncStorage.getItem(APP_UPDATE_RESUME_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.url || !parsed?.fileUri || !parsed?.resumeData || !parsed?.latestVersion) return null;
+    return parsed as UpdateResumeState;
+  } catch {
+    return null;
+  }
+}
+
+async function saveUpdateResumeState(state: UpdateResumeState): Promise<void> {
+  try {
+    await AsyncStorage.setItem(APP_UPDATE_RESUME_STATE_KEY, JSON.stringify(state));
+  } catch {}
+}
+
+async function clearUpdateResumeState(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(APP_UPDATE_RESUME_STATE_KEY);
+  } catch {}
+}
+
 async function openUnknownSourcesSettings(): Promise<boolean> {
   const appId = String((Application as any).applicationId || "").trim();
   if (!appId) return false;
@@ -218,6 +252,9 @@ function RootLayoutNav() {
   const [deviceAuthHash, setDeviceAuthHash] = useState("");
   const updateCheckInFlightRef = useRef(false);
   const lastActiveCheckAtRef = useRef(0);
+  const updateDownloadRef = useRef<FileSystem.DownloadResumable | null>(null);
+  const updateDownloadUrlRef = useRef("");
+  const updateDownloadFileRef = useRef("");
 
   useEffect(() => {
     if (loading) return;
@@ -308,6 +345,45 @@ function RootLayoutNav() {
   }, [loading, isAuthenticated, inLogin]);
 
   useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        if (!showUpdateModal || updatingNow || !updateInfo?.downloadUrl) return;
+        void loadUpdateResumeState().then((resume) => {
+          if (!resume) return;
+          if (String(resume.latestVersion || "") !== String(updateInfo?.latestVersion || "")) return;
+          void handleUpdateNow();
+        });
+        return;
+      }
+      if (state !== "background" && state !== "inactive") return;
+      if (!updatingNow) return;
+      const download = updateDownloadRef.current;
+      if (!download) return;
+      const url = updateDownloadUrlRef.current;
+      const fileUri = updateDownloadFileRef.current;
+      if (!url || !fileUri) return;
+      void download
+        .pauseAsync()
+        .then((resumeData: any) => {
+          if (!resumeData || !updateInfo?.latestVersion) return;
+          return saveUpdateResumeState({
+            url,
+            fileUri,
+            resumeData,
+            latestVersion: String(updateInfo.latestVersion || ""),
+            latestBuildNumber: String(updateInfo.latestBuildNumber || ""),
+            updatedAt: new Date().toISOString(),
+          });
+        })
+        .catch(() => {});
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [updatingNow, updateInfo, showUpdateModal]);
+
+  useEffect(() => {
     const initRemoteConfig = async () => {
       const result = await initializeRemoteConfig(__DEV__ ? 0 : 3600000);
       if (!result.ok) {
@@ -389,19 +465,41 @@ function RootLayoutNav() {
       if (!baseDir) throw new Error("storage_unavailable");
 
       const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}-${Date.now()}.apk`;
+      const resumeState = await loadUpdateResumeState();
+      let resumeUrl = "";
+      let resumeData = "";
+      let resumeFileUri = "";
+      if (resumeState && String(resumeState.latestVersion || "") === String(updateInfo.latestVersion || "")) {
+        const fileInfo = await FileSystem.getInfoAsync(resumeState.fileUri);
+        if (fileInfo?.exists && Number(fileInfo?.size || 0) > 0) {
+          resumeUrl = String(resumeState.url || "");
+          resumeData = String(resumeState.resumeData || "");
+          resumeFileUri = String(resumeState.fileUri || "");
+        } else {
+          await clearUpdateResumeState();
+        }
+      }
+      const orderedCandidates = resumeUrl
+        ? [resumeUrl, ...candidateUrls.filter((item) => item !== resumeUrl)]
+        : candidateUrls;
       let downloadedUri = "";
       let usedCandidate = "";
       let lastDownloadError = "";
-      for (const candidateUrl of candidateUrls) {
+      for (const candidateUrl of orderedCandidates) {
         try {
           setUpdateProgressRatio(0);
-          try {
-            await FileSystem.deleteAsync(fileUri, { idempotent: true });
-          } catch {}
+          const useResume = Boolean(resumeData && resumeUrl && candidateUrl === resumeUrl);
+          const targetFileUri = useResume ? resumeFileUri : fileUri;
+          if (!useResume) {
+            try {
+              await FileSystem.deleteAsync(targetFileUri, { idempotent: true });
+            } catch {}
+            await clearUpdateResumeState();
+          }
 
           const downloadResumable = FileSystem.createDownloadResumable(
             candidateUrl,
-            fileUri,
+            targetFileUri,
             {},
             (progress: any) => {
               const written = Number(progress?.totalBytesWritten || 0);
@@ -417,9 +515,16 @@ function RootLayoutNav() {
                   `Update APK ကို download လုပ်နေပါသည်... ${(written / (1024 * 1024)).toFixed(1)}MB`
                 );
               }
-            }
+            },
+            useResume ? resumeData : undefined
           );
-          const downloadResult = await downloadResumable.downloadAsync();
+          updateDownloadRef.current = downloadResumable;
+          updateDownloadUrlRef.current = candidateUrl;
+          updateDownloadFileRef.current = targetFileUri;
+
+          const downloadResult = useResume
+            ? await downloadResumable.resumeAsync()
+            : await downloadResumable.downloadAsync();
           if (!downloadResult?.uri || (downloadResult.status && downloadResult.status >= 400)) {
             lastDownloadError = `download_failed_${downloadResult?.status || "unknown"}`;
             continue;
@@ -450,6 +555,10 @@ function RootLayoutNav() {
           downloadedUriForFallback = downloadedUri;
           usedCandidate = candidateUrl;
           setUpdateProgressRatio(1);
+          updateDownloadRef.current = null;
+          updateDownloadUrlRef.current = "";
+          updateDownloadFileRef.current = "";
+          await clearUpdateResumeState();
           break;
         } catch (err: any) {
           lastDownloadError = String(err?.message || "download_candidate_failed");
@@ -496,6 +605,9 @@ function RootLayoutNav() {
       setUpdatingNow(false);
       setUpdateProgressText("");
       setUpdateProgressRatio(0);
+      updateDownloadRef.current = null;
+      updateDownloadUrlRef.current = "";
+      updateDownloadFileRef.current = "";
     }
   };
 

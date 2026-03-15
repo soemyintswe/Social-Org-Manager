@@ -692,7 +692,7 @@ export async function deleteAuditChangeRequestsForTesting(input: {
   byUserId: string;
   byMemberId?: string;
   byDisplayName?: string;
-}): Promise<{ removedIds: string[] }> {
+}): Promise<{ removedIds: string[]; removedLogCount: number }> {
   const ids = new Set((input.requestIds || []).map((id) => String(id || "").trim()).filter(Boolean));
   const [requests, notifications, executionLogs, transactions] = await Promise.all([
     getAuditChangeRequests(),
@@ -710,18 +710,18 @@ export async function deleteAuditChangeRequestsForTesting(input: {
   });
   const totalRequestCount = Array.isArray(requests) ? requests.length : 0;
   const removeAllArtifacts = shouldRemoveAll || (totalRequestCount > 0 && removedRequests.length === totalRequestCount);
-  if (!removeAllArtifacts && removedRequests.length === 0) return { removedIds: [] };
 
   const removedIdSet = new Set(removedRequests.map((row: any) => String(row?.id || "").trim()).filter(Boolean));
   const removedNoSet = new Set(removedRequests.map((row: any) => String(row?.requestNumber || "").trim()).filter(Boolean));
+  const inputIdSet = ids;
 
   const remainingRequests = removeAllArtifacts
     ? []
     : (Array.isArray(requests) ? requests : []).filter((row: any) => {
         const rowId = String(row?.id || "").trim();
         const rowNo = String(row?.requestNumber || "").trim();
-        if (rowId && (removedIdSet.has(rowId) || ids.has(rowId))) return false;
-        if (rowNo && (removedNoSet.has(rowNo) || ids.has(rowNo))) return false;
+        if (rowId && (removedIdSet.has(rowId) || inputIdSet.has(rowId))) return false;
+        if (rowNo && (removedNoSet.has(rowNo) || inputIdSet.has(rowNo))) return false;
         return true;
       });
   const remainingNotifications = (Array.isArray(notifications) ? notifications : []).filter((row: any) => {
@@ -733,20 +733,33 @@ export async function deleteAuditChangeRequestsForTesting(input: {
       }
     }
     const relatedId = String(row?.relatedId || "");
-    if (relatedId && (removedIdSet.has(relatedId) || ids.has(relatedId))) return false;
+    if (relatedId && (removedIdSet.has(relatedId) || inputIdSet.has(relatedId))) return false;
     const title = String(row?.title || "");
     for (const no of removedNoSet) {
       if (no && title.includes(no)) return false;
     }
+    for (const token of inputIdSet) {
+      if (token && title.includes(token)) return false;
+    }
     return true;
   });
+  const removedLogs = removeAllArtifacts
+    ? (Array.isArray(executionLogs) ? executionLogs : [])
+    : (Array.isArray(executionLogs) ? executionLogs : []).filter((log: any) => {
+        const reqId = String(log?.requestId || "").trim();
+        const reqNo = String(log?.requestNumber || "").trim();
+        if (reqId && (removedIdSet.has(reqId) || inputIdSet.has(reqId))) return true;
+        if (reqNo && (removedNoSet.has(reqNo) || inputIdSet.has(reqNo))) return true;
+        return false;
+      });
+
   const remainingLogs = removeAllArtifacts
     ? []
     : (Array.isArray(executionLogs) ? executionLogs : []).filter((log: any) => {
         const reqId = String(log?.requestId || "").trim();
         const reqNo = String(log?.requestNumber || "").trim();
-        if (reqId && (removedIdSet.has(reqId) || ids.has(reqId))) return false;
-        if (reqNo && (removedNoSet.has(reqNo) || ids.has(reqNo))) return false;
+        if (reqId && (removedIdSet.has(reqId) || inputIdSet.has(reqId))) return false;
+        if (reqNo && (removedNoSet.has(reqNo) || inputIdSet.has(reqNo))) return false;
         return true;
       });
 
@@ -775,12 +788,30 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(remainingNotifications)),
     AsyncStorage.setItem(KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(remainingLogs)),
   ];
-  await appendAuditTestCleanupTombstones(
-    removedRequests.map((row: any) => ({
+  const tombstonesToAdd: { id?: string; requestNumber?: string }[] = [];
+  removedRequests.forEach((row: any) => {
+    tombstonesToAdd.push({
       id: String(row?.id || "").trim() || undefined,
       requestNumber: String(row?.requestNumber || "").trim() || undefined,
-    }))
-  );
+    });
+  });
+  if (removeAllArtifacts) {
+    (Array.isArray(executionLogs) ? executionLogs : []).forEach((log: any) => {
+      tombstonesToAdd.push({
+        id: String(log?.requestId || "").trim() || undefined,
+        requestNumber: String(log?.requestNumber || "").trim() || undefined,
+      });
+    });
+  } else {
+    (Array.isArray(executionLogs) ? executionLogs : []).forEach((log: any) => {
+      const reqId = String(log?.requestId || "").trim();
+      const reqNo = String(log?.requestNumber || "").trim();
+      if ((reqId && inputIdSet.has(reqId)) || (reqNo && inputIdSet.has(reqNo)) || removedIdSet.has(reqId) || removedNoSet.has(reqNo)) {
+        tombstonesToAdd.push({ id: reqId || undefined, requestNumber: reqNo || undefined });
+      }
+    });
+  }
+  await appendAuditTestCleanupTombstones(tombstonesToAdd);
   if (txChanged) {
     writes.push(AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(cleanedTransactions)));
   }
@@ -792,7 +823,10 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     console.warn("Test audit request cleanup cloud push skipped:", e);
   }
 
-  return { removedIds: removedRequests.map((row: any) => String(row?.id || "")).filter(Boolean) };
+  return {
+    removedIds: removedRequests.map((row: any) => String(row?.id || "")).filter(Boolean),
+    removedLogCount: removedLogs.length,
+  };
 }
 
 // --- Members ---
@@ -1563,6 +1597,7 @@ export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
       targetType: normalizeAuditTargetType(item?.targetType, String(item?.targetId || ""), String(item?.transactionId || "")),
       targetId: String(item?.targetId || item?.transactionId || item?.relatedLoanId || ""),
       auditNote: String(item?.auditNote || "").trim(),
+      originalSnapshot: item?.originalSnapshot && typeof item.originalSnapshot === "object" ? item.originalSnapshot : undefined,
       assignedRole: (item?.assignedRole ||
         (normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus) === "treasurer_execution"
           ? "treasurer"
@@ -1592,7 +1627,10 @@ async function saveAuditChangeRequests(rows: AuditChangeRequest[]): Promise<void
 }
 
 export async function getAuditExecutionLogs(): Promise<AuditExecutionLog[]> {
-  const rows = await safeGet<AuditExecutionLog[]>(KEYS.AUDIT_EXECUTION_LOGS, []);
+  const [rows, tombstones] = await Promise.all([
+    safeGet<AuditExecutionLog[]>(KEYS.AUDIT_EXECUTION_LOGS, []),
+    getAuditTestCleanupTombstones(),
+  ]);
   if (!Array.isArray(rows)) return [];
   return rows
     .map((item: any) => ({
@@ -1625,6 +1663,13 @@ export async function getAuditExecutionLogs(): Promise<AuditExecutionLog[]> {
       createdAt: String(item?.createdAt || new Date().toISOString()),
     }))
     .filter((row) => String(row.requestId || "").trim().length > 0)
+    .filter((row) => {
+      const reqId = String(row.requestId || "").trim();
+      const reqNo = String(row.requestNumber || "").trim();
+      if (reqId && tombstones.idSet.has(reqId)) return false;
+      if (reqNo && tombstones.numberSet.has(reqNo)) return false;
+      return true;
+    })
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 }
 
@@ -1795,6 +1840,10 @@ export async function createAuditChangeRequest(input: {
   const loan = loans.find((row: any) => String(row?.id || "") === targetId);
   if (resolvedTargetType === "transaction" && !txn) throw new Error("transaction_not_found");
   if (resolvedTargetType === "loan" && !loan) throw new Error("loan_not_found");
+  const originalSnapshot =
+    resolvedTargetType === "loan"
+      ? (loan ? { ...loan } : undefined)
+      : (txn ? { ...txn } : undefined);
   if (requestKind === "delete") {
     if (resolvedTargetType === "loan") {
       if (deleteIndex.loanIds.has(targetId)) throw new Error("already_deleted");
@@ -1865,6 +1914,7 @@ export async function createAuditChangeRequest(input: {
     transactionId: transactionId || undefined,
     relatedLoanId:
       String(input.relatedLoanId || (resolvedTargetType === "transaction" ? (txn as any)?.loanId : targetId) || "").trim() || undefined,
+    originalSnapshot: originalSnapshot && typeof originalSnapshot === "object" ? originalSnapshot : undefined,
     status: "pending",
     workflowStage: initialStage,
     auditNote: noteText || "Audit flag မှတ်ချက်",
