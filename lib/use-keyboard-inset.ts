@@ -5,6 +5,9 @@ export function useKeyboardInset(): number {
   const [keyboardInset, setKeyboardInset] = useState(0);
 
   useEffect(() => {
+    if (Platform.OS === "web" || typeof Keyboard?.addListener !== "function") {
+      return;
+    }
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
