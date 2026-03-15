@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.65",
-  "latestBuildNumber": "66",
+  "latestVersion": "1.1.66",
+  "latestBuildNumber": "67",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.65-202603151634.apk",
+  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.66-202603152106.apk",
   "notes": "Version 1.1.65: Hardens dashboard/member birthday calculations and event/member list safety checks to prevent blank screens.",
   "force": false,
-  "publishedAt": "2026-03-15T10:04:15.706Z"
+  "publishedAt": "2026-03-15T14:36:24.843Z"
 }

@@ -694,14 +694,18 @@ export async function deleteAuditChangeRequestsForTesting(input: {
   byDisplayName?: string;
 }): Promise<{ removedIds: string[]; removedLogCount: number }> {
   const ids = new Set((input.requestIds || []).map((id) => String(id || "").trim()).filter(Boolean));
-  const [requests, notifications, executionLogs, transactions] = await Promise.all([
+  const [requests, notifications, executionLogs, rawExecutionLogs, transactions] = await Promise.all([
     getAuditChangeRequests(),
     getNotifications(),
     getAuditExecutionLogs(),
+    safeGet<AuditExecutionLog[]>(KEYS.AUDIT_EXECUTION_LOGS, []),
     getTransactions(),
   ]);
 
   const shouldRemoveAll = ids.size === 0;
+  const logSource = Array.isArray(rawExecutionLogs)
+    ? rawExecutionLogs
+    : (Array.isArray(executionLogs) ? executionLogs : []);
   const removedRequests = (Array.isArray(requests) ? requests : []).filter((row: any) => {
     if (shouldRemoveAll) return true;
     const rowId = String(row?.id || "").trim();
@@ -744,8 +748,8 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     return true;
   });
   const removedLogs = removeAllArtifacts
-    ? (Array.isArray(executionLogs) ? executionLogs : [])
-    : (Array.isArray(executionLogs) ? executionLogs : []).filter((log: any) => {
+    ? logSource
+    : logSource.filter((log: any) => {
         const reqId = String(log?.requestId || "").trim();
         const reqNo = String(log?.requestNumber || "").trim();
         if (reqId && (removedIdSet.has(reqId) || inputIdSet.has(reqId))) return true;
@@ -755,7 +759,7 @@ export async function deleteAuditChangeRequestsForTesting(input: {
 
   const remainingLogs = removeAllArtifacts
     ? []
-    : (Array.isArray(executionLogs) ? executionLogs : []).filter((log: any) => {
+    : logSource.filter((log: any) => {
         const reqId = String(log?.requestId || "").trim();
         const reqNo = String(log?.requestNumber || "").trim();
         if (reqId && (removedIdSet.has(reqId) || inputIdSet.has(reqId))) return false;
@@ -796,14 +800,14 @@ export async function deleteAuditChangeRequestsForTesting(input: {
     });
   });
   if (removeAllArtifacts) {
-    (Array.isArray(executionLogs) ? executionLogs : []).forEach((log: any) => {
+    logSource.forEach((log: any) => {
       tombstonesToAdd.push({
         id: String(log?.requestId || "").trim() || undefined,
         requestNumber: String(log?.requestNumber || "").trim() || undefined,
       });
     });
   } else {
-    (Array.isArray(executionLogs) ? executionLogs : []).forEach((log: any) => {
+    logSource.forEach((log: any) => {
       const reqId = String(log?.requestId || "").trim();
       const reqNo = String(log?.requestNumber || "").trim();
       if ((reqId && inputIdSet.has(reqId)) || (reqNo && inputIdSet.has(reqNo)) || removedIdSet.has(reqId) || removedNoSet.has(reqNo)) {
@@ -4944,6 +4948,15 @@ export async function mergeData(jsonString: string): Promise<boolean> {
           const requestNumber = String(row?.requestNumber || "").trim();
           if (id && tombstones.idSet.has(id)) return false;
           if (requestNumber && tombstones.numberSet.has(requestNumber)) return false;
+          return true;
+        });
+      }
+      if (key === KEYS.AUDIT_EXECUTION_LOGS && Array.isArray(mergedValue)) {
+        mergedValue = (mergedValue as any[]).filter((row: any) => {
+          const reqId = String(row?.requestId || "").trim();
+          const reqNo = String(row?.requestNumber || "").trim();
+          if (reqId && tombstones.idSet.has(reqId)) return false;
+          if (reqNo && tombstones.numberSet.has(reqNo)) return false;
           return true;
         });
       }
