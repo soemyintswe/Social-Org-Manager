@@ -2348,6 +2348,7 @@ export async function chairReviewAuditRequest(input: {
   byDisplayName?: string;
   approved: boolean;
   note: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   const requests = await getAuditChangeRequests();
   const idx = requests.findIndex((row: any) => row.id === input.requestId);
@@ -2369,6 +2370,9 @@ export async function chairReviewAuditRequest(input: {
     byMemberId: input.byMemberId,
     byDisplayName: input.byDisplayName?.trim() || undefined,
     toRole: approved ? "treasurer" : "auditor",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
     createdAt: now,
   };
 
@@ -2395,6 +2399,9 @@ export async function chairReviewAuditRequest(input: {
     category: req.requestKind === "delete" ? "delete_request" : "audit_change",
     createdByUserId: input.byUserId,
     createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     targetMemberIds: targetMemberId ? [targetMemberId] : [],
     relatedType: "audit_change_request",
     relatedId: req.id,
@@ -2408,6 +2415,7 @@ export async function chairReviewDeleteAuditRequest(input: {
   byDisplayName?: string;
   approved: boolean;
   note: string;
+  tagUserIds?: string[];
 }): Promise<void> {
   return chairReviewAuditRequest(input);
 }
@@ -3736,7 +3744,9 @@ export async function updateTransaction(id: string, updates: any) {
   const txns = await getTransactions();
   const idx = txns.findIndex((item) => item.id === id);
   if (idx !== -1) {
-    txns[idx] = { ...txns[idx], ...updates };
+    const safeUpdates = { ...updates };
+    if ("id" in safeUpdates) delete safeUpdates.id;
+    txns[idx] = { ...txns[idx], ...safeUpdates };
     await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns));
   }
 }

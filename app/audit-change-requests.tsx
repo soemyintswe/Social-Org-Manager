@@ -138,6 +138,9 @@ export default function AuditChangeRequestsScreen() {
   const [messageNote, setMessageNote] = useState("");
   const [decisionNote, setDecisionNote] = useState("");
   const [forwardToUserId, setForwardToUserId] = useState("");
+  const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [actionSubmitLabel, setActionSubmitLabel] = useState("");
+  const [actionResult, setActionResult] = useState<null | { type: "success" | "error"; message: string; closeOnSuccess?: boolean }>(null);
   const [tagUserIds, setTagUserIds] = useState<string[]>([]);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [showTagPicker, setShowTagPicker] = useState(false);
@@ -146,6 +149,7 @@ export default function AuditChangeRequestsScreen() {
   const [createDeleteTargetId, setCreateDeleteTargetId] = useState("");
   const [createDeleteSearch, setCreateDeleteSearch] = useState("");
   const [createDeleteNote, setCreateDeleteNote] = useState("");
+  const [createDeleteSubmitting, setCreateDeleteSubmitting] = useState(false);
   const [showCreateTargetPicker, setShowCreateTargetPicker] = useState(false);
   const [visibleExecutionLogCount, setVisibleExecutionLogCount] = useState(20);
   const [testSelectMode, setTestSelectMode] = useState(false);
@@ -799,6 +803,9 @@ export default function AuditChangeRequestsScreen() {
     setDecisionNote("");
     setForwardToUserId("");
     setTagUserIds([]);
+    setActionResult(null);
+    setActionSubmitting(false);
+    setActionSubmitLabel("");
     setShowDetailModal(true);
   };
 
@@ -812,11 +819,13 @@ export default function AuditChangeRequestsScreen() {
 
   const submitCreateDeleteRequest = async () => {
     if (!currentUser?.id) return;
+    if (createDeleteSubmitting) return;
     const note = createDeleteNote.trim();
     if (!note) return Alert.alert("လိုအပ်ချက်", "Delete Request မှတ်ချက်ဖြည့်ပါ။");
     const targetId = String(createDeleteTargetId || "").trim();
     if (!targetId) return Alert.alert("လိုအပ်ချက်", "ဖျက်သိမ်းလိုသော စာရင်းကို ရွေးချယ်ပါ။");
 
+    setCreateDeleteSubmitting(true);
     try {
       if (createDeleteTargetType === "loan") {
         await createAuditChangeRequest({
@@ -841,18 +850,24 @@ export default function AuditChangeRequestsScreen() {
           createdByDisplayName: currentUser.displayName,
         });
       }
-      setShowCreateDeleteModal(false);
       setCreateDeleteTargetId("");
       setCreateDeleteSearch("");
       setCreateDeleteNote("");
-      Alert.alert("အောင်မြင်ပါသည်", "Delete Request ကို Audit workflow သို့ တင်သွင်းပြီးပါပြီ။");
-    } catch (error: any) {
-      const msg = String(error?.message || "");
-      if (msg.includes("request_conflict_in_progress")) {
-        Alert.alert("တားဆီးထားပါသည်", "ဤစာရင်းအတွက် Request တစ်ခု ဆောင်ရွက်နေပြီးဖြစ်ပါသည်။");
-        return;
-      }
-      Alert.alert("အမှား", "Delete Request တင်သွင်းရာတွင် အဆင်မပြေပါ။");
+      Alert.alert("ပြီးပါပြီ", "Delete Request ကို Audit workflow သို့ တင်သွင်းပြီးပါပြီ။", [
+        {
+          text: "OK",
+          onPress: () => setShowCreateDeleteModal(false),
+        },
+      ]);
+      } catch (error: any) {
+        const msg = String(error?.message || "");
+        if (msg.includes("request_conflict_in_progress")) {
+          Alert.alert("တားဆီးထားပါသည်", "ဤစာရင်းအတွက် Request တစ်ခု ဆောင်ရွက်နေပြီးဖြစ်ပါသည်။");
+          return;
+        }
+        Alert.alert("မအောင်မြင်ပါ", "Delete Request တင်သွင်းရာတွင် အဆင်မပြေပါ။ ထပ်မံကြိုးစားပါ။");
+      } finally {
+      setCreateDeleteSubmitting(false);
     }
   };
 
@@ -909,56 +924,112 @@ export default function AuditChangeRequestsScreen() {
 
     const tagTargets = (tagUserIds || []).filter((id) => String(id || "").trim() && String(id || "").trim() !== toUserId);
 
-    await addAuditChangeRequestMessage({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      messageType: isForward ? "forward" : "reply",
-      note,
-      toRole,
-      toUserId,
-      tagUserIds: tagTargets,
-      replyToMessageId: replyToMessageId || undefined,
-      setSuspended: false,
-    });
-    setMessageNote("");
-    setForwardToUserId("");
-    setTagUserIds([]);
+    await runAuditAction(
+      async () => {
+        await addAuditChangeRequestMessage({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          messageType: isForward ? "forward" : "reply",
+          note,
+          toRole,
+          toUserId,
+          tagUserIds: tagTargets,
+          replyToMessageId: replyToMessageId || undefined,
+          setSuspended: false,
+        });
+      },
+      {
+        label: "ပို့နေပါတယ်...",
+        successMessage: "ပို့ပြီးပါပြီ။",
+        onSuccess: () => {
+          setMessageNote("");
+          setForwardToUserId("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
-  const handleAuditRequestError = (error: any) => {
+  const getAuditErrorMessage = (error: any) => {
     const reason = String(error?.message || error || "").trim();
-    if (!reason) {
-      Alert.alert("မအောင်မြင်ပါ", "လုပ်ဆောင်ရာတွင် အမှားရှိပါသည်။");
-      return;
-    }
+    if (!reason) return "လုပ်ဆောင်ရာတွင် အမှားရှိပါသည်။";
     if (reason.includes("duplicate_receipt")) {
-      return Alert.alert(
-        "ပြေစာအမှတ် ထပ်နေပါသည်",
-        "ပြေစာအမှတ် ထပ်နေပါသည်။ မတူညီသော ပြေစာအမှတ် သို့မဟုတ် A/B ကဲ့သို့ suffix ထည့်ပြီး ပြန်လည်ကြိုးစားပါ။"
-      );
+      return "ပြေစာအမှတ် ထပ်နေပါသည်။ မတူညီသော ပြေစာအမှတ် သို့မဟုတ် A/B ကဲ့သို့ suffix ထည့်ပြီး ပြန်လည်ကြိုးစားပါ။";
     }
     if (reason.includes("request_finalized_locked")) {
-      return Alert.alert("တင်လို့မရပါ", "ဤစာရင်းတွင် ဥက္ကဌဆုံးဖြတ်ပြီးဖြစ်သောကြောင့် Request ထပ်မလုပ်နိုင်ပါ။");
+      return "ဤစာရင်းတွင် ဥက္ကဌဆုံးဖြတ်ပြီးဖြစ်သောကြောင့် Request ထပ်မလုပ်နိုင်ပါ။";
     }
     if (reason.includes("request_not_ready_for_execution")) {
-      return Alert.alert("လုပ်ဆောင်လို့မရပါ", "လုပ်ငန်းစဉ်အဆင့် မပြည့်သေးပါ။");
+      return "လုပ်ငန်းစဉ်အဆင့် မပြည့်သေးပါ။";
     }
     if (reason.includes("invalid_stage")) {
-      return Alert.alert("လုပ်ဆောင်လို့မရပါ", "လုပ်ငန်းစဉ်အဆင့် မမှန်ပါ။");
+      return "လုပ်ငန်းစဉ်အဆင့် မမှန်ပါ။";
     }
     if (reason.includes("note_required")) {
-      return Alert.alert("လိုအပ်ချက်", "မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
+      return "မှတ်ချက်ဖြည့်ရန်လိုပါသည်။";
     }
-    Alert.alert("မအောင်မြင်ပါ", reason);
+    return reason;
   };
 
-  const runAuditAction = async (fn: () => Promise<void>) => {
+  const handleAuditRequestError = (error: any, withRetry = false) => {
+    const message = getAuditErrorMessage(error);
+    const showAlert = (title: string, msg: string) => {
+      if (withRetry) {
+        Alert.alert(title, msg, [{ text: "ထပ်မံကြိုးစားပါ" }]);
+        return;
+      }
+      Alert.alert(title, msg);
+    };
+    if (message === "မှတ်ချက်ဖြည့်ရန်လိုပါသည်။") {
+      return showAlert("လိုအပ်ချက်", message);
+    }
+    if (message.startsWith("ပြေစာအမှတ်")) {
+      return showAlert("ပြေစာအမှတ် ထပ်နေပါသည်", message);
+    }
+    if (message.startsWith("ဤစာရင်းတွင်")) {
+      return showAlert("တင်လို့မရပါ", message);
+    }
+    if (message.startsWith("လုပ်ငန်းစဉ်အဆင့်")) {
+      return showAlert("လုပ်ဆောင်လို့မရပါ", message);
+    }
+    showAlert("မအောင်မြင်ပါ", message);
+  };
+
+  const runAuditAction = async (
+    fn: () => Promise<void>,
+    options?: {
+      label?: string;
+      successMessage?: string;
+      closeOnSuccess?: boolean;
+      onSuccess?: () => void;
+    }
+  ) => {
+    if (actionSubmitting) return;
+    setActionSubmitting(true);
+    setActionSubmitLabel(options?.label || "လုပ်ဆောင်နေပါတယ်...");
+    setActionResult(null);
     try {
       await fn();
+      setActionSubmitting(false);
+      setActionSubmitLabel("");
+      if (options?.onSuccess) options.onSuccess();
+      if (options?.successMessage) {
+        setActionResult({
+          type: "success",
+          message: options.successMessage,
+          closeOnSuccess: options?.closeOnSuccess,
+        });
+        return;
+      }
+      if (options?.closeOnSuccess) setShowDetailModal(false);
     } catch (error: any) {
-      handleAuditRequestError(error);
+      setActionSubmitting(false);
+      setActionSubmitLabel("");
+      const message = getAuditErrorMessage(error);
+      setActionResult({ type: "error", message });
+      handleAuditRequestError(error, true);
     }
   };
 
@@ -966,6 +1037,14 @@ export default function AuditChangeRequestsScreen() {
     if (!selectedRequest || !currentUser?.id) return;
     const note = decisionNote.trim();
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    const statusMessage =
+      status === "cancelled"
+        ? "Request ကို ရုပ်သိမ်းပြီးပါပြီ။"
+        : status === "pending"
+          ? "Request ကို Pending အဖြစ် ပြန်တင်ပြီးပါပြီ။"
+          : status === "suspended"
+            ? "Request ကို ဆိုင်းငံ့ထားပြီးပါပြီ။"
+            : "အပ်ဒိတ်ပြီးပါပြီ။";
     await runAuditAction(async () => {
       await changeAuditChangeRequestStatus({
         requestId: selectedRequest.id,
@@ -976,11 +1055,15 @@ export default function AuditChangeRequestsScreen() {
         note,
         tagUserIds: tagTargets,
       });
-      setDecisionNote("");
-      setTagUserIds([]);
-      if (["approved", "rejected", "cancelled"].includes(status)) {
-        setShowDetailModal(false);
-      }
+    }, {
+      label: "တင်သွင်းနေပါတယ်...",
+      successMessage: statusMessage,
+      closeOnSuccess: true,
+      onSuccess: () => {
+        setDecisionNote("");
+        setMessageNote("");
+        setTagUserIds([]);
+      },
     });
   };
 
@@ -991,19 +1074,28 @@ export default function AuditChangeRequestsScreen() {
       return Alert.alert("လိုအပ်ချက်", "Chair ထံတင်ပြရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
-    await runAuditAction(async () => {
-      await forwardAuditChangeRequestToChair({
-        requestId: selectedRequest.id,
-        byUserId: currentUser.id,
-        byMemberId: currentUser.memberId,
-        byDisplayName: currentUser.displayName,
-        note,
-        tagUserIds: tagTargets,
-      });
-      setMessageNote("");
-      setDecisionNote("");
-      setTagUserIds([]);
-    });
+    await runAuditAction(
+      async () => {
+        await forwardAuditChangeRequestToChair({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          note,
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: "ဥက္ကဌထံ တင်ပြနေပါတယ်...",
+        successMessage: "ဥက္ကဌထံ တင်ပြပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setMessageNote("");
+          setDecisionNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
   const submitChairDecision = async (approved: boolean) => {
@@ -1012,17 +1104,30 @@ export default function AuditChangeRequestsScreen() {
     if (!note) {
       return Alert.alert("လိုအပ်ချက်", "ဆုံးဖြတ်ချက်မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
-    await chairReviewAuditRequest({
-      requestId: selectedRequest.id,
-      byUserId: currentUser.id,
-      byMemberId: currentUser.memberId,
-      byDisplayName: currentUser.displayName,
-      approved,
-      note,
-    });
-    setDecisionNote("");
-    setMessageNote("");
-    if (!approved) setShowDetailModal(false);
+    const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+    await runAuditAction(
+      async () => {
+        await chairReviewAuditRequest({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          approved,
+          note,
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: approved ? "အတည်ပြုနေပါတယ်..." : "ကန့်ကွက်နေပါတယ်...",
+        successMessage: approved ? "အတည်ပြုပြီးပါပြီ။" : "ကန့်ကွက်ထားပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setDecisionNote("");
+          setMessageNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
   const submitReturnToTreasurer = async () => {
@@ -1032,19 +1137,28 @@ export default function AuditChangeRequestsScreen() {
       return Alert.alert("လိုအပ်ချက်", "Treasurer ထံပြန်ပေးပို့ရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
-    await runAuditAction(async () => {
-      await sendAuditRequestBackToTreasurer({
-        requestId: selectedRequest.id,
-        byUserId: currentUser.id,
-        byMemberId: currentUser.memberId,
-        byDisplayName: currentUser.displayName,
-        note,
-        tagUserIds: tagTargets,
-      });
-      setDecisionNote("");
-      setMessageNote("");
-      setTagUserIds([]);
-    });
+    await runAuditAction(
+      async () => {
+        await sendAuditRequestBackToTreasurer({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          note,
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: "ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့နေပါတယ်...",
+        successMessage: "ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့ပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setDecisionNote("");
+          setMessageNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
   const submitReturnToAuditor = async () => {
@@ -1054,60 +1168,83 @@ export default function AuditChangeRequestsScreen() {
       return Alert.alert("လိုအပ်ချက်", "Audit ထံပြန်ပေးပို့ရန် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။");
     }
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
-    await runAuditAction(async () => {
-      await sendAuditRequestBackToAuditor({
-        requestId: selectedRequest.id,
-        byUserId: currentUser.id,
-        byMemberId: currentUser.memberId,
-        byDisplayName: currentUser.displayName,
-        note,
-        tagUserIds: tagTargets,
-      });
-      setDecisionNote("");
-      setMessageNote("");
-      setTagUserIds([]);
-    });
+    await runAuditAction(
+      async () => {
+        await sendAuditRequestBackToAuditor({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          note,
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: "စာရင်းစစ်ထံ ပြန်ပို့နေပါတယ်...",
+        successMessage: "စာရင်းစစ်ထံ ပြန်ပို့ပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setDecisionNote("");
+          setMessageNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
   const submitConfirmDeleteExecution = async () => {
     if (!selectedRequest || !currentUser?.id) return;
     const note = decisionNote.trim() || "ဥက္ကဌအတည်ပြုချက်အရ စာရင်းကို ပယ်ဖျက်ပြီးပါပြီ။";
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
-    await runAuditAction(async () => {
-      await confirmDeleteAuditRequestExecution({
-        requestId: selectedRequest.id,
-        byUserId: currentUser.id,
-        byMemberId: currentUser.memberId,
-        byDisplayName: currentUser.displayName,
-        note,
-        tagUserIds: tagTargets,
-      });
-      setDecisionNote("");
-      setTagUserIds([]);
-      setShowDetailModal(false);
-      Alert.alert("ပြီးပါပြီ", "Delete ကိုအတည်ပြုပယ်ဖျက်ပြီးပါပြီ။");
-    });
+    await runAuditAction(
+      async () => {
+        await confirmDeleteAuditRequestExecution({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          note,
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: "ဖျက်သိမ်းနေပါတယ်...",
+        successMessage: "Delete ကိုအတည်ပြုပယ်ဖျက်ပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setDecisionNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
   const submitNoChangeApproval = async () => {
     if (!selectedRequest || !selectedTxn || !currentUser?.id) return;
     const note = decisionNote.trim() || "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပါသည်။";
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
-    await runAuditAction(async () => {
-      await applyAuditChangeRequestPatch({
-        requestId: selectedRequest.id,
-        byUserId: currentUser.id,
-        byMemberId: currentUser.memberId,
-        byDisplayName: currentUser.displayName,
-        patch: {},
-        note,
-        tagUserIds: tagTargets,
-      });
-      setDecisionNote("");
-      setTagUserIds([]);
-      setShowDetailModal(false);
-      Alert.alert("ပြီးပါပြီ", "ပြင်ဆင်စရာမရှိသဖြင့် အတည်ပြုပြီးပါပြီ။");
-    });
+    await runAuditAction(
+      async () => {
+        await applyAuditChangeRequestPatch({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          patch: {},
+          note,
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: "အတည်ပြုနေပါတယ်...",
+        successMessage: "ပြင်ဆင်စရာမရှိသဖြင့် အတည်ပြုပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setDecisionNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
   const buildPatchFromDrafts = () => {
     const chairDraft = selectedRequest?.drafts?.chairperson?.values || {};
@@ -1144,25 +1281,33 @@ export default function AuditChangeRequestsScreen() {
       return Alert.alert("အချက်အလက်မပြောင်းပါ", "ပြင်ဆင်ချက်မရှိသေးပါ။");
     }
     const tagTargets = (tagUserIds || []).map((id) => String(id || "").trim()).filter(Boolean);
-    await runAuditAction(async () => {
-      await applyAuditChangeRequestPatch({
-        requestId: selectedRequest.id,
-        byUserId: currentUser.id,
-        byMemberId: currentUser.memberId,
-        byDisplayName: currentUser.displayName,
-        patch,
-        note: decisionNote.trim() || "Audit flag ကိုပြင်ဆင်ပြီး အတည်ပြုပါသည်။",
-        tagUserIds: tagTargets,
-      });
-      setShowDetailModal(false);
-      setDecisionNote("");
-      setTagUserIds([]);
-      Alert.alert("ပြီးပါပြီ", "စာရင်းပြင်ဆင်ချက်ကို အတည်ပြုပြီးပါပြီ။");
-    });
+    await runAuditAction(
+      async () => {
+        await applyAuditChangeRequestPatch({
+          requestId: selectedRequest.id,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          patch,
+          note: decisionNote.trim() || "Audit flag ကိုပြင်ဆင်ပြီး အတည်ပြုပါသည်။",
+          tagUserIds: tagTargets,
+        });
+      },
+      {
+        label: "ပြင်ဆင်နေပါတယ်...",
+        successMessage: "စာရင်းပြင်ဆင်ချက်ကို အတည်ပြုပြီးပါပြီ။",
+        closeOnSuccess: true,
+        onSuccess: () => {
+          setDecisionNote("");
+          setTagUserIds([]);
+        },
+      }
+    );
   };
 
   const selectedStage = String(selectedRequest?.workflowStage || "") as AuditChangeWorkflowStage;
   const requestStatus = String(selectedRequest?.status || "pending") as AuditChangeRequestStatus;
+  const isFinalized = selectedStage === "completed";
 
   const canAuditorHandle = !!selectedRequest && isAuditor && selectedStage === "auditor_review";
   const canChairHandle = !!selectedRequest && isChair && selectedStage === "chair_approval";
@@ -1179,6 +1324,7 @@ export default function AuditChangeRequestsScreen() {
     !!selectedRequest &&
     ["rejected", "cancelled"].includes(requestStatus) &&
     (isAuditor || isTreasurer || isChair);
+  const actionDisabled = actionSubmitting;
 
   const canAuditorForward = canAuditorHandle;
   const canChairApprove = canChairHandle;
@@ -1596,129 +1742,232 @@ export default function AuditChangeRequestsScreen() {
               />
             ) : null}
 
-            <Text style={styles.sectionLabel}>Decision Note</Text>
-            <TextInput
-              style={styles.input}
-              value={decisionNote}
-              onChangeText={setDecisionNote}
-              placeholder="လက်ခံ/ကန့်ကွက်/ဆိုင်းငံ့ မှတ်ချက်"
-            />
-            <Pressable style={styles.selectionInput} onPress={() => setShowTagPicker(true)}>
-              <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
-                {selectedTagUsers.length > 0
-                  ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
-                  : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
-              </Text>
-              <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
-            </Pressable>
-            {selectedTagUsers.length > 0 ? (
-              <View style={styles.tagPreviewWrap}>
-                {selectedTagUsers.map((user: any) => (
-                  <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
-                    <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
-                  </Pressable>
-                ))}
+            {isFinalized ? (
+              <View style={styles.completedNotice}>
+                <Text style={styles.completedNoticeText}>ဒီ Request ကို လုပ်ငန်းပြီးဆုံးအဖြစ် မှတ်တမ်းတင်ပြီးပါပြီ။</Text>
               </View>
-            ) : null}
-
-            {canAuditorForward ? (
-              <View style={styles.actionRow}>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }]} onPress={() => void submitForwardToChair()}>
-                  <Text style={styles.actionBtnText}>ဥက္ကဌထံ တင်ပြမည်</Text>
-                </Pressable>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B" }]} onPress={() => void submitReturnToTreasurer()}>
-                  <Text style={styles.actionBtnText}>ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့</Text>
-                </Pressable>
-              </View>
-            ) : null}
-
-            {canChairApprove ? (
+            ) : (
               <>
-                <View style={styles.actionRow}>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={() => void submitChairDecision(true)}>
-                    <Text style={styles.actionBtnText}>လက်ခံမည်</Text>
+                <Text style={styles.sectionLabel}>Decision Note</Text>
+                <TextInput
+                  style={styles.input}
+                  value={decisionNote}
+                  onChangeText={setDecisionNote}
+                  placeholder="လက်ခံ/ကန့်ကွက်/ဆိုင်းငံ့ မှတ်ချက်"
+                  editable={!actionSubmitting}
+                />
+                <Pressable
+                  style={styles.selectionInput}
+                  onPress={() => setShowTagPicker(true)}
+                  disabled={actionSubmitting}
+                >
+                  <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                    {selectedTagUsers.length > 0
+                      ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
+                      : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
+                  </Text>
+                  <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
+                </Pressable>
+                {selectedTagUsers.length > 0 ? (
+                  <View style={styles.tagPreviewWrap}>
+                    {selectedTagUsers.map((user: any) => (
+                      <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
+                        <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+                {actionSubmitting ? (
+                  <View style={styles.actionBusyRow}>
+                    <ActivityIndicator size="small" color={Colors.light.tint} />
+                    <Text style={styles.actionBusyText}>{actionSubmitLabel || "လုပ်ဆောင်နေပါတယ်..."}</Text>
+                  </View>
+                ) : null}
+                {actionResult ? (
+                  <View
+                    style={[
+                      styles.actionResultWrap,
+                      actionResult.type === "success" ? styles.actionResultSuccess : styles.actionResultError,
+                    ]}
+                  >
+                    <Text style={styles.actionResultText}>{actionResult.message}</Text>
+                    <Pressable
+                      style={styles.actionResultBtn}
+                      onPress={() => {
+                        if (actionResult.type === "success" && actionResult.closeOnSuccess) {
+                          setShowDetailModal(false);
+                        }
+                        setActionResult(null);
+                      }}
+                    >
+                      <Text style={styles.actionResultBtnText}>
+                        {actionResult.type === "success" ? "OK" : "ထပ်မံကြိုးစားပါ"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {canAuditorForward ? (
+                  <View style={styles.actionRow}>
+                    <Pressable
+                      style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }, actionDisabled && styles.actionBtnDisabled]}
+                      onPress={() => void submitForwardToChair()}
+                      disabled={actionDisabled}
+                    >
+                      <Text style={styles.actionBtnText}>ဥက္ကဌထံ တင်ပြမည်</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.actionBtn, { backgroundColor: "#64748B" }, actionDisabled && styles.actionBtnDisabled]}
+                      onPress={() => void submitReturnToTreasurer()}
+                      disabled={actionDisabled}
+                    >
+                      <Text style={styles.actionBtnText}>ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {canChairApprove ? (
+                  <>
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        style={[styles.actionBtn, { backgroundColor: "#10B981" }, actionDisabled && styles.actionBtnDisabled]}
+                        onPress={() => void submitChairDecision(true)}
+                        disabled={actionDisabled}
+                      >
+                        <Text style={styles.actionBtnText}>လက်ခံမည်</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.actionBtn, { backgroundColor: "#EF4444" }, actionDisabled && styles.actionBtnDisabled]}
+                        onPress={() => void submitChairDecision(false)}
+                        disabled={actionDisabled}
+                      >
+                        <Text style={styles.actionBtnText}>ကန့်ကွက်မည်</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        style={[styles.actionBtn, { backgroundColor: "#F59E0B" }, actionDisabled && styles.actionBtnDisabled]}
+                        onPress={() => void submitStatus("suspended")}
+                        disabled={actionDisabled}
+                      >
+                        <Text style={styles.actionBtnText}>ဆိုင်းငံ့မည်</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        style={[styles.actionBtn, { backgroundColor: "#475569" }, actionDisabled && styles.actionBtnDisabled]}
+                        onPress={() => void submitReturnToAuditor()}
+                        disabled={actionDisabled}
+                      >
+                        <Text style={styles.actionBtnText}>စာရင်းစစ်ထံ ပြန်ပို့</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.actionBtn, { backgroundColor: "#334155" }, actionDisabled && styles.actionBtnDisabled]}
+                        onPress={() => void submitReturnToTreasurer()}
+                        disabled={actionDisabled}
+                      >
+                        <Text style={styles.actionBtnText}>ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : null}
+
+                {canTreasurerApplyUpdate ? (
+                  <View style={styles.actionRow}>
+                    <Pressable
+                      style={[styles.actionBtn, { backgroundColor: "#10B981" }, actionDisabled && styles.actionBtnDisabled]}
+                      onPress={() => void submitApplyDraftPatch()}
+                      disabled={actionDisabled}
+                    >
+                      <Text style={styles.actionBtnText}>ပြင်ဆင်ပြီး အတည်ပြု</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.actionBtn, { backgroundColor: "#64748B" }, actionDisabled && styles.actionBtnDisabled]}
+                      onPress={() => void submitNoChangeApproval()}
+                      disabled={actionDisabled}
+                    >
+                      <Text style={styles.actionBtnText}>ပြင်ဆင်ချက်မရှိ အတည်ပြု</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {canTreasurerConfirmDelete ? (
+                  <Pressable
+                    style={[styles.actionBtn, { backgroundColor: "#B91C1C", marginTop: 8 }, actionDisabled && styles.actionBtnDisabled]}
+                    onPress={() => void submitConfirmDeleteExecution()}
+                    disabled={actionDisabled}
+                  >
+                    <Text style={styles.actionBtnText}>Confirm Delete (အတည်ပြုပယ်ဖျက်မည်)</Text>
                   </Pressable>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={() => void submitChairDecision(false)}>
-                    <Text style={styles.actionBtnText}>ကန့်ကွက်မည်</Text>
-                  </Pressable>
-                </View>
-                <View style={styles.actionRow}>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#F59E0B" }]} onPress={() => void submitStatus("suspended")}>
-                    <Text style={styles.actionBtnText}>ဆိုင်းငံ့မည်</Text>
-                  </Pressable>
-                </View>
-                <View style={styles.actionRow}>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#475569" }]} onPress={() => void submitReturnToAuditor()}>
+                ) : null}
+
+                {canTreasurerReturnToAuditor ? (
+                  <Pressable
+                    style={[styles.actionBtn, { backgroundColor: "#475569", marginTop: 8 }, actionDisabled && styles.actionBtnDisabled]}
+                    onPress={() => void submitReturnToAuditor()}
+                    disabled={actionDisabled}
+                  >
                     <Text style={styles.actionBtnText}>စာရင်းစစ်ထံ ပြန်ပို့</Text>
                   </Pressable>
-                  <Pressable style={[styles.actionBtn, { backgroundColor: "#334155" }]} onPress={() => void submitReturnToTreasurer()}>
-                    <Text style={styles.actionBtnText}>ဘဏ္ဍာရေးမှူးထံ ပြန်ပို့</Text>
+                ) : null}
+
+                {canOwnerCancel ? (
+                  <Pressable
+                    style={[styles.actionBtn, { backgroundColor: "#64748B", marginTop: 8 }, actionDisabled && styles.actionBtnDisabled]}
+                    onPress={() => void submitStatus("cancelled")}
+                    disabled={actionDisabled}
+                  >
+                    <Text style={styles.actionBtnText}>Request ရုပ်သိမ်းမည်</Text>
                   </Pressable>
+                ) : null}
+
+                {canReopen ? (
+                  <Pressable
+                    style={[styles.actionBtn, { backgroundColor: "#334155", marginTop: 8 }, actionDisabled && styles.actionBtnDisabled]}
+                    onPress={() => void submitStatus("pending")}
+                    disabled={actionDisabled}
+                  >
+                    <Text style={styles.actionBtnText}>Pending ပြန်တင်မည်</Text>
+                  </Pressable>
+                ) : null}
+
+                <Text style={styles.sectionLabel}>Reply / Forward</Text>
+                <TextInput
+                  style={[styles.input, styles.noteInput]}
+                  value={messageNote}
+                  onChangeText={setMessageNote}
+                  placeholder="ညှိနှိုင်းမှတ်ချက် / ကန့်ကွက်ရှင်းလင်းချက်"
+                  multiline
+                  editable={!actionSubmitting}
+                />
+                {!isDeleteRequest ? (
+                  <Pressable style={styles.selectionInput} onPress={() => setShowForwardPicker(true)} disabled={actionSubmitting}>
+                    <Text style={[styles.selectionInputText, !selectedForwardUser && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                      {selectedForwardUser ? getUserLabel(selectedForwardUser) : "Forward လက်ခံသူရွေးပါ"}
+                    </Text>
+                    <Ionicons name="chevron-down" size={18} color={Colors.light.textSecondary} />
+                  </Pressable>
+                ) : null}
+                <View style={styles.actionRow}>
+                  <Pressable
+                    style={[styles.actionBtn, { backgroundColor: Colors.light.tint }, actionDisabled && styles.actionBtnDisabled]}
+                    onPress={() => void submitMessage(false)}
+                    disabled={actionDisabled}
+                  >
+                    <Text style={styles.actionBtnText}>Reply ပို့မည်</Text>
+                  </Pressable>
+                  {!isDeleteRequest ? (
+                    <Pressable
+                      style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }, actionDisabled && styles.actionBtnDisabled]}
+                      onPress={() => void submitMessage(true)}
+                      disabled={actionDisabled}
+                    >
+                      <Text style={styles.actionBtnText}>Forward ပို့မည်</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </>
-            ) : null}
-
-            {canTreasurerApplyUpdate ? (
-              <View style={styles.actionRow}>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#10B981" }]} onPress={() => void submitApplyDraftPatch()}>
-                  <Text style={styles.actionBtnText}>ပြင်ဆင်ပြီး အတည်ပြု</Text>
-                </Pressable>
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B" }]} onPress={() => void submitNoChangeApproval()}>
-                  <Text style={styles.actionBtnText}>ပြင်ဆင်ချက်မရှိ အတည်ပြု</Text>
-                </Pressable>
-              </View>
-            ) : null}
-
-            {canTreasurerConfirmDelete ? (
-              <Pressable style={[styles.actionBtn, { backgroundColor: "#B91C1C", marginTop: 8 }]} onPress={() => void submitConfirmDeleteExecution()}>
-                <Text style={styles.actionBtnText}>Confirm Delete (အတည်ပြုပယ်ဖျက်မည်)</Text>
-              </Pressable>
-            ) : null}
-
-            {canTreasurerReturnToAuditor ? (
-              <Pressable style={[styles.actionBtn, { backgroundColor: "#475569", marginTop: 8 }]} onPress={() => void submitReturnToAuditor()}>
-                <Text style={styles.actionBtnText}>စာရင်းစစ်ထံ ပြန်ပို့</Text>
-              </Pressable>
-            ) : null}
-
-            {canOwnerCancel ? (
-              <Pressable style={[styles.actionBtn, { backgroundColor: "#64748B", marginTop: 8 }]} onPress={() => void submitStatus("cancelled")}>
-                <Text style={styles.actionBtnText}>Request ရုပ်သိမ်းမည်</Text>
-              </Pressable>
-            ) : null}
-
-            {canReopen ? (
-              <Pressable style={[styles.actionBtn, { backgroundColor: "#334155", marginTop: 8 }]} onPress={() => void submitStatus("pending")}>
-                <Text style={styles.actionBtnText}>Pending ပြန်တင်မည်</Text>
-              </Pressable>
-            ) : null}
-
-            <Text style={styles.sectionLabel}>Reply / Forward</Text>
-            <TextInput
-              style={[styles.input, styles.noteInput]}
-              value={messageNote}
-              onChangeText={setMessageNote}
-              placeholder="ညှိနှိုင်းမှတ်ချက် / ကန့်ကွက်ရှင်းလင်းချက်"
-              multiline
-            />
-            {!isDeleteRequest ? (
-              <Pressable style={styles.selectionInput} onPress={() => setShowForwardPicker(true)}>
-                <Text style={[styles.selectionInputText, !selectedForwardUser && styles.selectionInputPlaceholder]} numberOfLines={1}>
-                  {selectedForwardUser ? getUserLabel(selectedForwardUser) : "Forward လက်ခံသူရွေးပါ"}
-                </Text>
-                <Ionicons name="chevron-down" size={18} color={Colors.light.textSecondary} />
-              </Pressable>
-            ) : null}
-            <View style={styles.actionRow}>
-              <Pressable style={[styles.actionBtn, { backgroundColor: Colors.light.tint }]} onPress={() => void submitMessage(false)}>
-                <Text style={styles.actionBtnText}>Reply ပို့မည်</Text>
-              </Pressable>
-              {!isDeleteRequest ? (
-                <Pressable style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }]} onPress={() => void submitMessage(true)}>
-                  <Text style={styles.actionBtnText}>Forward ပို့မည်</Text>
-                </Pressable>
-              ) : null}
-            </View>
+            )}
 
             <Text style={styles.sectionLabel}>ပြောင်းလဲမှုမှတ်တမ်း</Text>
             {Array.isArray(selectedRequest?.messages) && selectedRequest.messages.length > 0 ? (
@@ -1909,9 +2158,20 @@ export default function AuditChangeRequestsScreen() {
               multiline
             />
 
-            <Pressable style={[styles.actionBtn, { backgroundColor: "#D97706", marginTop: 8 }]} onPress={() => void submitCreateDeleteRequest()}>
-              <Text style={styles.actionBtnText}>Delete Request တင်သွင်းမည်</Text>
-            </Pressable>
+              <Pressable
+                style={[styles.actionBtn, { backgroundColor: "#D97706", marginTop: 8 }, createDeleteSubmitting && styles.actionBtnDisabled]}
+                onPress={() => void submitCreateDeleteRequest()}
+                disabled={createDeleteSubmitting}
+              >
+                {createDeleteSubmitting ? (
+                  <View style={styles.actionBusyRow}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.actionBusyTextLight}>တင်သွင်းနေပါတယ်...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.actionBtnText}>Delete Request တင်သွင်းမည်</Text>
+                )}
+              </Pressable>
             <Pressable style={styles.closeBtn} onPress={() => setShowCreateDeleteModal(false)}>
               <Text style={styles.closeBtnText}>Cancel</Text>
             </Pressable>
@@ -2308,6 +2568,41 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   actionBtn: { flex: 1, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
   actionBtnText: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 },
+  actionBtnDisabled: { opacity: 0.6 },
+  actionBusyRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+  actionBusyText: { color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", fontSize: 12.5 },
+  actionBusyTextLight: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 12.5 },
+  actionResultWrap: {
+    marginTop: 8,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  actionResultSuccess: { backgroundColor: "#ECFDF3", borderColor: "#86EFAC" },
+  actionResultError: { backgroundColor: "#FEF2F2", borderColor: "#FCA5A5" },
+  actionResultText: { flex: 1, color: Colors.light.text, fontFamily: "Inter_500Medium", fontSize: 13 },
+  actionResultBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: Colors.light.tint,
+  },
+  actionResultBtnText: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 12 },
+  completedNotice: {
+    marginTop: 8,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F1F5F9",
+  },
+  completedNoticeText: { color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", fontSize: 13 },
   messageCard: {
     marginTop: 8,
     padding: 10,

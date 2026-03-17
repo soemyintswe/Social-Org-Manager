@@ -332,12 +332,146 @@ function buildBackup(transactions: any[]): string {
   );
 }
 
+function normalizeReceipt(value: unknown): string {
+  return text(value).toUpperCase();
+}
+
+function buildDuplicateKey(txn: any): string | null {
+  const receipt = normalizeReceipt(txn?.receiptNumber);
+  if (!receipt) return null;
+  const amount = Number(txn?.amount || 0);
+  if (!Number.isFinite(amount)) return null;
+  const date = toIsoDate(txn?.date) || text(txn?.date);
+  const type = text(txn?.type).toLowerCase();
+  const category = text(txn?.category).toLowerCase();
+  const payment = text(txn?.paymentMethod).toLowerCase();
+  return `${receipt}|${amount}|${date}|${type}|${category}|${payment}`;
+}
+
+function scoreTransaction(txn: any): number {
+  let score = 0;
+  if (text(txn?.memberId)) score += 2;
+  if (text(txn?.payerPayee)) score += 2;
+  if (text(txn?.notes) || text(txn?.description)) score += 1;
+  if (text(txn?.feePeriodStart)) score += 1;
+  if (text(txn?.feePeriodEnd)) score += 1;
+  if (text(txn?.receiptNumber)) score += 1;
+  if (text(txn?.categoryLabel)) score += 1;
+  return score;
+}
+
+function isEmptyValue(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v === "string") return v.trim().length === 0;
+  if (Array.isArray(v)) return v.length === 0;
+  return false;
+}
+
+function mergeTransactionGroup(primary: any, group: any[]): any {
+  const merged = { ...primary };
+  for (const item of group) {
+    if (!item || item === primary) continue;
+    Object.entries(item).forEach(([key, value]) => {
+      if (key === "id") return;
+      if (Array.isArray(value)) {
+        if (!Array.isArray(merged[key]) || (merged[key] as any[]).length === 0) {
+          merged[key] = [...value];
+        } else {
+          const combined = new Set([...(merged[key] as any[]), ...value]);
+          merged[key] = Array.from(combined);
+        }
+        return;
+      }
+      if (isEmptyValue(merged[key]) && !isEmptyValue(value)) {
+        merged[key] = value;
+      }
+    });
+  }
+  const createdCandidates = group.map((x) => new Date(x?.createdAt || "").getTime()).filter((n) => Number.isFinite(n));
+  if (createdCandidates.length) merged.createdAt = new Date(Math.min(...createdCandidates)).toISOString();
+  const updatedCandidates = group.map((x) => new Date(x?.updatedAt || "").getTime()).filter((n) => Number.isFinite(n));
+  if (updatedCandidates.length) merged.updatedAt = new Date(Math.max(...updatedCandidates)).toISOString();
+  return merged;
+}
+
+function buildDuplicateSafeImport(existing: any[], incoming: any[]) {
+  const existingById = new Map<string, any>(existing.map((t) => [String(t?.id || ""), t]));
+  const existingKeySet = new Set<string>();
+  existing.forEach((t) => {
+    const key = buildDuplicateKey(t);
+    if (key) existingKeySet.add(key);
+  });
+
+  const incomingById = new Map<string, any>();
+  incoming.forEach((t) => {
+    const id = String(t?.id || "");
+    if (!id) return;
+    const prev = incomingById.get(id);
+    if (!prev || scoreTransaction(t) > scoreTransaction(prev)) incomingById.set(id, t);
+  });
+
+  const grouped = new Map<string, any[]>();
+  const noKey: any[] = [];
+  for (const t of incomingById.values()) {
+    const key = buildDuplicateKey(t);
+    if (!key) {
+      noKey.push(t);
+      continue;
+    }
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)?.push(t);
+  }
+
+  const selected: any[] = [];
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const [key, list] of grouped.entries()) {
+    const updates = list.filter((t) => existingById.has(String(t?.id || "")));
+    if (updates.length) {
+      updates.forEach((t) => {
+        selected.push(t);
+        updated += 1;
+      });
+      skipped += list.length - updates.length;
+      continue;
+    }
+    if (existingKeySet.has(key)) {
+      skipped += list.length;
+      continue;
+    }
+    let best = list[0];
+    for (const t of list.slice(1)) {
+      if (scoreTransaction(t) > scoreTransaction(best)) best = t;
+    }
+    selected.push(best);
+    inserted += 1;
+    skipped += list.length - 1;
+  }
+
+  for (const t of noKey) {
+    const id = String(t?.id || "");
+    if (!id) continue;
+    if (existingById.has(id)) {
+      selected.push(t);
+      updated += 1;
+    } else {
+      selected.push(t);
+      inserted += 1;
+    }
+  }
+
+  return { selected, inserted, updated, skipped };
+}
+
 export default function TransactionDataManagementScreen() {
   const insets = useSafeAreaInsets();
   const { transactions, refreshData } = useData() as any;
   const [backupText, setBackupText] = useState("");
   const [processing, setProcessing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [dedupeRunning, setDedupeRunning] = useState(false);
 
   const preview = useMemo(() => {
     if (!backupText.trim()) return { count: 0, skipped: 0, error: "" };
@@ -346,7 +480,7 @@ export default function TransactionDataManagementScreen() {
     return { count: p.transactions.length, skipped: p.skipped, error: "" };
   }, [backupText]);
 
-  const busy = processing || importing;
+  const busy = processing || importing || dedupeRunning;
 
   const msg = (title: string, body: string) => {
     if (Platform.OS === "web") alert(`${title}\n${body}`);
@@ -463,6 +597,43 @@ export default function TransactionDataManagementScreen() {
     }
   };
 
+  const autoImportFromFile = async () => {
+    if (busy) return;
+    try {
+      const r = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
+      if (r.canceled) return;
+      const a = r.assets[0];
+      const content = Platform.OS === "web" ? await (await fetch(a.uri)).text() : await FileSystem.readAsStringAsync(a.uri);
+      const p = parseTransactions(content);
+      if (!p.ok) return msg("Invalid Data", p.message);
+      const existing = await getTransactions();
+      const plan = buildDuplicateSafeImport(existing, p.transactions);
+      const run = async () => {
+        setImporting(true);
+        try {
+          await importTransactions(plan.selected);
+          await refreshData();
+          await writeAutoSnapshot();
+          msg(
+            "Success",
+            `Auto-Apply ပြီးပါပြီ။ ထည့်သွင်း ${plan.inserted} • Update ${plan.updated} • Skip ${plan.skipped} ဖြစ်ပါသည်။`
+          );
+        } finally {
+          setImporting(false);
+        }
+      };
+      const question = `ရွေးထားတဲ့ဖိုင်ကို Auto-Apply လုပ်မည်။ ${p.transactions.length} rows ကို လက်ရှိစာရင်းထဲသို့ ထည့်သွင်းပါမည် (ID တူပါက update, Receipt+Amount+Date+Type+Category+Payment တူပါက skip)။ ဆက်လုပ်မလား။`;
+      if (Platform.OS === "web") {
+        if (confirm(question)) await run();
+      } else {
+        Alert.alert("Confirm Auto-Apply", question, [{ text: "Cancel", style: "cancel" }, { text: "Apply", onPress: () => void run() }]);
+      }
+    } catch (e) {
+      console.error(e);
+      msg("Error", "Auto-Apply မအောင်မြင်ပါ။ ဖိုင်ဖွင့်မရနိုင်ပါ။");
+    }
+  };
+
   const pasteText = async () => {
     if (busy) return;
     const t = await Clipboard.getStringAsync();
@@ -496,22 +667,105 @@ export default function TransactionDataManagementScreen() {
   const applyMerge = async () => {
     const p = parseTransactions(backupText);
     if (!p.ok) return msg("Invalid Data", p.message);
+    const existing = await getTransactions();
+    const plan = buildDuplicateSafeImport(existing, p.transactions);
     const run = async () => {
       setImporting(true);
       try {
-        await importTransactions(p.transactions);
+        await importTransactions(plan.selected);
         await refreshData();
         await writeAutoSnapshot();
-        msg("Success", `Import ပြီးပါပြီ။ ${p.transactions.length} rows merge လုပ်ခဲ့ပါသည်${p.skipped ? ` (${p.skipped} rows skip)` : ""}။`);
+        msg(
+          "Success",
+          `Import ပြီးပါပြီ။ ထည့်သွင်း ${plan.inserted} • Update ${plan.updated} • Skip ${plan.skipped} ဖြစ်ပါသည်။`
+        );
       } finally {
         setImporting(false);
       }
     };
-    const question = "ဖိုင်ထဲက Transaction data ကို လက်ရှိစာရင်းထဲသို့ ထည့်သွင်းပါမည် (ID တူပါက update)။ ဆက်လုပ်မည်လား။";
+    const question =
+      "ဖိုင်ထဲက Transaction data ကို လက်ရှိစာရင်းထဲသို့ ထည့်သွင်းပါမည် (ID တူပါက update, Receipt+Amount+Date+Type+Category+Payment တူပါက skip)။ ဆက်လုပ်မည်လား။";
     if (Platform.OS === "web") {
       if (confirm(question)) await run();
     } else {
       Alert.alert("Confirm Import", question, [{ text: "Cancel", style: "cancel" }, { text: "Import", onPress: () => void run() }]);
+    }
+  };
+
+  const runDuplicateCleanup = async () => {
+    if (busy) return;
+    setDedupeRunning(true);
+    try {
+      const current = await getTransactions();
+      if (!current.length) return msg("No Data", "Transaction စာရင်း မရှိသေးပါ။");
+
+      const groups = new Map<string, any[]>();
+      for (const txn of current) {
+        const key = buildDuplicateKey(txn);
+        if (!key) continue;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)?.push(txn);
+      }
+
+      const duplicateGroups = Array.from(groups.values()).filter((list) => list.length > 1);
+      if (!duplicateGroups.length) return msg("OK", "Duplicate transaction မတွေ့ပါ။");
+
+      let removed = 0;
+      const mergedById = new Map<string, any>();
+      const keepIds = new Set<string>();
+      duplicateGroups.forEach((list) => {
+        const ranked = [...list].sort((a, b) => {
+          const scoreDiff = scoreTransaction(b) - scoreTransaction(a);
+          if (scoreDiff !== 0) return scoreDiff;
+          return String(a?.createdAt || "").localeCompare(String(b?.createdAt || ""));
+        });
+        const keep = ranked[0];
+        const keepId = String(keep?.id || "");
+        keepIds.add(keepId);
+        mergedById.set(keepId, mergeTransactionGroup(keep, ranked));
+        removed += ranked.length - 1;
+      });
+
+      const question = `Duplicate ${removed} rows ကို merge + cleanup လုပ်ပါမည်။ မူလစာရင်း backup ကို clipboard/preview ထဲသို့ ထည့်ပေးထားပါမည်။ ဆက်လုပ်မလား။`;
+      const run = async () => {
+        const data = buildBackup(current);
+        setBackupText(data);
+        const next: any[] = [];
+        current.forEach((row: any) => {
+          const key = buildDuplicateKey(row);
+          if (!key) {
+            next.push(row);
+            return;
+          }
+          const list = groups.get(key);
+          if (!list || list.length < 2) {
+            next.push(row);
+            return;
+          }
+          const keepId = String(row?.id || "");
+          if (keepIds.has(keepId)) {
+            next.push(mergedById.get(keepId) ?? row);
+          }
+        });
+        await saveTransactions(next);
+        await refreshData();
+        await writeAutoSnapshot();
+        msg("Success", `Duplicate ${removed} rows ကို merge + cleanup လုပ်ပြီးပါပြီ။`);
+      };
+
+      if (Platform.OS === "web") {
+        if (confirm(question)) await run();
+      } else {
+        Alert.alert("Confirm Cleanup", question, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => void run() },
+        ]);
+      }
+    } catch (e) {
+      console.error(e);
+      msg("Error", "Duplicate cleanup မအောင်မြင်ပါ။");
+    } finally {
+      setDedupeRunning(false);
     }
   };
 
@@ -534,6 +788,14 @@ export default function TransactionDataManagementScreen() {
             <Text style={styles.cardDesc}>Transaction auto-backup ဖိုင်မှ restore လုပ်နိုင်ပါသည်။</Text>
             <Pressable style={styles.restoreAutoBtn} onPress={restoreAuto} disabled={busy}>
               <Text style={styles.restoreAutoText}>Restore from Auto-Backup</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.autoBackupCard}>
+            <Text style={styles.cardTitle}>Duplicate Cleanup (Safe)</Text>
+            <Text style={styles.cardDesc}>Receipt + Amount + Date + Type + Category + Payment တူနေသော rows ကိုသာ ဖျက်ပါသည်။</Text>
+            <Pressable style={styles.restoreAutoBtn} onPress={runDuplicateCleanup} disabled={busy}>
+              <Text style={styles.restoreAutoText}>Run Duplicate Cleanup</Text>
             </Pressable>
           </View>
 
@@ -578,6 +840,17 @@ export default function TransactionDataManagementScreen() {
               </Pressable>
             </View>
           </View>
+
+          <Pressable
+            style={[styles.actionBtn, { backgroundColor: "#0F766E", marginBottom: 10, opacity: busy ? 0.7 : 1 }]}
+            onPress={autoImportFromFile}
+            disabled={busy}
+          >
+            <View style={styles.actionContent}>
+              <Ionicons name="flash-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.btnText}>Auto-Apply Import (ဖိုင်ရွေး)</Text>
+            </View>
+          </Pressable>
 
           <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
             <Pressable style={[styles.actionBtn, { backgroundColor: "#8B5CF6", flex: 1, opacity: busy ? 0.7 : 1 }]} onPress={pickFile} disabled={busy}>

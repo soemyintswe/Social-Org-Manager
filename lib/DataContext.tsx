@@ -188,6 +188,7 @@ interface DataContextValue {
     byDisplayName?: string;
     approved: boolean;
     note: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   forwardDeleteAuditRequestToChair: (input: {
     requestId: string;
@@ -203,6 +204,7 @@ interface DataContextValue {
     byDisplayName?: string;
     approved: boolean;
     note: string;
+    tagUserIds?: string[];
   }) => Promise<void>;
   confirmDeleteAuditRequestExecution: (input: {
     requestId: string;
@@ -920,6 +922,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byDisplayName?: string;
     approved: boolean;
     note: string;
+    tagUserIds?: string[];
   }) => {
     await store.chairReviewAuditRequest(input);
     await refreshData({ skipPull: true });
@@ -943,6 +946,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     byDisplayName?: string;
     approved: boolean;
     note: string;
+    tagUserIds?: string[];
   }) => {
     await store.chairReviewDeleteAuditRequest(input);
     await refreshData({ skipPull: true });

@@ -275,7 +275,6 @@ export default function AddTransactionScreen() {
       const isFee = type === 'income' && category === 'member_fees';
 
       const transactionData = {
-        id: Date.now().toString(),
         memberId: selectedMemberId || undefined,
         payerPayee: payerPayeeName.trim(),
         amount: parseFloat(amount),
