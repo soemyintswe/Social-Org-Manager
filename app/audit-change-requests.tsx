@@ -15,7 +15,7 @@ import {
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import Colors from "@/constants/colors";
 import AccessDenied from "@/components/AccessDenied";
 import { useData } from "@/lib/DataContext";
@@ -110,6 +110,7 @@ function summarizeRevisionPatch(rev: any): string {
 
 export default function AuditChangeRequestsScreen() {
   const { requestId } = useLocalSearchParams<{ requestId?: string }>();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const {
     auditChangeRequests,
@@ -170,6 +171,9 @@ export default function AuditChangeRequestsScreen() {
   const [optionPickerTitle, setOptionPickerTitle] = useState("");
   const [optionPickerItems, setOptionPickerItems] = useState<CategoryFilterOption[]>([]);
   const draftSaveTimers = React.useRef<Record<string, any>>({});
+  const openedFromParamRef = React.useRef(false);
+  const lastParamRequestId = React.useRef<string>("");
+  const autoOpenEnabledRef = React.useRef(true);
 
   const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
   const isTreasurer = myRole === "treasurer";
@@ -370,12 +374,17 @@ export default function AuditChangeRequestsScreen() {
   }, [visibleExecutionLogs, transactions, loans]);
 
   React.useEffect(() => {
+    if (!autoOpenEnabledRef.current) return;
     const targetId = String(requestId || "").trim();
     if (!targetId) return;
+    if (targetId === lastParamRequestId.current || openedFromParamRef.current) return;
     const found = visibleRequests.find((item: any) => String(item?.id || "") === targetId);
     if (!found) return;
-    setSelectedRequestId(targetId);
-    setShowDetailModal(true);
+    openedFromParamRef.current = true;
+    lastParamRequestId.current = targetId;
+    autoOpenEnabledRef.current = false;
+    openDetail(targetId);
+    clearRequestParam();
   }, [requestId, visibleRequests]);
 
   const selectedRequest = useMemo(
@@ -438,9 +447,22 @@ export default function AuditChangeRequestsScreen() {
   const compareOriginal = useMemo(() => {
     if (latestRevision?.before) return latestRevision.before;
     if (selectedRequest?.originalSnapshot) return selectedRequest.originalSnapshot as any;
+    if (selectedDrafts.treasurer && Object.keys(selectedDrafts.treasurer || {}).length > 0) return selectedDrafts.treasurer as any;
+    if (selectedDrafts.auditor && Object.keys(selectedDrafts.auditor || {}).length > 0) return selectedDrafts.auditor as any;
+    if (selectedDrafts.chairperson && Object.keys(selectedDrafts.chairperson || {}).length > 0) return selectedDrafts.chairperson as any;
     if (executionLogOriginal) return executionLogOriginal as any;
     return selectedRequest?.targetType === "loan" ? selectedLoan : selectedTxn;
-  }, [latestRevision, selectedLoan, selectedTxn, selectedRequest?.targetType, selectedRequest?.originalSnapshot, executionLogOriginal]);
+  }, [
+    latestRevision,
+    selectedLoan,
+    selectedTxn,
+    selectedRequest?.targetType,
+    selectedRequest?.originalSnapshot,
+    executionLogOriginal,
+    selectedDrafts.treasurer,
+    selectedDrafts.auditor,
+    selectedDrafts.chairperson,
+  ]);
   const selectedMemberName = useMemo(() => {
     const memberId = String((compareOriginal as any)?.memberId || (selectedTxn as any)?.memberId || (selectedLoan as any)?.memberId || "");
     if (!memberId) return "-";
@@ -798,6 +820,7 @@ export default function AuditChangeRequestsScreen() {
   };
 
   const openDetail = (requestId: string) => {
+    autoOpenEnabledRef.current = false;
     setSelectedRequestId(requestId);
     setMessageNote("");
     setDecisionNote("");
@@ -807,6 +830,14 @@ export default function AuditChangeRequestsScreen() {
     setActionSubmitting(false);
     setActionSubmitLabel("");
     setShowDetailModal(true);
+    clearRequestParam();
+  };
+
+  const closeDetail = () => {
+    setShowDetailModal(false);
+    setSelectedRequestId("");
+    setActionResult(null);
+    clearRequestParam();
   };
 
   const openCreateDeleteRequestModal = () => {
@@ -1305,16 +1336,46 @@ export default function AuditChangeRequestsScreen() {
     );
   };
 
+  const executionLogForSelected = useMemo(() => {
+    if (!selectedRequest) return null;
+    const logs = Array.isArray(auditExecutionLogs) ? auditExecutionLogs : [];
+    const requestId = String(selectedRequest.id || "");
+    const requestNumber = String(selectedRequest.requestNumber || "");
+    return logs.find((log: any) => {
+      const logRequestId = String(log?.requestId || "");
+      const logRequestNumber = String(log?.requestNumber || "");
+      return (requestId && logRequestId === requestId) || (requestNumber && logRequestNumber === requestNumber);
+    });
+  }, [auditExecutionLogs, selectedRequest]);
+
   const selectedStage = String(selectedRequest?.workflowStage || "") as AuditChangeWorkflowStage;
   const requestStatus = String(selectedRequest?.status || "pending") as AuditChangeRequestStatus;
-  const isFinalized = selectedStage === "completed";
+  const hasExecutionRevision =
+    Array.isArray(selectedRequest?.revisions) &&
+    selectedRequest.revisions.some(
+      (rev: any) => rev?.patch?.__action === "delete" || rev?.patch?.__action === "update"
+    );
+  const isFinalized =
+    selectedStage === "completed" ||
+    !!executionLogForSelected ||
+    !!selectedRequest?.treasurerConfirmedAt ||
+    !!selectedRequest?.closedAt ||
+    hasExecutionRevision ||
+    (requestStatus === "approved" && selectedStage !== "treasurer_execution");
 
   const canAuditorHandle = !!selectedRequest && isAuditor && selectedStage === "auditor_review";
   const canChairHandle = !!selectedRequest && isChair && selectedStage === "chair_approval";
   const canTreasurerReview =
     !!selectedRequest && isTreasurer && selectedStage === "treasurer_execution" && requestStatus !== "approved";
-  const canTreasurerExecute =
+  const canTreasurerExecuteBase =
     !!selectedRequest && isTreasurer && selectedStage === "treasurer_execution" && requestStatus === "approved";
+  const canTreasurerExecute = canTreasurerExecuteBase && !isFinalized;
+
+  const canAuditorForward = canAuditorHandle;
+  const canChairApprove = canChairHandle;
+  const canTreasurerReturnToAuditor = canTreasurerReview;
+  const canTreasurerConfirmDelete = isDeleteRequest && canTreasurerExecute;
+  const canTreasurerApplyUpdate = !isDeleteRequest && canTreasurerExecute;
 
   const canOwnerCancel =
     !!selectedRequest &&
@@ -1324,13 +1385,35 @@ export default function AuditChangeRequestsScreen() {
     !!selectedRequest &&
     ["rejected", "cancelled"].includes(requestStatus) &&
     (isAuditor || isTreasurer || isChair);
-  const actionDisabled = actionSubmitting;
+  const canActNow =
+    canAuditorForward ||
+    canChairApprove ||
+    canTreasurerApplyUpdate ||
+    canTreasurerConfirmDelete ||
+    canTreasurerReturnToAuditor ||
+    canOwnerCancel ||
+    canReopen;
+  const decisionLocked = isFinalized || !canActNow;
+  const decisionNoteValue = decisionLocked ? (latestMessageNote || decisionNote) : decisionNote;
+  const actionDisabled = actionSubmitting || decisionLocked;
 
-  const canAuditorForward = canAuditorHandle;
-  const canChairApprove = canChairHandle;
-  const canTreasurerReturnToAuditor = canTreasurerReview;
-  const canTreasurerConfirmDelete = isDeleteRequest && canTreasurerExecute;
-  const canTreasurerApplyUpdate = !isDeleteRequest && canTreasurerExecute;
+  const clearRequestParam = () => {
+    if (!requestId) return;
+    try {
+      router.replace("/audit-change-requests");
+    } catch {
+      router.setParams({ requestId: undefined });
+    }
+  };
+
+  const handleStatusFilter = (next: "all" | AuditChangeRequestStatus) => {
+    autoOpenEnabledRef.current = false;
+    setStatusFilter(next);
+    setSelectedRequestId("");
+    setActionResult(null);
+    setShowDetailModal(false);
+    clearRequestParam();
+  };
 
   const toggleTestRequestSelection = (requestId: string) => {
     const id = String(requestId || "").trim();
@@ -1447,14 +1530,14 @@ export default function AuditChangeRequestsScreen() {
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-          <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => setStatusFilter("all")}>
+          <Pressable style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]} onPress={() => handleStatusFilter("all")}>
             <Text style={[styles.filterChipText, statusFilter === "all" && styles.filterChipTextActive]}>အားလုံး</Text>
           </Pressable>
           {STATUS_ORDER.map((status) => (
             <Pressable
               key={status}
               style={[styles.filterChip, statusFilter === status && styles.filterChipActive]}
-              onPress={() => setStatusFilter(status)}
+              onPress={() => handleStatusFilter(status)}
             >
               <Text style={[styles.filterChipText, statusFilter === status && styles.filterChipTextActive]}>{statusLabel(status)}</Text>
             </Pressable>
@@ -1665,15 +1748,20 @@ export default function AuditChangeRequestsScreen() {
         </View>
       </ScrollView>
 
-      <Modal animationType="slide" transparent visible={showDetailModal} onRequestClose={() => setShowDetailModal(false)}>
+      <Modal animationType="slide" transparent visible={showDetailModal} onRequestClose={closeDetail}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
           style={styles.modalOverlay}
         >
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDetailModal(false)} />
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeDetail} />
           <ScrollView style={styles.modalCard} contentContainerStyle={{ paddingBottom: insets.bottom + 16 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalTitle}>Audit Request အသေးစိတ်</Text>
+            <View style={styles.detailHeaderRow}>
+              <Text style={styles.modalTitle}>Audit Request အသေးစိတ်</Text>
+              <Pressable style={styles.detailCloseBtn} onPress={closeDetail}>
+                <Text style={styles.detailCloseText}>Close</Text>
+              </Pressable>
+            </View>
             <Text style={styles.modalMeta}>Request: {selectedRequest?.requestNumber || "-"}</Text>
             <Text style={styles.modalMeta}>Kind: {String(selectedRequest?.requestKind || "update")}</Text>
             <Text style={styles.modalMeta}>Target: {String(selectedRequest?.targetType || "transaction")} / {String(selectedRequest?.targetId || selectedRequest?.transactionId || "-")}</Text>
@@ -1746,66 +1834,65 @@ export default function AuditChangeRequestsScreen() {
               <View style={styles.completedNotice}>
                 <Text style={styles.completedNoticeText}>ဒီ Request ကို လုပ်ငန်းပြီးဆုံးအဖြစ် မှတ်တမ်းတင်ပြီးပါပြီ။</Text>
               </View>
-            ) : (
-              <>
-                <Text style={styles.sectionLabel}>Decision Note</Text>
-                <TextInput
-                  style={styles.input}
-                  value={decisionNote}
-                  onChangeText={setDecisionNote}
-                  placeholder="လက်ခံ/ကန့်ကွက်/ဆိုင်းငံ့ မှတ်ချက်"
-                  editable={!actionSubmitting}
-                />
+            ) : null}
+            <Text style={styles.sectionLabel}>Decision Note</Text>
+            <TextInput
+              style={[styles.input, decisionLocked && styles.inputDisabled]}
+              value={decisionNoteValue}
+              onChangeText={setDecisionNote}
+              placeholder="လက်ခံ/ကန့်ကွက်/ဆိုင်းငံ့ မှတ်ချက်"
+              editable={!actionSubmitting && !decisionLocked}
+            />
+            <Pressable
+              style={[styles.selectionInput, decisionLocked && styles.selectionInputDisabled]}
+              onPress={() => setShowTagPicker(true)}
+              disabled={actionSubmitting || decisionLocked}
+            >
+              <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
+                {selectedTagUsers.length > 0
+                  ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
+                  : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
+              </Text>
+              <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
+            </Pressable>
+            {selectedTagUsers.length > 0 ? (
+              <View style={styles.tagPreviewWrap}>
+                {selectedTagUsers.map((user: any) => (
+                  <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
+                    <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            {actionSubmitting ? (
+              <View style={styles.actionBusyRow}>
+                <ActivityIndicator size="small" color={Colors.light.tint} />
+                <Text style={styles.actionBusyText}>{actionSubmitLabel || "လုပ်ဆောင်နေပါတယ်..."}</Text>
+              </View>
+            ) : null}
+            {actionResult ? (
+              <View
+                style={[
+                  styles.actionResultWrap,
+                  actionResult.type === "success" ? styles.actionResultSuccess : styles.actionResultError,
+                ]}
+              >
+                <Text style={styles.actionResultText}>{actionResult.message}</Text>
                 <Pressable
-                  style={styles.selectionInput}
-                  onPress={() => setShowTagPicker(true)}
-                  disabled={actionSubmitting}
+                  style={styles.actionResultBtn}
+                  onPress={() => {
+                    if (actionResult.type === "success" && actionResult.closeOnSuccess) {
+                      closeDetail();
+                    }
+                    setActionResult(null);
+                  }}
                 >
-                  <Text style={[styles.selectionInputText, selectedTagUsers.length === 0 && styles.selectionInputPlaceholder]} numberOfLines={1}>
-                    {selectedTagUsers.length > 0
-                      ? `Tag Users: ${selectedTagUsers.map((row: any) => String(row?.displayName || row?.id || "-")).join(", ")}`
-                      : "Tag တွဲပေးမည့် User များရွေးပါ (Optional)"}
+                  <Text style={styles.actionResultBtnText}>
+                    {actionResult.type === "success" ? "OK" : "ထပ်မံကြိုးစားပါ"}
                   </Text>
-                  <Ionicons name="people-outline" size={18} color={Colors.light.textSecondary} />
                 </Pressable>
-                {selectedTagUsers.length > 0 ? (
-                  <View style={styles.tagPreviewWrap}>
-                    {selectedTagUsers.map((user: any) => (
-                      <Pressable key={String(user?.id || "")} style={styles.tagChip} onPress={() => toggleTagUser(String(user?.id || ""))}>
-                        <Text style={styles.tagChipText}>{String(user?.displayName || user?.id || "-")}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
-                {actionSubmitting ? (
-                  <View style={styles.actionBusyRow}>
-                    <ActivityIndicator size="small" color={Colors.light.tint} />
-                    <Text style={styles.actionBusyText}>{actionSubmitLabel || "လုပ်ဆောင်နေပါတယ်..."}</Text>
-                  </View>
-                ) : null}
-                {actionResult ? (
-                  <View
-                    style={[
-                      styles.actionResultWrap,
-                      actionResult.type === "success" ? styles.actionResultSuccess : styles.actionResultError,
-                    ]}
-                  >
-                    <Text style={styles.actionResultText}>{actionResult.message}</Text>
-                    <Pressable
-                      style={styles.actionResultBtn}
-                      onPress={() => {
-                        if (actionResult.type === "success" && actionResult.closeOnSuccess) {
-                          setShowDetailModal(false);
-                        }
-                        setActionResult(null);
-                      }}
-                    >
-                      <Text style={styles.actionResultBtnText}>
-                        {actionResult.type === "success" ? "OK" : "ထပ်မံကြိုးစားပါ"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : null}
+              </View>
+            ) : null}
 
                 {canAuditorForward ? (
                   <View style={styles.actionRow}>
@@ -1872,7 +1959,7 @@ export default function AuditChangeRequestsScreen() {
                   </>
                 ) : null}
 
-                {canTreasurerApplyUpdate ? (
+                {(!isDeleteRequest && canTreasurerExecuteBase) ? (
                   <View style={styles.actionRow}>
                     <Pressable
                       style={[styles.actionBtn, { backgroundColor: "#10B981" }, actionDisabled && styles.actionBtnDisabled]}
@@ -1891,7 +1978,7 @@ export default function AuditChangeRequestsScreen() {
                   </View>
                 ) : null}
 
-                {canTreasurerConfirmDelete ? (
+                {(isDeleteRequest && canTreasurerExecuteBase) ? (
                   <Pressable
                     style={[styles.actionBtn, { backgroundColor: "#B91C1C", marginTop: 8 }, actionDisabled && styles.actionBtnDisabled]}
                     onPress={() => void submitConfirmDeleteExecution()}
@@ -1966,7 +2053,6 @@ export default function AuditChangeRequestsScreen() {
                     </Pressable>
                   ) : null}
                 </View>
-              </>
             )}
 
             <Text style={styles.sectionLabel}>ပြောင်းလဲမှုမှတ်တမ်း</Text>
@@ -2437,6 +2523,16 @@ const styles = StyleSheet.create({
   },
   modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.45)" },
   modalCard: { backgroundColor: "#fff", borderTopLeftRadius: 18, borderTopRightRadius: 18, maxHeight: "90%", padding: 16 },
+  detailHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 6 },
+  detailCloseBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  detailCloseText: { fontSize: 12.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   modalTitle: { fontSize: 22, color: Colors.light.text, fontFamily: "Inter_700Bold", marginBottom: 8 },
   modalMeta: { fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", marginBottom: 4 },
   sectionLabel: { marginTop: 12, marginBottom: 6, color: Colors.light.text, fontFamily: "Inter_600SemiBold", fontSize: 13 },
@@ -2539,6 +2635,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: Colors.light.text,
   },
+  inputDisabled: { backgroundColor: "#E2E8F0", color: Colors.light.textSecondary },
   noteInput: { minHeight: 86, textAlignVertical: "top" },
   selectionInput: {
     marginTop: 8,
@@ -2553,6 +2650,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 8,
   },
+  selectionInputDisabled: { backgroundColor: "#E2E8F0" },
   selectionInputText: { flex: 1, color: Colors.light.text, fontFamily: "Inter_500Medium", fontSize: 13 },
   selectionInputPlaceholder: { color: Colors.light.textSecondary },
   tagPreviewWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
