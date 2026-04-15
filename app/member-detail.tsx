@@ -90,8 +90,12 @@ const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
 
 const DEFAULT_MEMBER_JOIN_DATE_DMY = "01/01/2018";
 
-const buildGeneratedPassword = () =>
-  `ORG${secureRandomToken(4).toUpperCase()}${String(100 + Math.floor(Math.random() * 900))}`;
+const buildGeneratedPassword = () => {
+  const token = secureRandomToken(4).toUpperCase();
+  const randomValue = Number.parseInt(secureRandomToken(4), 16);
+  const numericSuffix = String(100 + (randomValue % 900)).padStart(3, "0");
+  return `ORG${token}${numericSuffix}`;
+};
 
 const formatDateToDmy = (value: unknown, fallback = ""): string => {
   const text = String(value || "").trim();
