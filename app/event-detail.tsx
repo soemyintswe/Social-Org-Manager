@@ -4,10 +4,10 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "@/constants/colors";
-import { useAuth } from "@/lib/AuthContext";
-import { useData } from "@/lib/DataContext";
-import { secureRandomToken } from "@/lib/secure-random";
+import Colors from "../../constants/colors";
+import { useAuth } from "../../lib/AuthContext";
+import { useData } from "../../lib/DataContext";
+import { secureRandomToken } from "../../lib/secure-random";
 
 interface OrgEventNotice {
   id: string;

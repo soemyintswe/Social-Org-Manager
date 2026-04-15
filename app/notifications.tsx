@@ -3,10 +3,10 @@ import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, 
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import { resolveNotificationRoute } from "@/lib/notification-routing";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import { resolveNotificationRoute } from "../../lib/notification-routing";
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();

@@ -2,12 +2,12 @@ import React, { useCallback, useMemo, useState } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useRouter } from "expo-router";
-import AccessDenied from "@/components/AccessDenied";
-import Colors from "@/constants/colors";
-import { useAuth } from "@/lib/AuthContext";
-import { useData } from "@/lib/DataContext";
-import { isCommitteePosition } from "@/lib/access-control";
-import { secureRandomToken } from "@/lib/secure-random";
+import AccessDenied from "../../components/AccessDenied";
+import Colors from "../../constants/colors";
+import { useAuth } from "../../lib/AuthContext";
+import { useData } from "../../lib/DataContext";
+import { isCommitteePosition } from "../../lib/access-control";
+import { secureRandomToken } from "../../lib/secure-random";
 import {
   MonthlyFeePolicyRequest,
   MonthlyFeeRateRule,
@@ -17,7 +17,7 @@ import {
   ORG_POSITION_LABELS,
   normalizeOrgPosition,
   type OrgPosition,
-} from "@/lib/types";
+} from "../../lib/types";
 
 type MemberOption = { id: string; name: string };
 type DateFieldKey = "detailStart" | "detailEnd" | "rateStart" | "rateEnd" | "reliefStart" | "reliefEnd";

@@ -19,17 +19,17 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import QRCode from "react-native-qrcode-svg";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import { useKeyboardInset } from "@/lib/use-keyboard-inset";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import { useKeyboardInset } from "../../lib/use-keyboard-inset";
 import {
   MEMBER_PAYMENT_REQUEST_KIND_LABELS,
   MOBILE_WALLET_PROVIDER_LABELS,
   normalizeOrgPosition,
   type MemberPaymentRequestKind,
   type MobileWalletProvider,
-} from "@/lib/types";
+} from "../../lib/types";
 
 const KIND_TO_CATEGORY_HINT: Record<MemberPaymentRequestKind, string> = {
   member_fees: "လစဉ်ကြေးရငွေ",

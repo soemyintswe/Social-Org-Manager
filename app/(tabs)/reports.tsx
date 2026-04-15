@@ -16,9 +16,9 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   MEMBER_GENDER_LABELS,
@@ -33,16 +33,16 @@ import {
   type OrgPosition,
   normalizeMemberStatus,
   normalizeOrgPosition,
-} from "@/lib/types";
+} from "../../lib/types";
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
-import { secureRandomToken } from "@/lib/secure-random";
-import AccessDenied from "@/components/AccessDenied";
-import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
-import { toEnglishDigits } from "@/lib/member-utils";
-import { exportXlsxFile } from "@/lib/xlsx-export";
+import { secureRandomToken } from "../../lib/secure-random";
+import AccessDenied from "../../components/AccessDenied";
+import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "../../lib/transaction-display";
+import { toEnglishDigits } from "../../lib/member-utils";
+import { exportXlsxFile } from "../../lib/xlsx-export";
 import {
   buildCashBookRows,
   buildFilteredMemberRows,
@@ -55,7 +55,7 @@ import {
   computeLoanStats,
   computeMemberFlowStats,
   computeMemberSummaryStats,
-} from "@/lib/reporting-service";
+} from "../../lib/reporting-service";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },

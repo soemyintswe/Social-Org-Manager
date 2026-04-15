@@ -16,15 +16,15 @@ import {
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
 import { default as Constants } from 'expo-constants';
-import orgStorage from "@/lib/org-storage";
+import orgStorage from "../../lib/org-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import { isCommitteePosition } from "@/lib/access-control";
-import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory, type MemberPaymentRequestKind } from "@/lib/types";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import { isCommitteePosition } from "../../lib/access-control";
+import { CATEGORY_LABELS, normalizeMemberStatus, OrgEvent, TransactionCategory, type MemberPaymentRequestKind } from "../../lib/types";
 import {
   checkCloudSyncHealth,
   checkLanSyncHealth,
@@ -34,10 +34,10 @@ import {
   pullLanSnapshotToLocalDetailed,
   pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
-} from "@/lib/storage-service";
-import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
-import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
-import { resolveNotificationRoute } from "@/lib/notification-routing";
+} from "../../lib/storage-service";
+import { parseGregorianDate, splitPhoneNumbers } from "../../lib/member-utils";
+import { DEFAULT_LAN_SYNC_URL } from "../../lib/sync-defaults";
+import { resolveNotificationRoute } from "../../lib/notification-routing";
 
 const AsyncStorage = orgStorage;
 

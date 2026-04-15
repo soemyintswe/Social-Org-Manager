@@ -1,4 +1,4 @@
-import orgStorage from "@/lib/org-storage";
+import orgStorage from "../../lib/org-storage";
 import React, { useEffect, useMemo, useState } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -7,11 +7,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import Colors from "@/constants/colors";
-import { useAuth } from "@/lib/AuthContext";
-import { useData } from "@/lib/DataContext";
-import AccessDenied from "@/components/AccessDenied";
-import type { MemberChangeRequest } from "@/lib/types";
+import Colors from "../../constants/colors";
+import { useAuth } from "../../lib/AuthContext";
+import { useData } from "../../lib/DataContext";
+import AccessDenied from "../../components/AccessDenied";
+import type { MemberChangeRequest } from "../../lib/types";
 
 const AsyncStorage = orgStorage;
 

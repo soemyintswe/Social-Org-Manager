@@ -3,9 +3,9 @@ import { View, Text, Pressable, StyleSheet, Modal, ScrollView, useWindowDimensio
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "@/constants/colors";
-import { useAuth } from "@/lib/AuthContext";
-import { isCommitteePosition } from "@/lib/access-control";
+import Colors from "../../constants/colors";
+import { useAuth } from "../../lib/AuthContext";
+import { isCommitteePosition } from "../../lib/access-control";
 
 type FloatingTabMenuProps = {
   mode?: "floating" | "topbar";

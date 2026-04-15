@@ -15,10 +15,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { generateReceiptNumber } from "@/lib/storage-service";
-import { computeLoanMetrics, getLoanPrincipal, monthDiffInclusive, parseFlexibleDate } from "@/lib/loan-metrics";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { generateReceiptNumber } from "../../lib/storage-service";
+import { computeLoanMetrics, getLoanPrincipal, monthDiffInclusive, parseFlexibleDate } from "../../lib/loan-metrics";
 
 const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} MMK`;
 const DEFAULT_FROM_DATE = new Date(2018, 0, 1);

@@ -6,12 +6,12 @@ import { router } from "expo-router";
 import * as Linking from "expo-linking";
 import * as Clipboard from "expo-clipboard";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { getAccountSettings } from "@/lib/storage-service";
-import { useAuth } from "@/lib/AuthContext";
-import { clearAllLocalDataKeepSystemConfig } from "@/lib/storage-service";
-import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { getAccountSettings } from "../../lib/storage-service";
+import { useAuth } from "../../lib/AuthContext";
+import { clearAllLocalDataKeepSystemConfig } from "../../lib/storage-service";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "../../lib/app-update";
 import {
   buildOrgRegistryEntry,
   fetchOrgRegistryEntry,
@@ -19,7 +19,7 @@ import {
   listOrgRegistryEntries,
   upsertOrgRegistryEntry,
   type OrgRegistryEntry,
-} from "@/lib/org-registry";
+} from "../../lib/org-registry";
 
 const RegistryRow = ({
   label,

@@ -21,14 +21,14 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
-import orgStorage from "@/lib/org-storage";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import { isCommitteePosition } from "@/lib/access-control";
-import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
-import { secureRandomInt, secureRandomToken } from "@/lib/secure-random";
-import { toEnglishDigits } from "@/lib/member-utils";
+import orgStorage from "../../lib/org-storage";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import { isCommitteePosition } from "../../lib/access-control";
+import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "../../lib/relation-options";
+import { secureRandomInt, secureRandomToken } from "../../lib/secure-random";
+import { toEnglishDigits } from "../../lib/member-utils";
 import {
   ORG_POSITION_LABELS,
   OrgPosition,
@@ -40,8 +40,8 @@ import {
   MEMBER_GENDER_VALUES,
   MEMBER_GENDER_LABELS,
   normalizeOrgPosition,
-} from "@/lib/types";
-import AccessDenied from "@/components/AccessDenied";
+} from "../../lib/types";
+import AccessDenied from "../../components/AccessDenied";
 
 const AsyncStorage = orgStorage;
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်

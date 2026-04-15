@@ -20,11 +20,11 @@ import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import * as store from "@/lib/storage-service";
-import { normalizeMemberStatus, normalizeOrgPosition, type Member } from "@/lib/types";
-import { normalizeDateText, splitPhoneNumbers } from "@/lib/member-utils";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import * as store from "../../lib/storage-service";
+import { normalizeMemberStatus, normalizeOrgPosition, type Member } from "../../lib/types";
+import { normalizeDateText, splitPhoneNumbers } from "../../lib/member-utils";
 
 const MEMBER_AUTO_BACKUP_FILE = "members_auto_backup.json";
 const LEGACY_AUTO_BACKUP_FILE = "auto_backup.json";

@@ -20,14 +20,14 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
-import orgStorage from "@/lib/org-storage";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import { isCommitteePosition } from "@/lib/access-control";
-import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
-import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { secureRandomToken } from "@/lib/secure-random";
+import orgStorage from "../../lib/org-storage";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import { isCommitteePosition } from "../../lib/access-control";
+import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "../../lib/relation-options";
+import { useKeyboardInset } from "../../lib/use-keyboard-inset";
+import { secureRandomToken } from "../../lib/secure-random";
 import {
   CATEGORY_LABELS,
   ORG_POSITION_LABELS,
@@ -40,7 +40,7 @@ import {
   MEMBER_GENDER_VALUES,
   MemberFamilyMember,
   normalizeOrgPosition,
-} from "@/lib/types";
+} from "../../lib/types";
 
 const AsyncStorage = orgStorage;
 

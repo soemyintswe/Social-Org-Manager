@@ -19,13 +19,13 @@ import { router, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
-import orgStorage from "@/lib/org-storage";
+import orgStorage from "../../lib/org-storage";
 import QRCode from "react-native-qrcode-svg";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import type { AccountSettings } from "@/lib/types";
-import { normalizeOrgPosition } from "@/lib/types";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import type { AccountSettings } from "../../lib/types";
+import { normalizeOrgPosition } from "../../lib/types";
 import {
   checkCloudSyncHealth,
   getEffectiveSyncRuntimeConfig,
@@ -34,14 +34,14 @@ import {
   pullLanSnapshotToLocalDetailed,
   pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
-} from "@/lib/storage-service";
+} from "../../lib/storage-service";
 import {
   DEFAULT_CLOUD_SYNC_ENDPOINT,
   DEFAULT_CLOUD_SYNC_FOLDER_NAME,
   DEFAULT_LAN_SYNC_URL,
-} from "@/lib/sync-defaults";
-import { getManagedSyncLockdownEnabled } from "@/lib/remote-config";
-import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
+} from "../../lib/sync-defaults";
+import { getManagedSyncLockdownEnabled } from "../../lib/remote-config";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "../../lib/app-update";
 
 const AsyncStorage = orgStorage;
 
