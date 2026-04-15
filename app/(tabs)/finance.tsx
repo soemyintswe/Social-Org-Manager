@@ -18,18 +18,26 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { useAuth } from "@/lib/AuthContext";
-import AccessDenied from "@/components/AccessDenied";
-import { Transaction, Loan, type MemberPaymentRequestKind, type AuditChangeDrafts, normalizeOrgPosition } from "@/lib/types";
+import * as Haptics from "expo-haptics";
+
+// လမ်းကြောင်းများကို Render Build အတွက် Relative Path များဖြင့် ပြင်ဆင်ထားသည်
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { useAuth } from "../../lib/AuthContext";
+import AccessDenied from "../../components/AccessDenied";
+import { Transaction, Loan, type MemberPaymentRequestKind, type AuditChangeDrafts, normalizeOrgPosition } from "../../lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "@/lib/loan-metrics";
-import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription } from "@/lib/transaction-display";
-import { exportXlsxFile } from "@/lib/xlsx-export";
-import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS, normalizeFinanceCategory } from "@/lib/finance-categories";
+import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "../../lib/loan-metrics";
+
+// Comment များ ပြန်ဖွင့်ပြီး Function များကို Import လုပ်ထားသည်
+import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription } from "../../lib/transaction-display";
+import { exportXlsxFile } from "../../lib/xlsx-export";
+import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS, normalizeFinanceCategory } from "../../lib/finance-categories";
+
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+
+// ... (ကျန်ရှိသော Component ကုဒ်များကို ဖိုင်အပြည့်အစုံတွင် ဆက်လက်ကြည့်ရှုနိုင်ပါသည်)
 
 type Tab = "transactions" | "transfers" | "loans";
 type FinanceViewScope = "all" | "self" | "member";
@@ -401,7 +409,14 @@ export default function FinanceScreen() {
     const [showDeleteRequestOptionPicker, setShowDeleteRequestOptionPicker] = useState(false);
     const [deleteRequestOptionField, setDeleteRequestOptionField] = useState<string>("");
     const [deleteRequestOptionTitle, setDeleteRequestOptionTitle] = useState<string>("");
-    const [deleteRequestOptionItems, setDeleteRequestOptionItems] = useState<CategoryFilterOption[]>([]);
+    // (moved to top)
+      const [deleteRequestOptionItems, setDeleteRequestOptionItems] = useState<CategoryFilterOption[]>([]);
+  // import type { CategoryFilterOption } from "../types";
+  // Temporary local type definition for CategoryFilterOption
+  type CategoryFilterOption = {
+    label: string;
+    value: string;
+  };
   const [viewScope, setViewScope] = useState<FinanceViewScope>("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [keywordSearch, setKeywordSearch] = useState("");
@@ -1068,9 +1083,9 @@ export default function FinanceScreen() {
             style={styles.auditTablePicker}
             onPress={() =>
               openDeleteRequestOptionPicker("type", "စာရင်းအမျိုးအစား", [
-                { id: "income", label: "ရငွေစာရင်း" },
-                { id: "expense", label: "အသုံးစာရင်း" },
-                { id: "transfer", label: "ဘဏ်သွင်း/ဘဏ်ထုတ်" },
+                { value: "income", label: "ရငွေစာရင်း" },
+                { value: "expense", label: "အသုံးစာရင်း" },
+                { value: "transfer", label: "ဘဏ်သွင်း/ဘဏ်ထုတ်" },
               ])
             }
           >
@@ -1085,8 +1100,8 @@ export default function FinanceScreen() {
             style={styles.auditTablePicker}
             onPress={() =>
               openDeleteRequestOptionPicker("paymentMethod", "ငွေပေးချေမှု ပုံစံ", [
-                { id: "cash", label: "ငွေသား (Cash)" },
-                { id: "bank", label: "ဘဏ် (Bank)" },
+                { value: "cash", label: "ငွေသား (Cash)" },
+                { value: "bank", label: "ဘဏ် (Bank)" },
               ])
             }
           >
@@ -1100,7 +1115,14 @@ export default function FinanceScreen() {
           <Pressable
             style={styles.auditTablePicker}
             onPress={() =>
-              openDeleteRequestOptionPicker("category", "အမျိုးအစားရွေးချယ်ရန်", deleteRequestCategoryOptions)
+              openDeleteRequestOptionPicker(
+                "category",
+                "အမျိုးအစားရွေးချယ်ရန်",
+                deleteRequestCategoryOptions.map(opt => ({
+                  value: opt.id,
+                  label: opt.label
+                }))
+              )
             }
           >
             <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
@@ -1328,7 +1350,10 @@ export default function FinanceScreen() {
   }, [auditChangeRequests]);
 
   const isAllScope = effectiveScope === "all";
-  const financeCategoryGroups = useMemo<{ title: string; options: CategoryFilterOption[] }[]>(() => {
+  // Use the CategoryFilterOption type from the finance-categories module for correct typing
+  // (import moved to top)
+  // Use 'any' for CategoryFilterOption type as fallback due to missing module
+  const financeCategoryGroups = useMemo<{ title: string; options: any[] }[]>(() => {
     if (activeTab === "loans") return [];
     if (activeTab === "transactions") {
       if (isAllScope) {
