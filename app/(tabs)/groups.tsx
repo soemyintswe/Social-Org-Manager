@@ -13,9 +13,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
-import Colors from "@/constants/colors";
-import { useData } from "@/lib/DataContext";
-import { Group } from "@/lib/types";
+import Colors from "../../constants/colors";
+import { useData } from "../../lib/DataContext";
+import { Group } from "../../lib/types";
 
 function GroupCard({ group, memberCount, onPress, onDelete }: {
   group: Group;
