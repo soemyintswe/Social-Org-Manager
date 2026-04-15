@@ -22,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import { getTransactions, importTransactions, saveTransactions } from "@/lib/storage";
+import { getTransactions, importTransactions, saveTransactions } from "@/lib/storage-service";
 import { secureRandomToken } from "@/lib/secure-random";
 
 const TXN_AUTO_BACKUP_FILE = "transactions_auto_backup.json";

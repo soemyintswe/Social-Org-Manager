@@ -4,10 +4,12 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { MEMBER_STATUS_LABELS, normalizeMemberStatus } from "@/lib/types";
+
+const AsyncStorage = orgStorage;
 
 const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
 const LAN_QR_PREFIX = "ORGHUB_LAN:";

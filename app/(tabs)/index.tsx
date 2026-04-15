@@ -10,12 +10,13 @@ import {
   Linking,
   Platform,
   Alert,
+  Modal,
   Animated,
   Easing,
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
 import { default as Constants } from 'expo-constants';
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -33,10 +34,12 @@ import {
   pullLanSnapshotToLocalDetailed,
   pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
-} from "@/lib/storage";
+} from "@/lib/storage-service";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
 import { resolveNotificationRoute } from "@/lib/notification-routing";
+
+const AsyncStorage = orgStorage;
 
 const loadSeenMarkerSet = async (key: string): Promise<Set<string>> => {
   try {
@@ -191,6 +194,20 @@ export default function DashboardScreen() {
   const { members, events, transactions, loans, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
   const safeMembers = Array.isArray(members) ? members : [];
   const { currentUser, currentMember, can } = useAuth();
+  useEffect(() => {
+    if (!loading && !currentUser) {
+      router.replace("/sign-in");
+    }
+  }, [loading, currentUser]);
+
+  if (!currentUser) {
+    return (
+      <View style={[styles.loadingContainer, { paddingTop: insets.top + 20 }]}>
+        <ActivityIndicator size="large" color={Colors.light.tint} />
+        <Text style={styles.loadingText}>စာမျက်နှာကို ဖွင့်နေပါတယ်...</Text>
+      </View>
+    );
+  }
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
   const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
@@ -216,6 +233,8 @@ export default function DashboardScreen() {
   const { scrollToTop } = useLocalSearchParams();
   const [syncingNow, setSyncingNow] = useState(false);
   const [refreshingDashboard, setRefreshingDashboard] = useState(false);
+  const [syncSummary, setSyncSummary] = useState<string>("");
+  const [showSyncSummary, setShowSyncSummary] = useState(false);
 
   const normalizeUrl = (raw: string): string => {
     const trimmed = String(raw || "").trim();
@@ -246,7 +265,8 @@ export default function DashboardScreen() {
       const cloudEnabled = runtimeConfig.cloud.enabled;
 
       if (!lanEnabled && !cloudEnabled) {
-        Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync configuration ကို Admin account သို့မဟုတ် Remote Config မှာ စစ်ဆေးပေးပါ။");
+        setSyncSummary("LAN သို့မဟုတ် Cloud Sync configuration ကို Admin account သို့မဟုတ် Remote Config မှာ စစ်ဆေးပေးပါ။");
+        setShowSyncSummary(true);
         return;
       }
 
@@ -302,10 +322,10 @@ export default function DashboardScreen() {
       const authHint = authHintNeeded
         ? "\nHint: Cloud API Key ကို Google Apps Script API_KEY နဲ့တူအောင် ပြန်စစ်ပါ။ API_KEY မသုံးလျှင် နှစ်ဖက်လုံး အလွတ်ထားပါ။"
         : "";
-      Alert.alert(
-        "Sync",
+      setSyncSummary(
         `${asSyncLine("LAN Pull", pullLan, "pull")}\n${asSyncLine("LAN Push", pushLan, "push")}\n${asSyncLine("Cloud Pull", pullCloud, "pull")}\n${asSyncLine("Cloud Push", pushCloud, "push")}\n${lanHealthLine}\n${cloudHealthLine}${authHint}`
       );
+      setShowSyncSummary(true);
     } finally {
       setSyncingNow(false);
     }
@@ -1150,65 +1170,98 @@ export default function DashboardScreen() {
     });
   };
 
+  const renderSyncSummaryModal = () => (
+    <Modal
+      visible={showSyncSummary}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowSyncSummary(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Sync</Text>
+          <ScrollView style={styles.modalBody}>
+            <Text style={styles.modalText}>{syncSummary || "-"}</Text>
+          </ScrollView>
+          <Pressable style={styles.modalBtn} onPress={() => setShowSyncSummary(false)}>
+            <Text style={styles.modalBtnText}>OK</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.light.tint} />
-      </View>
+      <>
+        {renderSyncSummaryModal()}
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.light.tint} />
+        </View>
+      </>
     );
   }
 
   if (isSystemAdmin) {
     return (
-      <ScrollView
-        ref={scrollRef}
-        style={styles.container}
-        contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.header}>
-          <Text style={styles.orgName}>System Admin Dashboard</Text>
-          <Text style={styles.headerIdentity} numberOfLines={1}>
-            {userIdentityLabel || "Admin"}
-          </Text>
-        </View>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>စနစ်ထိန်းချုပ်မှု</Text>
-          <Text style={styles.sectionSubtitle}>
-            Admin account သည် system setup, sync configuration နှင့် initial user account setup ကိုသာ စီမံနိုင်ပါသည်။
-          </Text>
-          <View style={styles.quickActionsGrid}>
-            <QuickAction icon="chatbubbles-outline" label="Messages" onPress={() => router.push("/messages" as any)} />
-            <QuickAction icon="folder-open-outline" label="Data & Backup" onPress={() => router.push("/data-management" as any)} />
-            <QuickAction icon="options-outline" label="Account Settings" onPress={() => router.push("/account-settings" as any)} />
-            <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />
+      <>
+        {renderSyncSummaryModal()}
+        <ScrollView
+          ref={scrollRef}
+          style={styles.container}
+          contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <Text style={styles.orgName}>System Admin Dashboard</Text>
+            <Text style={styles.headerIdentity} numberOfLines={1}>
+              {userIdentityLabel || "Admin"}
+            </Text>
           </View>
-        </View>
-      </ScrollView>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>စနစ်ထိန်းချုပ်မှု</Text>
+              <Text style={styles.sectionSubtitle}>
+                Admin account သည် system setup, sync configuration နှင့် initial user account setup ကိုသာ စီမံနိုင်ပါသည်။
+              </Text>
+              <View style={styles.quickActionsGrid}>
+                <QuickAction
+                  icon="sync-outline"
+                  label={syncingNow ? "Syncing..." : "Sync Now (LAN/Cloud)"}
+                  onPress={() => void handleSyncNow()}
+                  spinning={syncingNow}
+                />
+                <QuickAction icon="options-outline" label="Account Settings" onPress={() => router.push("/account-settings" as any)} />
+                <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />
+              </View>
+          </View>
+        </ScrollView>
+      </>
     );
   }
 
   return (
-    <ScrollView 
-      ref={scrollRef}
-      style={styles.container} 
-      contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshingDashboard}
-          onRefresh={() => void handleDashboardRefresh()}
-          tintColor={Colors.light.tint}
-          colors={[Colors.light.tint]}
-        />
-      }
-    >
-      <View style={styles.header}>
-        <Text style={styles.orgName}>OrgHub Dashboard</Text>
-        <Text style={styles.headerIdentity} numberOfLines={1}>
-          {userIdentityLabel || "အသုံးပြုသူ"}
-        </Text>
-      </View>
+    <>
+      {renderSyncSummaryModal()}
+      <ScrollView 
+        ref={scrollRef}
+        style={styles.container} 
+        contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshingDashboard}
+            onRefresh={() => void handleDashboardRefresh()}
+            tintColor={Colors.light.tint}
+            colors={[Colors.light.tint]}
+          />
+        }
+      >
+        <View style={styles.header}>
+          <Text style={styles.orgName}>OrgHub Dashboard</Text>
+          <Text style={styles.headerIdentity} numberOfLines={1}>
+            {userIdentityLabel || "အသုံးပြုသူ"}
+          </Text>
+        </View>
 
       <View style={styles.statsGrid}>
         <StatCard 
@@ -1483,12 +1536,14 @@ export default function DashboardScreen() {
         <Text style={styles.footerText}>Project Owner & Developer: MR. SOE MYINT SWE</Text>
       </View>
     </ScrollView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { marginTop: 12, fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 20 },
   orgName: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerIdentity: { flex: 1, marginLeft: 12, fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, textAlign: "right" },
@@ -1591,4 +1646,32 @@ const styles = StyleSheet.create({
   birthdayDate: { fontSize: 12, color: "#991B1B", marginTop: 2, fontFamily: "Inter_500Medium" },
   wishBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#FECACA", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 4 },
   wishBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#B91C1C" },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 8 },
+  modalBody: { maxHeight: 220 },
+  modalText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_500Medium", lineHeight: 20 },
+  modalBtn: {
+    alignSelf: "flex-end",
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  modalBtnText: { color: "white", fontFamily: "Inter_600SemiBold" },
 });

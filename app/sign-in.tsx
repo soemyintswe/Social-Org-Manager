@@ -1,12 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Linking,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +20,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/AuthContext";
 import { getCurrentAppVersion } from "../lib/app-update";
+import { useData } from "../lib/DataContext";
+import { clearOrgScopedStorage, persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
+import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
+import { ensureChairAccountFromRegistry } from "../lib/storage-service";
+import { getAccountSettings, saveAccountSettings } from "../lib/storage-service";
+import { fetchOrgRegistryEntry } from "../lib/org-registry";
+import { setEmptyOrgState } from "../lib/storage-service";
 
 const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
   "နုတ်ထွက်": "နှုတ်ထွက်ထားပါသည်။",
@@ -28,8 +38,10 @@ const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
 const LOGIN_DENIED_SUFFIX = "Login ဝင်ခွင့်မရှိပါ။";
 
 export default function SignInScreen() {
-  const { attemptLogin, checkUsernameStatus, getLoginLockInfo, loading } = useAuth();
+  const { attemptLogin, checkUsernameStatus, getLoginLockInfo, loading, resetPassword } = useAuth();
+  const { refreshData } = useData();
   const router = useRouter();
+  const params = useLocalSearchParams();
   const appVersion = getCurrentAppVersion();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [username, setUsername] = useState("");
@@ -41,13 +53,24 @@ export default function SignInScreen() {
   const [checkingUsername, setCheckingUsername] = useState(false);
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [passwordValid, setPasswordValid] = useState<boolean | null>(null);
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotIdentifier, setForgotIdentifier] = useState("");
+  const [resettingForgot, setResettingForgot] = useState(false);
   const [lockRemainingMs, setLockRemainingMs] = useState(0);
   const [showFullGuide, setShowFullGuide] = useState(false);
+  const [orgHydrating, setOrgHydrating] = useState(false);
   const passwordInputRef = useRef<TextInput>(null);
 
   const canSubmit = useMemo(() => {
-    return !loading && !isSigningIn && lockRemainingMs <= 0 && username.trim().length > 0 && password.trim().length > 0;
-  }, [loading, isSigningIn, lockRemainingMs, username, password]);
+    return (
+      !loading &&
+      !isSigningIn &&
+      !orgHydrating &&
+      lockRemainingMs <= 0 &&
+      username.trim().length > 0 &&
+      password.trim().length > 0
+    );
+  }, [loading, isSigningIn, orgHydrating, lockRemainingMs, username, password]);
 
   const lockMessage = useMemo(() => {
     if (lockRemainingMs <= 0) return "";
@@ -65,6 +88,12 @@ export default function SignInScreen() {
     if (!raw) {
       setUsernameValid(null);
       return { ok: false };
+    }
+    if (raw.toLowerCase() === "admin") {
+      const msg = "Admin login ကို ဤစာမျက်နှာတွင် မဝင်နိုင်ပါ။ Admin Login စာမျက်နှာကို အသုံးပြုပါ။";
+      setUsernameValid(false);
+      setUsernameStatusMessage(msg);
+      return { ok: false, message: msg };
     }
     setCheckingUsername(true);
     try {
@@ -104,6 +133,106 @@ export default function SignInScreen() {
     };
   }, [getLoginLockInfo]);
 
+  useEffect(() => {
+    const orgConnectMode = String(params?.orgConnect || "").trim() === "1";
+    const hasParamOrgId = String(params?.orgId || "").trim().length > 0;
+    if (!orgConnectMode && !hasParamOrgId) return;
+    let active = true;
+    const hydrateOrgContext = async () => {
+      setOrgHydrating(true);
+      try {
+        const restored = await restoreOrgStorageContext();
+        let settings = await getAccountSettings();
+        const paramOrgId = String(params?.orgId || "").trim();
+        let fallbackOrgId = "";
+        if (!paramOrgId && Platform.OS === "web") {
+          try {
+            fallbackOrgId = String(
+              window.sessionStorage?.getItem("@orghub_last_connected_org_id") ||
+              window.localStorage?.getItem("@orghub_last_connected_org_id") ||
+              ""
+            ).trim();
+          } catch {}
+        }
+        const orgId = String(paramOrgId || fallbackOrgId || restored?.orgId || settings.orgId || "").trim();
+        const orgEmail = String(restored?.orgEmail || settings.orgEmail || "").trim();
+        if (orgId) {
+          if (orgConnectMode) {
+            await clearOrgScopedStorage(orgId);
+            await setEmptyOrgState(true);
+          }
+          await persistOrgStorageContext({ orgId, orgEmail });
+          setActiveOrgId(orgId);
+          prewarmOrgScopedRemoteConfig(orgId, orgEmail || undefined);
+          let didSave = false;
+          const registry = await fetchOrgRegistryEntry(orgId);
+          if (registry.ok && registry.entry) {
+            const entry = registry.entry;
+            await ensureChairAccountFromRegistry({
+              chairName: entry.chair.name,
+              chairEmail: entry.chair.email,
+              chairPhone: entry.chair.phone,
+              chairPassword: entry.chair.password,
+            });
+            settings = {
+              ...settings,
+              orgId,
+              orgEmail: orgEmail || entry.org.email || settings.orgEmail,
+              orgPhone: entry.org.phone || settings.orgPhone,
+              orgName: entry.org.name || settings.orgName,
+              orgSetupAt: settings.orgSetupAt || new Date().toISOString(),
+              orgSetupCompleted: true,
+              cloudSyncEndpoint: entry.technical.managed_cloud_sync_endpoint || settings.cloudSyncEndpoint,
+              cloudSyncEnabled: entry.technical.managed_cloud_sync_enabled ?? settings.cloudSyncEnabled,
+              cloudSyncProvider: "google_drive_apps_script",
+              cloudSyncApiKey: entry.technical.managed_cloud_sync_api_key || settings.cloudSyncApiKey,
+              cloudSyncGoogleAccountEmail: entry.technical.managed_cloud_sync_account_email || settings.cloudSyncGoogleAccountEmail,
+              cloudSyncFolderName: entry.technical.managed_cloud_sync_folder_name || settings.cloudSyncFolderName,
+            };
+            await saveAccountSettings(settings);
+            didSave = true;
+          }
+          if (!didSave && orgId !== String(settings.orgId || "").trim()) {
+            settings = {
+              ...settings,
+              orgId,
+              orgEmail: orgEmail || settings.orgEmail,
+              orgSetupAt: settings.orgSetupAt || new Date().toISOString(),
+              orgSetupCompleted: true,
+            };
+            await saveAccountSettings(settings);
+            if (Platform.OS === "web" && typeof window !== "undefined") {
+              try {
+                const reloadKey = "@orghub_force_org_reload";
+                const last = window.localStorage?.getItem(reloadKey) || "";
+                if (last !== orgId) {
+                  window.localStorage?.setItem(reloadKey, orgId);
+                  window.sessionStorage?.setItem("@orghub_last_connected_org_id", orgId);
+                  window.location.reload();
+                  return;
+                }
+              } catch {}
+            }
+          }
+        }
+        await refreshData({ skipPull: true, markLocalMutation: false });
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          try {
+            window.localStorage?.removeItem("@orghub_force_org_reload");
+          } catch {}
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (active) setOrgHydrating(false);
+      }
+    };
+    void hydrateOrgContext();
+    return () => {
+      active = false;
+    };
+  }, [params?.orgConnect, params?.orgId, refreshData]);
+
   const handleSignIn = async () => {
     if (!canSubmit) return;
     const usernameCheck = await validateUsername();
@@ -113,7 +242,7 @@ export default function SignInScreen() {
       if (usernameCheck.message) {
         Alert.alert("ဝင်ရောက်ခွင့်မရှိပါ", usernameCheck.message);
       } else {
-        Alert.alert("Username မမှန်ကန်ပါ", "Member ID / ID### / Name / Phone / Email / Admin ကို မှန်ကန်စွာထည့်ပါ။");
+        Alert.alert("Username မမှန်ကန်ပါ", "သတ်မှတ်ထားသော username ကို မှန်ကန်စွာထည့်ပါ။");
       }
       return;
     }
@@ -121,7 +250,24 @@ export default function SignInScreen() {
     try {
       const result = await attemptLogin(username.trim(), password.trim());
       if (result.ok) {
-        router.replace("/");
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          try {
+            window.sessionStorage?.removeItem("@orghub_org_connect_override");
+            window.localStorage?.removeItem("@orghub_org_connect_override");
+          } catch {}
+        }
+        router.replace("/" as any);
+      } else if (result.reason === "license_denied") {
+        const expiry = String((result as any).licenseExpiry || "").trim();
+        const status = String((result as any).licenseStatus || "").trim();
+        const reason = String((result as any).licenseReason || "").trim();
+        const parts = [
+          "Organization license is not active.",
+          status ? `Status: ${status}` : "",
+          expiry ? `Expiry: ${expiry}` : "",
+          reason ? `Reason: ${reason}` : "",
+        ].filter(Boolean);
+        Alert.alert("License Blocked", parts.join("\n"));
       } else if (result.reason === "locked") {
         const remaining = result.remainingMs || 0;
         setLockRemainingMs(remaining);
@@ -139,6 +285,12 @@ export default function SignInScreen() {
         const name = String(result.memberName || username || "ဤအသင်းဝင်").trim();
         const statusSentence = INACTIVE_STATUS_SENTENCE[statusLabel] || `${statusLabel} ဖြစ်ပါသည်။`;
         Alert.alert("ဝင်ရောက်ခွင့်မရှိပါ", `${name} သည် ${statusSentence} ${LOGIN_DENIED_SUFFIX}`);
+      } else if (result.reason === "admin_login_only") {
+        setUsernameTouched(true);
+        setUsernameValid(false);
+        setPasswordTouched(false);
+        setPasswordValid(null);
+        Alert.alert("ဝင်ရောက်ခွင့်မရှိပါ", "Admin account အတွက် Admin Login စာမျက်နှာကို အသုံးပြုပါ။");
       } else {
         setPasswordTouched(true);
         setPasswordValid(false);
@@ -152,6 +304,100 @@ export default function SignInScreen() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    if (resettingForgot) return;
+    if (!forgotIdentifier.trim()) {
+      Alert.alert("လိုအပ်ချက်", "Member ID / Phone / Email တစ်ခုခု ထည့်ပါ။");
+      return;
+    }
+
+    setResettingForgot(true);
+    try {
+      const result = await resetPassword(forgotIdentifier.trim());
+      if (!result.ok) {
+        Alert.alert("မတွေ့ပါ", "ဖော်ပြထားသည့် user ကိုမတွေ့ပါ သို့မဟုတ် reset မအောင်မြင်ပါ။");
+        return;
+      }
+
+      const targetUserId = String(result.userId || "").trim();
+      const targetName = String(result.displayName || targetUserId || "-").trim();
+      const targetPhone = String(result.phone || "").trim();
+      const targetEmail = String(result.email || "").trim();
+      const issuedPassword = String(result.password || "").trim();
+      const messageBody =
+        `Password Reset အသိပေးချက်\n` +
+        `Username: ${targetUserId}\n` +
+        `Temporary Password: ${issuedPassword}\n` +
+        `Login ဝင်ပြီးနောက် ကိုယ်ပိုင် Password ကို ချက်ချင်းပြောင်းပါ။`;
+
+      let emailSent = false;
+      if (Platform.OS !== "web") {
+        if (targetEmail) {
+          try {
+            await Linking.openURL(
+              `mailto:${targetEmail}?subject=${encodeURIComponent("Password Reset")}&body=${encodeURIComponent(messageBody)}`
+            );
+            emailSent = true;
+          } catch {
+            emailSent = false;
+          }
+        }
+        if (!emailSent && targetPhone) {
+          try {
+            const separator = Platform.OS === "ios" ? "&" : "?";
+            await Linking.openURL(`sms:${targetPhone}${separator}body=${encodeURIComponent(messageBody)}`);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const actionButtons: any[] = [
+        {
+          text: "Copy",
+          onPress: async () => {
+            const Clipboard = await import("expo-clipboard");
+            await Clipboard.setStringAsync(messageBody);
+          },
+        },
+      ];
+      if (targetEmail) {
+        actionButtons.push({
+          text: "Email ပို့မည်",
+          onPress: () => {
+            void Linking.openURL(
+              `mailto:${targetEmail}?subject=${encodeURIComponent("Password Reset")}&body=${encodeURIComponent(messageBody)}`
+            ).catch(() => {
+              Alert.alert("မအောင်မြင်ပါ", "Email app မဖွင့်နိုင်ပါ။");
+            });
+          },
+        });
+      }
+      if (targetPhone) {
+        actionButtons.push({
+          text: "SMS ပို့မည်",
+          onPress: () => {
+            const separator = Platform.OS === "ios" ? "&" : "?";
+            void Linking.openURL(`sms:${targetPhone}${separator}body=${encodeURIComponent(messageBody)}`).catch(() => {
+              Alert.alert("မအောင်မြင်ပါ", "Phone Message app မဖွင့်နိုင်ပါ။");
+            });
+          },
+        });
+      }
+
+      Alert.alert(
+        "Reset ပြီးပါပြီ",
+        `${targetName} အတွက် password အသစ်သတ်မှတ်ပြီးပါပြီ။\n\nUsername: ${targetUserId}\nTemporary Password: ${issuedPassword}`,
+        [...actionButtons, { text: "ပိတ်မည်", style: "cancel" }]
+      );
+
+      setShowForgotModal(false);
+      setForgotIdentifier("");
+    } finally {
+      setResettingForgot(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.flex}>
@@ -162,11 +408,16 @@ export default function SignInScreen() {
             </View>
             <Text style={styles.appName}>Social Org Manager</Text>
             <Text style={styles.title}>User Login</Text>
-            <Text style={styles.subtitle}>Member ID / Full Name / Phone / Email / ID### ဖြင့် ဝင်ရောက်နိုင်သည်</Text>
+            <Text style={styles.subtitle}>လုံခြုံစွာ ဝင်ရောက်ရန် Username နှင့် Password ဖြည့်ပါ။</Text>
             <Text style={styles.versionText}>Version {appVersion}</Text>
           </LinearGradient>
 
           <View style={styles.formCard}>
+            {orgHydrating ? (
+              <View style={styles.orgHydrateBanner}>
+                <Text style={styles.orgHydrateText}>ORG ချိတ်ဆက်မှုကို ပြန်စစ်ဆေးနေပါသည်… ခဏစောင့်ပါ။</Text>
+              </View>
+            ) : null}
             <Text style={styles.label}>Username</Text>
             <TextInput
               value={username}
@@ -176,7 +427,7 @@ export default function SignInScreen() {
                 setUsernameValid(null);
                 setUsernameStatusMessage("");
               }}
-              placeholder="ဥပမာ - ID001 / ဦးစိုးမြင့်ဆွေ / စိုးမြင့်ဆွေ / 09xxxxxxxxx / mail@example.com / Admin"
+              placeholder="Username"
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="next"
@@ -230,16 +481,15 @@ export default function SignInScreen() {
             >
               <Text style={styles.submitText}>{isSigningIn ? "Logging in..." : "Login"}</Text>
             </TouchableOpacity>
+            <Pressable style={styles.forgotBtn} onPress={() => setShowForgotModal(true)}>
+              <Text style={styles.forgotBtnText}>Password မေ့နေပါသလား?</Text>
+            </Pressable>
+            <Pressable style={styles.adminLoginBtn} onPress={() => router.push("/admin-sign-in" as any)}>
+              <Text style={styles.adminLoginBtnText}>System Admin Login</Text>
+            </Pressable>
             {lockRemainingMs > 0 ? (
               <Text style={styles.lockText}>ယာယီပိတ်ထားပါသည်။ ထပ်မံကြိုးစားရန် ကျန်ချိန်: {lockMessage}</Text>
             ) : null}
-
-            <View style={styles.hintCard}>
-              <Text style={styles.hintTitle}>Default Credentials</Text>
-              <Text style={styles.hintText}>Member ID: ရဆသ-001 ဆိုရင် Username = ID001, Password = 001</Text>
-              <Text style={styles.hintText}>Name Login: ဦးစိုးမြင့်ဆွေ / စိုးမြင့်ဆွေ လည်းအသုံးပြုနိုင်သည်</Text>
-              <Text style={styles.hintText}>Admin Account: Username = Admin, Password = Admin</Text>
-            </View>
 
             <View style={styles.guideCard}>
               <Text style={styles.guideTitle}>App အသုံးပြုနည်း</Text>
@@ -253,7 +503,7 @@ export default function SignInScreen() {
               ) : (
                 <>
                   <Text style={styles.guideSectionTitle}>1) Login / Account</Text>
-                  <Text style={styles.guideText}>1.1 Username ကို Member ID (ID001), Full Name, Phone, Email သို့မဟုတ် Admin ဖြင့်ဝင်နိုင်ပါသည်။</Text>
+                  <Text style={styles.guideText}>1.1 အဖွဲ့အစည်းမှ သတ်မှတ်ထားသော Username ဖြင့် ဝင်ရောက်ပါ။</Text>
                   <Text style={styles.guideText}>1.2 Member Status သည် Active မဟုတ်ပါက Login ဝင်ခွင့်မရှိပါ။</Text>
                   <Text style={styles.guideText}>1.3 Password မေ့လျှင် Account Settings မှ Reset workflow ကိုအသုံးပြုပါ။</Text>
 
@@ -296,6 +546,36 @@ export default function SignInScreen() {
               )}
             </View>
           </View>
+          <Modal
+            visible={showForgotModal}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => setShowForgotModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowForgotModal(false)} />
+              <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+                <Text style={styles.modalTitle}>Password ပြန်လည်သတ်မှတ်ရန်</Text>
+                <Text style={styles.modalDesc}>Member ID / Phone / Email ဖြင့် အတည်ပြုပါ။</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={forgotIdentifier}
+                  onChangeText={setForgotIdentifier}
+                  placeholder="ဥပမာ - ID001 / 09xxxxxxxxx / user@mail.com"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <View style={styles.modalActions}>
+                  <Pressable style={styles.modalCancelBtn} onPress={() => setShowForgotModal(false)}>
+                    <Text style={styles.modalCancelText}>ပိတ်မည်</Text>
+                  </Pressable>
+                  <Pressable style={styles.modalConfirmBtn} onPress={handleForgotPassword} disabled={resettingForgot}>
+                    <Text style={styles.modalConfirmText}>{resettingForgot ? "လုပ်ဆောင်နေသည်..." : "Reset"}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          </Modal>
           <View style={styles.ownerFooter}>
             <Text style={styles.ownerFooterText}>Project Owner & Developer: MR. SOE MYINT SWE</Text>
           </View>
@@ -366,13 +646,32 @@ const styles = StyleSheet.create({
   },
   submitDisabled: { opacity: 0.5 },
   submitText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  forgotBtn: { marginTop: 10, alignItems: "center" },
+  forgotBtnText: { color: "#0F766E", fontSize: 13, fontWeight: "600" },
+  adminLoginBtn: { marginTop: 8, alignItems: "center" },
+  adminLoginBtnText: { color: "#0369A1", fontSize: 13, fontWeight: "700" },
   helperText: { marginTop: 6, color: "#64748B", fontSize: 12 },
   errorText: { marginTop: 6, color: "#DC2626", fontSize: 12, fontWeight: "600" },
   successText: { marginTop: 6, color: "#059669", fontSize: 12, fontWeight: "600" },
-  lockText: { marginTop: 10, color: "#B45309", fontSize: 12, fontWeight: "600" },
-  hintCard: { marginTop: 16, borderRadius: 12, padding: 12, backgroundColor: "#F0FDFA", borderWidth: 1, borderColor: "#99F6E4" },
-  hintTitle: { color: "#0F766E", fontWeight: "700", marginBottom: 6, fontSize: 13 },
-  hintText: { color: "#115E59", fontSize: 12, lineHeight: 18 },
+  lockText: { marginTop: 10, color: "#B45309", fontSize: 12, fontWeight: "600", textAlign: "center" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 20 },
+  modalContent: { width: "100%", maxWidth: 420, backgroundColor: "#fff", borderRadius: 16, padding: 20 },
+  modalTitle: { fontSize: 18, fontWeight: "700", color: "#0F172A", marginBottom: 6 },
+  modalDesc: { fontSize: 12, color: "#475569", marginBottom: 12 },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#0F172A",
+  },
+  modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 16 },
+  modalCancelBtn: { paddingHorizontal: 14, paddingVertical: 10 },
+  modalCancelText: { color: "#64748B", fontWeight: "600" },
+  modalConfirmBtn: { backgroundColor: "#0F766E", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10 },
+  modalConfirmText: { color: "#fff", fontWeight: "700" },
   guideCard: { marginTop: 12, borderRadius: 12, padding: 12, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#CBD5E1" },
   guideTitle: { color: "#0F172A", fontWeight: "700", marginBottom: 6, fontSize: 13 },
   guideSectionTitle: { color: "#0F172A", fontWeight: "700", marginTop: 8, marginBottom: 4, fontSize: 12 },

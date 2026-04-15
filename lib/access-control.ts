@@ -312,8 +312,6 @@ const ORG_ROLE_CHECKLIST: Record<OrgAccessRole, PermissionChecklist> = {
 
 const ADMIN_CHECKLIST = checklist({
   "system.manage": true,
-  "users.manage": true,
-  "users.view": true,
 });
 
 function resolveOrgAccessRole(profile: AccessProfile): OrgAccessRole {

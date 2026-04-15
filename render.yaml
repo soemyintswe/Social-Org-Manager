@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: social-org-manager
+    runtime: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm ci && npm run render:build
+    startCommand: npm run render:start
+    healthCheckPath: /api/sync/health
+    disk:
+      name: social-org-data
+      mountPath: /var/data/orghub
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ORGHUB_BASE_DIR
+        value: /opt/render/project/src
+      - key: ORGHUB_DATA_DIR
+        value: /var/data/orghub
+      - key: EXPO_PUBLIC_SYNC_SERVER_URL
+        value: https://REPLACE_WITH_YOUR_RENDER_DOMAIN.onrender.com
+      - key: EXPO_PUBLIC_SERVER_API_URL
+        value: https://REPLACE_WITH_YOUR_RENDER_DOMAIN.onrender.com
+      - key: EXPO_PUBLIC_USE_MANAGED_ORG_CONFIGS
+        value: "true"
+      - key: EXPO_PUBLIC_MANAGED_SYNC_LOCKDOWN_ENABLED
+        value: "true"
+      - key: EXPO_PUBLIC_MANAGED_ORG_CONFIGS
+        value: "{}"
+      - key: EXPO_PUBLIC_FIREBASE_CONFIG_JSON
+        value: "{}"
+      - key: EXPO_PUBLIC_SYNC_REQUEST_TIMEOUT_MS
+        value: "45000"
+      - key: EXPO_PUBLIC_RENDER_COLD_START_TIMEOUT_MS
+        value: "45000"
+      - key: EXPO_PUBLIC_RENDER_COLD_START_ATTEMPTS
+        value: "8"
+      - key: EXPO_PUBLIC_RENDER_COLD_START_BASE_DELAY_MS
+        value: "1200"
+      - key: EXPO_PUBLIC_RENDER_COLD_START_WARMUP_TTL_MS
+        value: "600000"
+      - key: ORGHUB_CLOUD_PROXY_TIMEOUT_MS
+        value: "70000"

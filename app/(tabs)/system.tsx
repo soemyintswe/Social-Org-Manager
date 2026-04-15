@@ -1,99 +1,570 @@
 import React from "react";
-import { StyleSheet, Text, View, Pressable, Alert, Platform, ScrollView, TextInput } from "react-native";
+import { StyleSheet, Text, View, Pressable, Alert, Platform, ScrollView, TextInput, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Linking from "expo-linking";
+import * as Clipboard from "expo-clipboard";
+import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
+import { getAccountSettings } from "@/lib/storage-service";
 import { useAuth } from "@/lib/AuthContext";
-import { clearAllLocalDataKeepSystemConfig } from "@/lib/storage";
+import { clearAllLocalDataKeepSystemConfig } from "@/lib/storage-service";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
-import { ORG_POSITION_LABELS, type OrgPosition } from "@/lib/types";
+import {
+  buildOrgRegistryEntry,
+  fetchOrgRegistryEntry,
+  generateOrgChairPassword,
+  listOrgRegistryEntries,
+  upsertOrgRegistryEntry,
+  type OrgRegistryEntry,
+} from "@/lib/org-registry";
+
+const RegistryRow = ({
+  label,
+  required,
+  helper,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  helper?: string;
+  children: React.ReactNode;
+}) => (
+  <View style={styles.registryRow}>
+    <View style={styles.registryLabelCell}>
+      <Text style={styles.registryLabelText}>
+        {label}
+        {required ? <Text style={styles.requiredStar}> *</Text> : null}
+      </Text>
+      {helper ? <Text style={styles.registryHelperText}>{helper}</Text> : null}
+    </View>
+    <View style={styles.registryInputCell}>{children}</View>
+  </View>
+);
 
 export default function SystemScreen() {
   const insets = useSafeAreaInsets();
-  const { refreshData, users, createInitialOrgUserAccount } = useData() as any;
+  const { refreshData } = useData() as any;
   const { can } = useAuth();
   const canManageSystem = can("system.manage");
   const currentVersion = getCurrentAppVersion();
   const currentBuild = getCurrentBuildNumber();
-  const [initialUsername, setInitialUsername] = React.useState("");
-  const [initialDisplayName, setInitialDisplayName] = React.useState("");
-  const [initialPassword, setInitialPassword] = React.useState("");
-  const [initialConfirmPassword, setInitialConfirmPassword] = React.useState("");
-  const [initialOrgPosition, setInitialOrgPosition] = React.useState<OrgPosition>("chairperson");
-  const [creatingInitialUser, setCreatingInitialUser] = React.useState(false);
+  const [registryOrgId, setRegistryOrgId] = React.useState("");
+  const [registryOrgName, setRegistryOrgName] = React.useState("");
+  const [registryOrgLocation, setRegistryOrgLocation] = React.useState("");
+  const [registryOrgEmail, setRegistryOrgEmail] = React.useState("");
+  const [registryOrgPhone, setRegistryOrgPhone] = React.useState("");
+  const [registryMemberCount, setRegistryMemberCount] = React.useState("");
+  const [registryContactName, setRegistryContactName] = React.useState("");
+  const [registryContactEmail, setRegistryContactEmail] = React.useState("");
+  const [registryContactPhone, setRegistryContactPhone] = React.useState("");
+  const [registryContactAddress, setRegistryContactAddress] = React.useState("");
+  const [registrySyncEndpoint, setRegistrySyncEndpoint] = React.useState("");
+  const [registrySyncApiKey, setRegistrySyncApiKey] = React.useState("");
+  const [registrySyncAccountEmail, setRegistrySyncAccountEmail] = React.useState("");
+  const [registrySyncFolderName, setRegistrySyncFolderName] = React.useState("");
+  const [registryLicenseStatus, setRegistryLicenseStatus] = React.useState<"allow" | "deny">("allow");
+  const [registryLicenseStartDate, setRegistryLicenseStartDate] = React.useState("");
+  const [registryLicenseExpiry, setRegistryLicenseExpiry] = React.useState("");
+  const [registryLicenseDenyExpiry, setRegistryLicenseDenyExpiry] = React.useState("");
+  const [registryChairName, setRegistryChairName] = React.useState("");
+  const [registryChairEmail, setRegistryChairEmail] = React.useState("");
+  const [registryChairPhone, setRegistryChairPhone] = React.useState("");
+  const [registryChairPassword, setRegistryChairPassword] = React.useState("");
+  const [regenerateChairPassword, setRegenerateChairPassword] = React.useState(false);
+  const [loadingRegistry, setLoadingRegistry] = React.useState(false);
+  const [savingRegistry, setSavingRegistry] = React.useState(false);
+  const [registryMessage, setRegistryMessage] = React.useState("");
+  const [registryMessageTone, setRegistryMessageTone] = React.useState<"idle" | "info" | "error" | "success">("idle");
+  const [registryProgressTick, setRegistryProgressTick] = React.useState(0);
+  const [registryList, setRegistryList] = React.useState<OrgRegistryEntry[]>([]);
+  const [registryListLoading, setRegistryListLoading] = React.useState(false);
+  const [registryListError, setRegistryListError] = React.useState("");
+  const [registryListInfo, setRegistryListInfo] = React.useState("");
+  const [registrySelectedOrgId, setRegistrySelectedOrgId] = React.useState<string | null>(null);
+  const [showRegistryForm, setShowRegistryForm] = React.useState(false);
+  const [registryDetailEntry, setRegistryDetailEntry] = React.useState<OrgRegistryEntry | null>(null);
+  const registryListLoadingRef = React.useRef(false);
+  const registryDefaultsAppliedRef = React.useRef(false);
+  const [showStartDatePicker, setShowStartDatePicker] = React.useState(false);
+  const [showExpiryDatePicker, setShowExpiryDatePicker] = React.useState(false);
+  const [showDenyExpiryDatePicker, setShowDenyExpiryDatePicker] = React.useState(false);
   const systemInfo = {
     releaseDate: "2026-02-21",
     developer: "MR. SOE MYINT SWE",
     packageId: "com.soemyintswe.orghub",
     copyright: "Copyright (c) 2026 Social Org Manager. All rights reserved.",
   };
-  const initialOrgUser = React.useMemo(
-    () => (users || []).find((user: any) => user?.systemRole === "org_user" && !String(user?.memberId || "").trim()),
-    [users]
-  );
-  const initialOrgRoleOptions: OrgPosition[] = [
-    "chairperson",
-    "vice_chairperson",
-    "secretary",
-    "joint_secretary",
-    "treasurer",
-    "auditor",
-    "committee_member",
-    "patron",
-    "member",
-  ];
 
-  const mapInitialUserError = (error: unknown): string => {
-    const code = String((error as any)?.message || error || "").trim().toLowerCase();
-    const messages: Record<string, string> = {
-      username_required: "Username ထည့်ပါ။",
-      display_name_required: "အမည်ထည့်ပါ။",
-      password_required: "Password ထည့်ပါ။",
-      username_exists: "Username တူနေပါသည်။ အခြား username သုံးပါ။",
-      initial_org_user_exists: "ကနဦး User Account တစ်ခု ရှိပြီးသားဖြစ်ပါသည်။",
-    };
-    return messages[code] || "ကနဦး User Account ဖန်တီးရာတွင် အမှားဖြစ်နေပါသည်။";
+  const formatDateDdMmYyyy = (date: Date): string => {
+    const dd = String(date.getDate()).padStart(2, "0");
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const yyyy = date.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
   };
 
-  const handleCreateInitialUser = async () => {
-    if (!canManageSystem || creatingInitialUser) return;
-    const username = initialUsername.trim();
-    const displayName = initialDisplayName.trim();
-    const password = initialPassword.trim();
-    const confirmPassword = initialConfirmPassword.trim();
+  const formatDateForDisplay = (raw?: string | null): string => {
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) {
+      return `${iso[3]}-${iso[2]}-${iso[1]}`;
+    }
+    const dmy = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) return value;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return formatDateDdMmYyyy(parsed);
+    return value;
+  };
 
-    if (!username || !displayName || !password) {
-      Alert.alert("လိုအပ်ချက်", "Username၊ အမည် နှင့် Password ကိုဖြည့်ပါ။");
+  const parseDateForPicker = (raw?: string | null): Date => {
+    const value = String(raw || "").trim();
+    if (!value) return new Date();
+    const dmy = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) {
+      return new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+    }
+    const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) {
+      return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  };
+
+  const formatDateForInput = (raw?: string | null): string => {
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    const dmy = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+    const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) return value;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      const dd = String(parsed.getDate()).padStart(2, "0");
+      const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+      return `${parsed.getFullYear()}-${mm}-${dd}`;
+    }
+    return value;
+  };
+
+  const DateInput = ({
+    value,
+    onChangeText,
+    placeholder,
+    onOpenPicker,
+  }: {
+    value: string;
+    onChangeText: (text: string) => void;
+    placeholder: string;
+    onOpenPicker?: () => void;
+  }) => {
+    if (Platform.OS === "web") {
+      return (
+        <TextInput
+          style={styles.input}
+          value={formatDateForInput(value)}
+          onChangeText={(text) => onChangeText(formatDateForDisplay(text))}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder={placeholder}
+          // @ts-ignore - react-native-web passes this to the underlying input
+          type="date"
+        />
+      );
+    }
+    return (
+      <Pressable onPress={onOpenPicker}>
+        <TextInput
+          style={styles.input}
+          value={value}
+          onChangeText={onChangeText}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder={placeholder}
+        />
+      </Pressable>
+    );
+  };
+
+  const populateRegistryForm = (entry: OrgRegistryEntry) => {
+    setRegistryOrgId(entry.orgId || "");
+    setRegistryOrgName(entry.org.name || "");
+    setRegistryOrgLocation(entry.org.location || "");
+    setRegistryOrgEmail(entry.org.email || "");
+    setRegistryOrgPhone(entry.org.phone || "");
+    setRegistryMemberCount(entry.org.memberCount ? String(entry.org.memberCount) : "");
+    setRegistryContactName(entry.contact.name || "");
+    setRegistryContactEmail(entry.contact.email || "");
+    setRegistryContactPhone(entry.contact.phone || "");
+    setRegistryContactAddress(entry.contact.address || "");
+    setRegistrySyncEndpoint(entry.technical.managed_cloud_sync_endpoint || "");
+    setRegistrySyncApiKey(entry.technical.managed_cloud_sync_api_key || "");
+    setRegistrySyncAccountEmail(entry.technical.managed_cloud_sync_account_email || "");
+    setRegistrySyncFolderName(entry.technical.managed_cloud_sync_folder_name || "");
+    setRegistryLicenseStatus(entry.license.status === "deny" ? "deny" : "allow");
+    setRegistryLicenseStartDate(formatDateForDisplay(entry.license.startDate || ""));
+    setRegistryLicenseExpiry(formatDateForDisplay(entry.license.expiryDate || ""));
+    setRegistryLicenseDenyExpiry(formatDateForDisplay(entry.license.denyExpiryDate || ""));
+    setRegistryChairName(entry.chair.name || "");
+    setRegistryChairEmail(entry.chair.email || "");
+    setRegistryChairPhone(entry.chair.phone || "");
+    setRegistryChairPassword(entry.chair.password || "");
+    setRegenerateChairPassword(false);
+  };
+
+  React.useEffect(() => {
+    let active = true;
+    const loadDefaults = async () => {
+      try {
+        const settings = await getAccountSettings();
+        if (!active) return;
+        if (!registryDefaultsAppliedRef.current) {
+          if (!registryOrgId.trim()) setRegistryOrgId("ORG000");
+          if (!registryOrgName.trim() && settings.orgName) setRegistryOrgName(String(settings.orgName));
+          if (!registryOrgEmail.trim() && settings.orgEmail) setRegistryOrgEmail(String(settings.orgEmail));
+          if (!registryOrgPhone.trim() && settings.orgPhone) setRegistryOrgPhone(String(settings.orgPhone));
+          registryDefaultsAppliedRef.current = true;
+        }
+      } catch {}
+    };
+    void loadDefaults();
+    return () => {
+      active = false;
+    };
+  }, [registryOrgEmail, registryOrgId, registryOrgName, registryOrgPhone]);
+
+  React.useEffect(() => {
+    if (!savingRegistry && !loadingRegistry) {
+      setRegistryProgressTick(0);
       return;
     }
-    if (password !== confirmPassword) {
-      Alert.alert("လိုအပ်ချက်", "Password နှင့် Confirm Password မကိုက်ညီပါ။");
+    const timer = setInterval(() => {
+      setRegistryProgressTick((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [savingRegistry, loadingRegistry]);
+
+  const registryMessageDisplay = React.useMemo(() => {
+    if (!registryMessage) return "";
+    if (!savingRegistry && !loadingRegistry) return registryMessage;
+    const dots = ".".repeat((registryProgressTick % 3) + 1);
+    return `${registryMessage}${dots}`;
+  }, [loadingRegistry, registryMessage, registryProgressTick, savingRegistry]);
+
+  const handleLoadRegistry = async () => {
+    if (!registryOrgId.trim() || loadingRegistry) {
+      const msg = "Org ID ကိုဖြည့်ပါ။";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    try {
+      setLoadingRegistry(true);
+      setRegistryStatus("info", "Registry ကိုဖတ်နေပါသည်...");
+      const result = await fetchOrgRegistryEntry(registryOrgId.trim());
+      if (!result.ok || !result.entry) {
+        const msg =
+          result.reason === "firebase_web_not_configured"
+            ? "Firebase Web Config မရှိပါ။ .env မှာ EXPO_PUBLIC_FIREBASE_CONFIG_JSON သို့မဟုတ် EXPO_PUBLIC_FIREBASE_API_KEY/PROJECT_ID/APP_ID ထည့်ပါ။"
+            : result.reason === "firestore_unavailable"
+              ? "Firestore မချိတ်ဆက်နိုင်ပါ။ Web build ဖြစ်နိုင်ပါတယ်။"
+              : "Org ID ကို Registry တွင် မတွေ့ပါ။";
+        setRegistryStatus("error", msg);
+        Alert.alert("Registry", msg);
+        return;
+      }
+      populateRegistryForm(result.entry);
+      setRegistrySelectedOrgId(result.entry.orgId);
+      setShowRegistryForm(true);
+      setRegistryStatus("success", "Org Registry အချက်အလက်ကို ဖတ်ယူပြီးပါပြီ။");
+      Alert.alert("Registry", "Org Registry အချက်အလက်ကို ဖတ်ယူပြီးပါပြီ။");
+    } catch (error) {
+      const msg = "Org Registry ကိုဖတ်ရာတွင် အမှားဖြစ်နေပါသည်။";
+      setRegistryStatus("error", msg);
+      Alert.alert("Registry", msg);
+    } finally {
+      setLoadingRegistry(false);
+    }
+  };
+
+  const deliverChairPassword = async (
+    email: string,
+    phone: string,
+    messageBody: string
+  ): Promise<"email" | "sms" | "both" | "none"> => {
+    let emailSent = false;
+    let smsSent = false;
+
+    if (email) {
+      try {
+        await Linking.openURL(
+          `mailto:${email}?subject=${encodeURIComponent("Org Registry Credentials")}&body=${encodeURIComponent(messageBody)}`
+        );
+        emailSent = true;
+      } catch {}
+    }
+
+    if (phone) {
+      let allowSms = true;
+      if (emailSent) {
+        if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+          allowSms = window.confirm("Email ပို့ပြီးပါပြီ။ SMS လည်း ပို့မလား?");
+        } else {
+          allowSms = await new Promise<boolean>((resolve) => {
+            Alert.alert(
+              "SMS ပို့မလား",
+              "Email ပို့ပြီးပါပြီ။ SMS လည်း ပို့မလား?",
+              [
+                { text: "မပို့ပါ", style: "cancel", onPress: () => resolve(false) },
+                { text: "ပို့မည်", onPress: () => resolve(true) },
+              ]
+            );
+          });
+        }
+      }
+      if (allowSms) {
+        try {
+          const separator = Platform.OS === "ios" ? "&" : "?";
+          await Linking.openURL(`sms:${phone}${separator}body=${encodeURIComponent(messageBody)}`);
+          smsSent = true;
+        } catch {}
+      }
+    }
+
+    if (emailSent && smsSent) return "both";
+    if (emailSent) return "email";
+    if (smsSent) return "sms";
+    return "none";
+  };
+
+  const setRegistryStatus = (tone: "idle" | "info" | "error" | "success", message: string) => {
+    setRegistryMessageTone(tone);
+    setRegistryMessage(message);
+  };
+
+  const handleLoadRegistryList = React.useCallback(async () => {
+    if (!canManageSystem || registryListLoadingRef.current) return;
+    try {
+      registryListLoadingRef.current = true;
+      setRegistryListLoading(true);
+      setRegistryListError("");
+      setRegistryListInfo("");
+      const result = await listOrgRegistryEntries();
+      if (!result.ok || !result.entries) {
+        setRegistryListError(result.reason || "registry_list_failed");
+        return;
+      }
+      setRegistryList(result.entries);
+      if (result.reason && result.reason.startsWith("cache_fallback")) {
+        setRegistryListInfo("Firestore မရပါ။ Cache ထဲမှ data ကိုပြထားပါသည်။");
+      }
+    } catch (error: any) {
+      setRegistryListError(String(error?.message || "registry_list_failed"));
+    } finally {
+      setRegistryListLoading(false);
+      registryListLoadingRef.current = false;
+    }
+  }, [canManageSystem]);
+
+  const handleOpenOrgConnect = (entry?: OrgRegistryEntry | null) => {
+    const orgId = String(entry?.orgId || "").trim();
+    const orgEmail = String(entry?.org?.email || "").trim();
+    const orgPhone = String(entry?.org?.phone || "").trim();
+    const params = new URLSearchParams();
+    params.set("orgConnect", "1");
+    if (orgId) params.set("orgId", orgId);
+    if (orgEmail) params.set("orgEmail", orgEmail);
+    if (orgPhone) params.set("orgPhone", orgPhone);
+    const target = `/org-connect?${params.toString()}`;
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      try {
+        window.sessionStorage?.setItem("@orghub_org_connect_override", "1");
+        window.localStorage?.setItem("@orghub_org_connect_override", "1");
+        window.open(target, "_blank", "noopener,noreferrer");
+        return;
+      } catch {}
+    }
+    router.push(target as any);
+  };
+
+  React.useEffect(() => {
+    if (!canManageSystem) return;
+    if (registryList.length > 0) return;
+    void handleLoadRegistryList();
+  }, [canManageSystem, handleLoadRegistryList, registryList.length]);
+
+  const handleDateChange = (setter: (value: string) => void, close: () => void) => {
+    return (_event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS !== "ios") close();
+      if (!selectedDate) return;
+      setter(formatDateDdMmYyyy(selectedDate));
+    };
+  };
+
+  const handleSaveRegistry = async () => {
+    if (!canManageSystem || savingRegistry) return;
+    const orgId = registryOrgId.trim();
+    const orgName = registryOrgName.trim();
+    const orgLocation = registryOrgLocation.trim();
+    const orgEmail = registryOrgEmail.trim();
+    const orgPhone = registryOrgPhone.trim();
+    const memberCount = registryMemberCount.trim();
+    const contactName = registryContactName.trim();
+    const contactEmail = registryContactEmail.trim();
+    const contactPhone = registryContactPhone.trim();
+    const contactAddress = registryContactAddress.trim();
+    const syncEndpoint = registrySyncEndpoint.trim();
+    const syncApiKey = registrySyncApiKey.trim();
+    const syncAccountEmail = registrySyncAccountEmail.trim();
+    const syncFolderName = registrySyncFolderName.trim();
+    const licenseStartDate = registryLicenseStartDate.trim();
+    const licenseExpiry = registryLicenseExpiry.trim();
+    const licenseDenyExpiry = registryLicenseDenyExpiry.trim();
+    const chairName = registryChairName.trim();
+    const chairEmail = registryChairEmail.trim();
+    const chairPhone = registryChairPhone.trim();
+
+    if (!orgId) {
+      Alert.alert("လိုအပ်ချက်", "Org ID ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (!orgName) {
+      Alert.alert("လိုအပ်ချက်", "Org Name ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (!orgPhone) {
+      Alert.alert("လိုအပ်ချက်", "Org Phone ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (!contactName || !contactPhone) {
+      Alert.alert("လိုအပ်ချက်", "Contact Person Name နှင့် Phone ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (!syncEndpoint) {
+      const msg = "Managed Cloud Sync Endpoint ကိုဖြည့်ပါ။ (Google Script URL ဖြစ်ရမည်)";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    if (syncEndpoint.toLowerCase().includes("managed_org_configs")) {
+      const msg = "managed_org_configs ကို ဒီ field ထဲမထည့်ပါနှင့်။ Google Script URL ကိုသာ ထည့်ပါ။";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    if (!/^https?:\/\//i.test(syncEndpoint)) {
+      const msg = "Managed Cloud Sync Endpoint သည် https:// မှစတင်ရပါမည်။";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    if (!syncApiKey) {
+      const msg = "Managed Cloud Sync API Key ကိုဖြည့်ပါ။ (Apps Script API_KEY နဲ့တူရမည်)";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    if (!licenseExpiry) {
+      const msg = "License Expiry Date ကိုဖြည့်ပါ။";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    if (!chairName) {
+      Alert.alert("လိုအပ်ချက်", "Chair Name ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (!chairEmail && !chairPhone) {
+      const msg = "Chair Email မရှိပါက Phone ကိုဖြည့်ပါ။";
+      setRegistryStatus("error", msg);
+      Alert.alert("လိုအပ်ချက်", msg);
       return;
     }
 
     try {
-      setCreatingInitialUser(true);
-      const created = await createInitialOrgUserAccount({
-        username,
-        displayName,
-        password,
-        orgPosition: initialOrgPosition,
+      setSavingRegistry(true);
+      setRegistryStatus("info", "Registry သိမ်းနေပါသည်...");
+      const password =
+        regenerateChairPassword || !registryChairPassword.trim()
+          ? generateOrgChairPassword()
+          : registryChairPassword.trim();
+      const entry = buildOrgRegistryEntry({
+        orgId,
+        orgName,
+        orgLocation: orgLocation || undefined,
+        orgEmail: orgEmail || undefined,
+        orgPhone,
+        memberCount: memberCount || undefined,
+        contactName,
+        contactEmail: contactEmail || undefined,
+        contactPhone,
+        contactAddress: contactAddress || undefined,
+        managedCloudSyncEndpoint: syncEndpoint,
+        managedCloudSyncApiKey: syncApiKey,
+        managedCloudSyncAccountEmail: syncAccountEmail || undefined,
+        managedCloudSyncFolderName: syncFolderName || undefined,
+        managedCloudSyncEnabled: true,
+        licenseStatus: registryLicenseStatus,
+        licenseStartDate,
+        licenseExpiry,
+        licenseDenyExpiryDate: licenseDenyExpiry,
+        chairName,
+        chairEmail: chairEmail || undefined,
+        chairPhone,
+        chairPassword: password,
+        chairPasswordUpdatedAt: new Date().toISOString(),
       });
-      setInitialUsername("");
-      setInitialDisplayName("");
-      setInitialPassword("");
-      setInitialConfirmPassword("");
+      const result = await upsertOrgRegistryEntry(entry);
+      if (!result.ok || !result.entry) {
+        const msg =
+          result.reason === "firebase_web_not_configured"
+            ? "Firebase Web Config မရှိပါ။ .env မှာ EXPO_PUBLIC_FIREBASE_CONFIG_JSON သို့မဟုတ် EXPO_PUBLIC_FIREBASE_API_KEY/PROJECT_ID/APP_ID ထည့်ပါ။"
+            : result.reason === "firestore_unavailable"
+              ? "Firestore မချိတ်ဆက်နိုင်ပါ။ Web build ဖြစ်နိုင်ပါတယ်။"
+              : `သိမ်းဆည်းရာတွင် အမှားဖြစ်နေပါသည်။ ${result.reason || ""}`;
+        setRegistryStatus("error", msg);
+        Alert.alert("Registry", msg);
+        return;
+      }
+      populateRegistryForm(result.entry);
+      const messageBody =
+        `Org Registry Credentials\n` +
+        `Org ID: ${result.entry.orgId}\n` +
+        `Chair: ${result.entry.chair.name}\n` +
+        `Temporary Password: ${result.entry.chair.password}\n` +
+        `Please change password after first login.`;
+      const delivery = await deliverChairPassword(
+        result.entry.chair.email || "",
+        result.entry.chair.phone || "",
+        messageBody
+      );
+      const deliveryLabel =
+        delivery === "both" ? "Email + SMS" : delivery === "email" ? "Email" : delivery === "sms" ? "SMS" : "Not sent";
+
+      setRegistryStatus("success", "Registry သိမ်းပြီးပါပြီ။");
+      setShowRegistryForm(false);
+      void handleLoadRegistryList();
       Alert.alert(
-        "အောင်မြင်ပါသည်",
-        `ကနဦး User Account ဖန်တီးပြီးပါပြီ။\n\nUsername: ${created.id}\nRole: ${ORG_POSITION_LABELS[created.orgPosition || "member"]}\n\nဤ account ဖြင့် login ဝင်ပြီး အသင်းကိစ္စအဝဝကို ဆက်လက်စီမံနိုင်ပါသည်။`
+        "Registry Saved",
+        `Org ID: ${result.entry.orgId}\nChair Password: ${result.entry.chair.password}\nDelivery: ${deliveryLabel}`,
+        [
+          {
+            text: "Copy",
+            onPress: () => {
+              void Clipboard.setStringAsync(messageBody);
+            },
+          },
+          { text: "OK", style: "cancel" },
+        ]
       );
     } catch (error) {
-      Alert.alert("အမှား", mapInitialUserError(error));
+      Alert.alert("Registry", "Registry သိမ်းဆည်းရာတွင် အမှားဖြစ်နေပါသည်။");
     } finally {
-      setCreatingInitialUser(false);
+      setSavingRegistry(false);
+      setRegenerateChairPassword(false);
     }
   };
 
@@ -181,77 +652,481 @@ export default function SystemScreen() {
       {canManageSystem ? (
         <View style={styles.menuContainer}>
           <View style={styles.bootstrapCard}>
-            <Text style={styles.bootstrapTitle}>ကနဦး User Account</Text>
+            <Text style={styles.bootstrapTitle}>Org Registry (Central)</Text>
             <Text style={styles.bootstrapDesc}>
-              System Admin သည် system setup ပြီးနောက် အသင်းကိစ္စအဝဝကို စီမံမည့် ပထမဆုံး org user account တစ်ခုကိုသာ တည်ဆောက်နိုင်ပါသည်။
+              Central Registry တွင် Org အချက်အလက်များကို သိမ်းဆည်းပြီး OrgID ဖြင့် App ချိတ်ဆက်နိုင်ပါသည်။
             </Text>
-            {initialOrgUser ? (
-              <View style={styles.bootstrapSummary}>
-                <Text style={styles.bootstrapSummaryLine}>Username: {initialOrgUser.id}</Text>
-                <Text style={styles.bootstrapSummaryLine}>အမည်: {initialOrgUser.displayName}</Text>
-                <Text style={styles.bootstrapSummaryLine}>Role: {ORG_POSITION_LABELS[initialOrgUser.orgPosition || "member"]}</Text>
-                <Text style={styles.bootstrapHint}>ပြန်လည် password reset လုပ်လိုပါက Account Settings မှ Admin Password Reset ကိုသုံးပါ။</Text>
-              </View>
-            ) : (
-              <View style={styles.bootstrapForm}>
-                <Text style={styles.fieldLabel}>Username</Text>
-                <TextInput
-                  style={styles.input}
-                  value={initialUsername}
-                  onChangeText={setInitialUsername}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholder="ဥပမာ - chair001"
-                />
-                <Text style={styles.fieldLabel}>အမည်</Text>
-                <TextInput
-                  style={styles.input}
-                  value={initialDisplayName}
-                  onChangeText={setInitialDisplayName}
-                  placeholder="ဥပမာ - ဦးစိုးမြင့်ဆွေ"
-                />
-                <Text style={styles.fieldLabel}>Role</Text>
-                <View style={styles.roleGrid}>
-                  {initialOrgRoleOptions.map((position) => {
-                    const active = initialOrgPosition === position;
-                    return (
-                      <Pressable
-                        key={position}
-                        style={[styles.roleChip, active && styles.roleChipActive]}
-                        onPress={() => setInitialOrgPosition(position)}
-                      >
-                        <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
-                          {ORG_POSITION_LABELS[position]}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+            <View style={styles.bootstrapForm}>
+              <View style={styles.registryListCard}>
+                <View style={styles.registryListHeader}>
+                  <Text style={styles.registryListTitle}>Org Registry List</Text>
+                  <View style={styles.registryListHeaderActions}>
+                    <Pressable style={styles.registryListButton} onPress={handleLoadRegistryList} disabled={registryListLoading}>
+                      <Text style={styles.registryListButtonText}>
+                        {registryListLoading ? "Loading..." : "Refresh List"}
+                      </Text>
+                    </Pressable>
+                    <Pressable style={styles.registryListButton} onPress={() => handleOpenOrgConnect()}>
+                      <Text style={styles.registryListButtonText}>Org Connect</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.registryListButton, styles.registryListAddButton]}
+                      onPress={() => {
+                        setShowRegistryForm(true);
+                        setRegistrySelectedOrgId(null);
+                        setRegistryStatus("idle", "");
+                        setRegistryOrgId("");
+                        setRegistryOrgName("");
+                        setRegistryOrgLocation("");
+                        setRegistryOrgEmail("");
+                        setRegistryOrgPhone("");
+                        setRegistryMemberCount("");
+                        setRegistryContactName("");
+                        setRegistryContactEmail("");
+                        setRegistryContactPhone("");
+                        setRegistryContactAddress("");
+                        setRegistrySyncEndpoint("");
+                        setRegistrySyncApiKey("");
+                        setRegistrySyncAccountEmail("");
+                        setRegistrySyncFolderName("");
+                        setRegistryLicenseStatus("allow");
+                        setRegistryLicenseStartDate("");
+                        setRegistryLicenseExpiry("");
+                        setRegistryLicenseDenyExpiry("");
+                        setRegistryChairName("");
+                        setRegistryChairEmail("");
+                        setRegistryChairPhone("");
+                        setRegistryChairPassword("");
+                        setRegenerateChairPassword(false);
+                      }}
+                    >
+                      <Text style={styles.registryListButtonText}>Add New Org</Text>
+                    </Pressable>
+                  </View>
                 </View>
-                <Text style={styles.fieldLabel}>Password</Text>
-                <TextInput
-                  style={styles.input}
-                  value={initialPassword}
-                  onChangeText={setInitialPassword}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholder="Password"
-                />
-                <Text style={styles.fieldLabel}>Confirm Password</Text>
-                <TextInput
-                  style={styles.input}
-                  value={initialConfirmPassword}
-                  onChangeText={setInitialConfirmPassword}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholder="Confirm Password"
-                />
-                <Pressable style={styles.bootstrapButton} onPress={() => void handleCreateInitialUser()} disabled={creatingInitialUser}>
-                  <Text style={styles.bootstrapButtonText}>{creatingInitialUser ? "လုပ်ဆောင်နေသည်..." : "ကနဦး User Account ဖန်တီးမည်"}</Text>
-                </Pressable>
+                {registryListError ? (
+                  <Text style={styles.registryListError}>
+                    {registryListError === "firestore_unavailable"
+                      ? "Firestore မချိတ်ဆက်နိုင်ပါ။"
+                      : registryListError}
+                  </Text>
+                ) : null}
+                {registryListInfo ? (
+                  <Text style={styles.registryListInfo}>{registryListInfo}</Text>
+                ) : null}
+                <View style={styles.registryListTable}>
+                  <View style={[styles.registryListRow, styles.registryListHeaderRow]}>
+                    <Text style={[styles.registryListCell, styles.registryListColId]}>Org ID</Text>
+                    <Text style={[styles.registryListCell, styles.registryListColName]}>Org Name</Text>
+                    <Text style={[styles.registryListCell, styles.registryListColPhone]}>Phone</Text>
+                    <Text style={[styles.registryListCell, styles.registryListColStatus]}>Status</Text>
+                    <Text style={[styles.registryListCell, styles.registryListColExpiry]}>Expiry</Text>
+                    <Text style={[styles.registryListCell, styles.registryListColAction]}>Action</Text>
+                  </View>
+                  {registryListLoading ? (
+                    <View style={styles.registryListLoadingRow}>
+                      <ActivityIndicator size="small" color={Colors.light.tint} />
+                      <Text style={styles.registryListLoadingText}>Loading registry list...</Text>
+                    </View>
+                  ) : null}
+                  {!registryListLoading && registryList.length === 0 ? (
+                    <Text style={styles.registryListEmpty}>Registry ထဲမှာ Org မတွေ့ပါ။</Text>
+                  ) : null}
+                  {registryList.map((entry) => (
+                    <View
+                      key={entry.orgId}
+                      style={[
+                        styles.registryListRow,
+                        registrySelectedOrgId === entry.orgId && styles.registryListRowActive,
+                      ]}
+                    >
+                      <Text style={[styles.registryListCell, styles.registryListColId]}>{entry.orgId}</Text>
+                      <Text style={[styles.registryListCell, styles.registryListColName]}>{entry.org.name}</Text>
+                      <Text style={[styles.registryListCell, styles.registryListColPhone]}>{entry.org.phone}</Text>
+                      <Text style={[styles.registryListCell, styles.registryListColStatus]}>
+                        {entry.license.status === "deny" ? "Deny" : "Allow"}
+                      </Text>
+                      <Text style={[styles.registryListCell, styles.registryListColExpiry]}>
+                        {formatDateForDisplay(entry.license.expiryDate || "") || "-"}
+                      </Text>
+                      <View style={[styles.registryListCell, styles.registryListColAction]}>
+                        <View style={styles.registryListActionRow}>
+                        <Pressable
+                          style={styles.registryListDetailButton}
+                          onPress={() => {
+                            setRegistryDetailEntry(entry);
+                            setRegistrySelectedOrgId(entry.orgId);
+                            setShowRegistryForm(false);
+                          }}
+                        >
+                          <Text style={styles.registryListDetailButtonText}>Detail</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.registryListConnectButton}
+                          onPress={() => handleOpenOrgConnect(entry)}
+                        >
+                          <Text style={styles.registryListConnectButtonText}>Connect</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.registryListUseButton}
+                          onPress={() => {
+                            populateRegistryForm(entry);
+                            setRegistrySelectedOrgId(entry.orgId);
+                              setShowRegistryForm(true);
+                              setRegistryStatus("success", `${entry.orgId} ကို လိုဒ်ပြီးပါပြီ။`);
+                            }}
+                          >
+                            <Text style={styles.registryListUseButtonText}>Edit</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    </View>
+                  ))}
+                </View>
               </View>
-            )}
+
+              {registryDetailEntry ? (
+                <View style={styles.registryDetailCard}>
+                  <View style={styles.registryDetailHeader}>
+                    <Text style={styles.registryDetailTitle}>Org Detail</Text>
+                    <Pressable style={styles.registryDetailClose} onPress={() => setRegistryDetailEntry(null)}>
+                      <Text style={styles.registryDetailCloseText}>Close</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Org ID:</Text> {registryDetailEntry.orgId}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Org Name:</Text> {registryDetailEntry.org.name}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Location:</Text> {registryDetailEntry.org.location || "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Email:</Text> {registryDetailEntry.org.email || "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Phone:</Text> {registryDetailEntry.org.phone}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Member Count:</Text> {registryDetailEntry.org.memberCount ?? "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Contact:</Text> {registryDetailEntry.contact.name}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Contact Phone:</Text> {registryDetailEntry.contact.phone}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Endpoint:</Text> {registryDetailEntry.technical.managed_cloud_sync_endpoint || "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>License:</Text> {registryDetailEntry.license.status}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Start Date:</Text> {formatDateForDisplay(registryDetailEntry.license.startDate || "") || "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Expiry:</Text> {formatDateForDisplay(registryDetailEntry.license.expiryDate || "") || "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Deny Expiry:</Text> {formatDateForDisplay(registryDetailEntry.license.denyExpiryDate || "") || "-"}</Text>
+                  <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Chair:</Text> {registryDetailEntry.chair.name}</Text>
+                  <View style={styles.registryDetailActions}>
+                    <Pressable
+                      style={styles.registryDetailEditButton}
+                      onPress={() => {
+                        populateRegistryForm(registryDetailEntry);
+                        setRegistrySelectedOrgId(registryDetailEntry.orgId);
+                        setShowRegistryForm(true);
+                      }}
+                    >
+                      <Text style={styles.registryDetailEditButtonText}>Edit This Org</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+              {showRegistryForm ? (
+                <>
+                  {registryMessage ? (
+                    <View
+                      style={[
+                        styles.registryNotice,
+                        registryMessageTone === "error" && styles.registryNoticeError,
+                        registryMessageTone === "success" && styles.registryNoticeSuccess,
+                      ]}
+                    >
+                      {savingRegistry || loadingRegistry ? (
+                        <ActivityIndicator size="small" color={Colors.light.tint} />
+                      ) : null}
+                      <Text style={styles.registryNoticeText}>{registryMessageDisplay}</Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.registryTable}>
+                <RegistryRow label="Org ID" required>
+                  <TextInput
+                    style={styles.input}
+                    value={registryOrgId}
+                    onChangeText={setRegistryOrgId}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    placeholder="ဥပမာ - ORG-001"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Registry Actions">
+                  <View style={styles.registryActionRow}>
+                    <Pressable
+                      style={[styles.secondaryButton, styles.tableButton]}
+                      onPress={() => void handleLoadRegistry()}
+                      disabled={loadingRegistry}
+                    >
+                      <Text style={styles.secondaryButtonText}>{loadingRegistry ? "Loading..." : "Load Registry"}</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.secondaryButton, styles.tableButton]}
+                      onPress={() => setShowRegistryForm(false)}
+                    >
+                      <Text style={styles.secondaryButtonText}>Close Form</Text>
+                    </Pressable>
+                  </View>
+                </RegistryRow>
+
+                <View style={styles.registrySectionRow}>
+                  <Text style={styles.registrySectionText}>Org Info</Text>
+                </View>
+                <RegistryRow label="Org Name" required>
+                  <TextInput style={styles.input} value={registryOrgName} onChangeText={setRegistryOrgName} placeholder="Organization Name" />
+                </RegistryRow>
+                <RegistryRow label="Location">
+                  <TextInput style={styles.input} value={registryOrgLocation} onChangeText={setRegistryOrgLocation} placeholder="City / Township" />
+                </RegistryRow>
+                <RegistryRow label="Org Email (Optional)">
+                  <TextInput
+                    style={styles.input}
+                    value={registryOrgEmail}
+                    onChangeText={setRegistryOrgEmail}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    placeholder="org@example.com"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Org Phone" required>
+                  <TextInput
+                    style={styles.input}
+                    value={registryOrgPhone}
+                    onChangeText={setRegistryOrgPhone}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="phone-pad"
+                    placeholder="09xxxxxxxxx"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Member Count">
+                  <TextInput
+                    style={styles.input}
+                    value={registryMemberCount}
+                    onChangeText={setRegistryMemberCount}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="number-pad"
+                    placeholder="ဥပမာ - 120"
+                  />
+                </RegistryRow>
+
+                <View style={styles.registrySectionRow}>
+                  <Text style={styles.registrySectionText}>Contact Person</Text>
+                </View>
+                <RegistryRow label="Name" required>
+                  <TextInput style={styles.input} value={registryContactName} onChangeText={setRegistryContactName} placeholder="Contact Name" />
+                </RegistryRow>
+                <RegistryRow label="Email (Optional)">
+                  <TextInput
+                    style={styles.input}
+                    value={registryContactEmail}
+                    onChangeText={setRegistryContactEmail}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    placeholder="contact@example.com"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Phone" required>
+                  <TextInput
+                    style={styles.input}
+                    value={registryContactPhone}
+                    onChangeText={setRegistryContactPhone}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="phone-pad"
+                    placeholder="09xxxxxxxxx"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Address">
+                  <TextInput style={styles.input} value={registryContactAddress} onChangeText={setRegistryContactAddress} placeholder="Address" />
+                </RegistryRow>
+
+                <View style={styles.registrySectionRow}>
+                  <Text style={styles.registrySectionText}>Technical</Text>
+                </View>
+                <RegistryRow
+                  label="Managed Cloud Sync Endpoint"
+                  required
+                  helper="Org တစ်ခုချင်း Google Script URL ကို ထည့်ပါ။"
+                >
+                  <TextInput
+                    style={styles.input}
+                    value={registrySyncEndpoint}
+                    onChangeText={setRegistrySyncEndpoint}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="https://script.google.com/..."
+                  />
+                </RegistryRow>
+                <RegistryRow
+                  label="Managed Cloud Sync API Key"
+                  required
+                  helper="Apps Script API_KEY နဲ့တူရမည်"
+                >
+                  <TextInput
+                    style={styles.input}
+                    value={registrySyncApiKey}
+                    onChangeText={setRegistrySyncApiKey}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="sms*>IWT801680"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Cloud Sync Account Email (Optional)" helper="Google Account Email">
+                  <TextInput
+                    style={styles.input}
+                    value={registrySyncAccountEmail}
+                    onChangeText={setRegistrySyncAccountEmail}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="org@example.com"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Cloud Sync Folder Name (Optional)" helper="Default: OrgHub Sync">
+                  <TextInput
+                    style={styles.input}
+                    value={registrySyncFolderName}
+                    onChangeText={setRegistrySyncFolderName}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="OrgHub Sync"
+                  />
+                </RegistryRow>
+
+                <View style={styles.registrySectionRow}>
+                  <Text style={styles.registrySectionText}>Licensing</Text>
+                </View>
+                <RegistryRow label="Status" required>
+                  <View style={styles.toggleRow}>
+                    <Pressable
+                      style={[
+                        styles.toggleButton,
+                        registryLicenseStatus === "allow" && styles.toggleButtonActive,
+                      ]}
+                      onPress={() => setRegistryLicenseStatus("allow")}
+                    >
+                      <Text style={styles.toggleButtonText}>Allow</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.toggleButton,
+                        registryLicenseStatus === "deny" && styles.toggleButtonActive,
+                      ]}
+                      onPress={() => setRegistryLicenseStatus("deny")}
+                    >
+                      <Text style={styles.toggleButtonText}>Deny</Text>
+                    </Pressable>
+                  </View>
+                </RegistryRow>
+                <RegistryRow label="Start Date (DD-MM-YYYY)">
+                  <DateInput
+                    value={registryLicenseStartDate}
+                    onChangeText={setRegistryLicenseStartDate}
+                    placeholder="25-03-2026"
+                    onOpenPicker={() => setShowStartDatePicker(true)}
+                  />
+                </RegistryRow>
+                <RegistryRow label="Expiry Date (DD-MM-YYYY)" required>
+                  <DateInput
+                    value={registryLicenseExpiry}
+                    onChangeText={setRegistryLicenseExpiry}
+                    placeholder="24-03-2027"
+                    onOpenPicker={() => setShowExpiryDatePicker(true)}
+                  />
+                </RegistryRow>
+                <RegistryRow label="Deny Expiry Date (DD-MM-YYYY)">
+                  <DateInput
+                    value={registryLicenseDenyExpiry}
+                    onChangeText={setRegistryLicenseDenyExpiry}
+                    placeholder="30-06-2026"
+                    onOpenPicker={() => setShowDenyExpiryDatePicker(true)}
+                  />
+                </RegistryRow>
+
+                <View style={styles.registrySectionRow}>
+                  <Text style={styles.registrySectionText}>Chair Account</Text>
+                </View>
+                <RegistryRow label="Name" required>
+                  <TextInput style={styles.input} value={registryChairName} onChangeText={setRegistryChairName} placeholder="Chair Name" />
+                </RegistryRow>
+                <RegistryRow label="Email (Optional)">
+                  <TextInput
+                    style={styles.input}
+                    value={registryChairEmail}
+                    onChangeText={setRegistryChairEmail}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    placeholder="chair@example.com"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Phone (Required if no Email)">
+                  <TextInput
+                    style={styles.input}
+                    value={registryChairPhone}
+                    onChangeText={setRegistryChairPhone}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="phone-pad"
+                    placeholder="09xxxxxxxxx"
+                  />
+                </RegistryRow>
+                <RegistryRow label="Auto-generated Password">
+                  <TextInput style={styles.input} value={registryChairPassword} editable={false} placeholder="Auto-generate on save" />
+                </RegistryRow>
+                <RegistryRow label="Password Actions">
+                  <Pressable
+                    style={[styles.secondaryButton, styles.tableButton, regenerateChairPassword && styles.toggleButtonActive]}
+                    onPress={() => setRegenerateChairPassword((prev) => !prev)}
+                  >
+                    <Text style={styles.secondaryButtonText}>
+                      {regenerateChairPassword ? "Will Regenerate Password" : "Regenerate Password"}
+                    </Text>
+                  </Pressable>
+                </RegistryRow>
+
+                <View style={styles.registryFooterRow}>
+                  <Pressable style={styles.bootstrapButton} onPress={() => void handleSaveRegistry()} disabled={savingRegistry}>
+                    <Text style={styles.bootstrapButtonText}>{savingRegistry ? "Saving..." : "Save Registry"}</Text>
+                  </Pressable>
+                </View>
+              </View>
+                </>
+              ) : (
+                <View style={styles.registryFormCollapsed}>
+                  <Text style={styles.registryFormCollapsedText}>
+                    Org အသစ်ထည့်ရန် "Add New Org" ကိုနှိပ်ပါ။
+                  </Text>
+                  <Text style={styles.registryFormCollapsedText}>
+                    ရှိပြီးသား Org ကို ပြင်ရန် List မှ "Edit" ကိုနှိပ်ပါ။
+                  </Text>
+                </View>
+              )}
+            </View>
+            {Platform.OS !== "web" && showStartDatePicker ? (
+              <DateTimePicker
+                value={parseDateForPicker(registryLicenseStartDate)}
+                mode="date"
+                display="default"
+                onChange={handleDateChange(setRegistryLicenseStartDate, () => setShowStartDatePicker(false))}
+              />
+            ) : null}
+            {Platform.OS !== "web" && showExpiryDatePicker ? (
+              <DateTimePicker
+                value={parseDateForPicker(registryLicenseExpiry)}
+                mode="date"
+                display="default"
+                onChange={handleDateChange(setRegistryLicenseExpiry, () => setShowExpiryDatePicker(false))}
+              />
+            ) : null}
+            {Platform.OS !== "web" && showDenyExpiryDatePicker ? (
+              <DateTimePicker
+                value={parseDateForPicker(registryLicenseDenyExpiry)}
+                mode="date"
+                display="default"
+                onChange={handleDateChange(setRegistryLicenseDenyExpiry, () => setShowDenyExpiryDatePicker(false))}
+              />
+            ) : null}
           </View>
 
           <Pressable
@@ -375,9 +1250,278 @@ const styles = StyleSheet.create({
   bootstrapTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 },
   bootstrapDesc: { fontSize: 13, lineHeight: 20, color: Colors.light.textSecondary, marginBottom: 14 },
   bootstrapForm: { gap: 8 },
+  registryListCard: {
+    backgroundColor: Colors.light.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 12,
+  },
+  registryListHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 8,
+  },
+  registryListHeaderActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  registryListTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  registryListButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  registryListAddButton: {
+    backgroundColor: Colors.light.tintLight,
+    borderColor: Colors.light.tint,
+  },
+  registryListButtonText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  registryListError: {
+    fontSize: 12,
+    color: "#DC2626",
+    marginBottom: 6,
+  },
+  registryListInfo: {
+    fontSize: 12,
+    color: "#1F7A6C",
+    marginBottom: 6,
+  },
+  registryListTable: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  registryListRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  registryListHeaderRow: {
+    backgroundColor: Colors.light.tintLight,
+  },
+  registryListRowActive: {
+    backgroundColor: "#ECFDF3",
+  },
+  registryListCell: {
+    fontSize: 12,
+    color: Colors.light.text,
+    paddingRight: 8,
+  },
+  registryListColId: { width: 80, fontFamily: "Inter_700Bold" },
+  registryListColName: { flex: 1, minWidth: 140 },
+  registryListColPhone: { width: 120 },
+  registryListColStatus: { width: 70 },
+  registryListColExpiry: { width: 110 },
+  registryListColAction: { width: 190, alignItems: "flex-end" },
+  registryListActionRow: {
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+  },
+  registryListDetailButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  registryListDetailButtonText: {
+    fontSize: 11,
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
+  },
+  registryListConnectButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#E6F4F1",
+    borderWidth: 1,
+    borderColor: "#B7E3DA",
+  },
+  registryListConnectButtonText: {
+    fontSize: 11,
+    color: "#1F7A6C",
+    fontFamily: "Inter_700Bold",
+  },
+  registryListUseButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.light.tint,
+  },
+  registryListUseButtonText: {
+    fontSize: 11,
+    color: "#fff",
+    fontFamily: "Inter_700Bold",
+  },
+  registryListLoadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  registryListLoadingText: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  registryListEmpty: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  registryFormCollapsed: {
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    gap: 6,
+  },
+  registryFormCollapsedText: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+  },
+  registryDetailCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    padding: 14,
+    gap: 6,
+  },
+  registryDetailHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  registryDetailTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  registryDetailClose: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  registryDetailCloseText: {
+    fontSize: 11,
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
+  },
+  registryDetailLine: {
+    fontSize: 12,
+    color: Colors.light.text,
+  },
+  registryDetailLabel: {
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+  },
+  registryDetailActions: {
+    marginTop: 8,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+  },
+  registryDetailEditButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: Colors.light.tint,
+  },
+  registryDetailEditButtonText: {
+    fontSize: 12,
+    color: "#fff",
+    fontFamily: "Inter_700Bold",
+  },
+  registryTable: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  registryRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    flexWrap: "wrap",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  registryLabelCell: {
+    width: 190,
+    minWidth: 150,
+  },
+  registryInputCell: {
+    flex: 1,
+  },
+  registryLabelText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+  },
+  registryHelperText: {
+    marginTop: 4,
+    fontSize: 11,
+    color: Colors.light.textSecondary,
+  },
+  requiredStar: {
+    color: "#EF4444",
+  },
+  registrySectionRow: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: Colors.light.tintLight,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  registrySectionText: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  registryActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  registryFooterRow: {
+    padding: 14,
+    backgroundColor: Colors.light.surface,
+  },
   bootstrapSummary: { backgroundColor: Colors.light.tintLight, borderRadius: 12, padding: 14, gap: 6 },
   bootstrapSummaryLine: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
   bootstrapHint: { marginTop: 6, fontSize: 12, lineHeight: 18, color: Colors.light.textSecondary },
+  sectionTitle: { marginTop: 14, fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text },
   fieldLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 2 },
   input: {
     backgroundColor: Colors.light.background,
@@ -388,22 +1532,68 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 14,
     color: Colors.light.text,
+    width: "100%",
   },
-  roleGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
-  roleChip: {
+  helperText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  registryNotice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#ECFEFF",
+    borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 999,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#BAE6FD",
+    marginBottom: 8,
+  },
+  registryNoticeError: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+  },
+  registryNoticeSuccess: {
+    backgroundColor: "#ECFDF3",
+    borderColor: "#86EFAC",
+  },
+  registryNoticeText: {
+    fontSize: 12,
+    color: Colors.light.text,
+    flex: 1,
+  },
+  toggleRow: { flexDirection: "row", gap: 10, marginTop: 6 },
+  toggleButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: Colors.light.border,
+    alignItems: "center",
     backgroundColor: Colors.light.background,
   },
-  roleChipActive: {
-    backgroundColor: Colors.light.tint,
+  toggleButtonActive: {
     borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.tintLight,
   },
-  roleChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  roleChipTextActive: { color: "#fff" },
+  toggleButtonText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  secondaryButton: {
+    marginTop: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: Colors.light.background,
+  },
+  tableButton: {
+    marginTop: 0,
+    paddingVertical: 10,
+    flexGrow: 1,
+  },
+  secondaryButtonText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   bootstrapButton: {
     marginTop: 8,
     backgroundColor: Colors.light.tint,
@@ -411,6 +1601,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 14,
+    width: "100%",
   },
   bootstrapButtonText: { fontSize: 14, fontFamily: "Inter_700Bold", color: "#fff" },
   menuItem: { flexDirection: "row", alignItems: "center", padding: 20, borderRadius: 16, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },

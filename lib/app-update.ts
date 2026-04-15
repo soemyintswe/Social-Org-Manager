@@ -1,6 +1,6 @@
 import Constants from "expo-constants";
 import * as Application from "expo-application";
-import { getAccountSettings } from "@/lib/storage";
+import { getAccountSettings } from "@/lib/storage-service";
 import { getAppUpdateJsonUrl } from "@/lib/remote-config";
 
 export type AppUpdateInfo = {

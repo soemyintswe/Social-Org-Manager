@@ -9,6 +9,7 @@ type SyncSnapshot = {
   source?: string;
   data: Record<string, string>;
 };
+const SYNC_SCOPE_META_KEY = "@orghub_sync_scope_meta";
 
 type AppUpdateConfig = {
   latestVersion: string;
@@ -30,8 +31,19 @@ function resolveFromBase(...parts: string[]): string {
   return path.resolve(getBaseDir(), ...parts);
 }
 
-function getSnapshotFilePath(): string {
+function normalizeOrgIdForFile(raw?: string | null): string {
+  const value = String(raw || "").trim().toUpperCase();
+  if (!value) return "";
+  return value.replace(/[^A-Z0-9_-]/g, "");
+}
+
+function getSnapshotFilePath(orgId?: string | null): string {
+  const safeOrgId = normalizeOrgIdForFile(orgId);
   const customDataDir = String(process.env.ORGHUB_DATA_DIR || "").trim();
+  if (safeOrgId) {
+    const baseDir = customDataDir ? path.resolve(customDataDir) : resolveFromBase("server", "data");
+    return path.resolve(baseDir, "orgs", safeOrgId, "sync-snapshot.json");
+  }
   if (customDataDir) {
     return path.resolve(customDataDir, "sync-snapshot.json");
   }
@@ -68,21 +80,33 @@ function parseBuildNumber(value: unknown): number | null {
   return n;
 }
 
-function readSnapshot(): SyncSnapshot | null {
+function readSnapshot(orgId?: string | null): SyncSnapshot | null {
   try {
-    const filePath = getSnapshotFilePath();
+    const filePath = getSnapshotFilePath(orgId);
     if (!fs.existsSync(filePath)) return null;
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as SyncSnapshot;
     if (!parsed || typeof parsed !== "object" || !parsed.data) return null;
+    const safeOrgId = normalizeOrgIdForFile(orgId);
+    if (safeOrgId && !parsed.data?.[SYNC_SCOPE_META_KEY]) {
+      parsed.data = {
+        ...(parsed.data || {}),
+        [SYNC_SCOPE_META_KEY]: JSON.stringify({
+          orgId: safeOrgId,
+          version: 1,
+          generatedAt: parsed.updatedAt || new Date().toISOString(),
+          source: "server-lan-read",
+        }),
+      };
+    }
     return parsed;
   } catch {
     return null;
   }
 }
 
-function writeSnapshot(snapshot: SyncSnapshot): void {
-  const filePath = getSnapshotFilePath();
+function writeSnapshot(snapshot: SyncSnapshot, orgId?: string | null): void {
+  const filePath = getSnapshotFilePath(orgId);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), "utf-8");
 }
@@ -98,6 +122,12 @@ function normalizeCloudProxyEndpoint(raw: string): string | null {
   const deploymentId = match[1];
   // Build upstream URL from trusted constant host + validated deployment id.
   return `https://script.google.com/macros/s/${deploymentId}/exec`;
+}
+
+function getCloudProxyTimeoutMs(): number {
+  const raw = Number(String(process.env.ORGHUB_CLOUD_PROXY_TIMEOUT_MS || "").trim());
+  if (!Number.isFinite(raw) || raw <= 0) return 70000;
+  return Math.max(10000, Math.floor(raw));
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -122,8 +152,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: true, ts: new Date().toISOString() });
   });
 
-  app.get("/api/sync/snapshot", (_req, res) => {
-    const snapshot = readSnapshot();
+  app.get("/api/sync/snapshot", (req, res) => {
+    const orgId = String(req.query.orgId || "").trim();
+    if (!orgId) {
+      return res.status(400).json({ message: "missing_org_id" });
+    }
+    const snapshot = readSnapshot(orgId);
     if (!snapshot) {
       return res.status(404).json({ message: "snapshot_not_found" });
     }
@@ -135,12 +169,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!body || typeof body !== "object" || !body.data || typeof body.data !== "object") {
       return res.status(400).json({ message: "invalid_payload" });
     }
+    const orgId = String((req.query?.orgId as string) || (body as any)?.orgId || "").trim();
+    if (!orgId) {
+      return res.status(400).json({ message: "missing_org_id" });
+    }
+    const safeOrgId = normalizeOrgIdForFile(orgId);
+    const normalizedData = { ...(body.data as Record<string, string>) };
+    if (safeOrgId && !normalizedData[SYNC_SCOPE_META_KEY]) {
+      normalizedData[SYNC_SCOPE_META_KEY] = JSON.stringify({
+        orgId: safeOrgId,
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        source: "server-lan",
+      });
+    }
+
     const snapshot: SyncSnapshot = {
       updatedAt: body.updatedAt || new Date().toISOString(),
       source: body.source || "unknown",
-      data: body.data as Record<string, string>,
+      data: normalizedData,
     };
-    writeSnapshot(snapshot);
+    writeSnapshot(snapshot, orgId);
     return res.json({ ok: true, updatedAt: snapshot.updatedAt });
   });
 
@@ -160,7 +209,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       delete (payload as any).endpoint;
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45000);
+      const timeout = setTimeout(() => controller.abort(), getCloudProxyTimeoutMs());
       let upstream: Response;
       try {
         upstream = await fetch(normalizedEndpoint, {

@@ -19,7 +19,7 @@ import { router, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import QRCode from "react-native-qrcode-svg";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
@@ -34,7 +34,7 @@ import {
   pullLanSnapshotToLocalDetailed,
   pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
-} from "@/lib/storage";
+} from "@/lib/storage-service";
 import {
   DEFAULT_CLOUD_SYNC_ENDPOINT,
   DEFAULT_CLOUD_SYNC_FOLDER_NAME,
@@ -42,6 +42,8 @@ import {
 } from "@/lib/sync-defaults";
 import { getManagedSyncLockdownEnabled } from "@/lib/remote-config";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
+
+const AsyncStorage = orgStorage;
 
 const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
 const LAN_QR_PREFIX = "ORGHUB_LAN:";
@@ -78,7 +80,7 @@ const decodeLanShareId = (input: string): string => {
 
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
-  const { accountSettings, updateAccountSettings, refreshData, createDirectChatThread, sendChatMessage } = useData();
+  const { accountSettings, updateAccountSettings, refreshData, createDirectChatThread, sendChatMessage, members, users } = useData();
   const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
   const canEditReceivingAccounts = normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
@@ -94,7 +96,10 @@ export default function AccountSettingsScreen() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [resetIdentifier, setResetIdentifier] = useState("");
-  const [generatedResetPassword, setGeneratedResetPassword] = useState("");
+  const [selectedResetMemberId, setSelectedResetMemberId] = useState("");
+  const [showResetPicker, setShowResetPicker] = useState(false);
+  const [resetPickerQuery, setResetPickerQuery] = useState("");
+  const [resetStatusMessage, setResetStatusMessage] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [syncServerUrl, setSyncServerUrl] = useState(accountSettings.syncServerUrl || DEFAULT_LAN_SYNC_URL);
@@ -136,6 +141,28 @@ export default function AccountSettingsScreen() {
   const managedSyncLockdown = getManagedSyncLockdownEnabled();
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
+
+  const resetSuggestions = useMemo(() => {
+    const list = Array.isArray(members) ? members : [];
+    if (!list.length) return [];
+    const query = String(resetPickerQuery || "").trim().toLowerCase();
+    const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, "").replace(/[^\d\w]/g, "");
+    const normalizePhone = (value: string) => value.replace(/[^\d]/g, "");
+    const normalizedQuery = normalize(query);
+    const phoneQuery = normalizePhone(query);
+    const matches = list.filter((member: any) => {
+      const id = normalize(String(member?.id || ""));
+      const name = normalize(String(member?.name || ""));
+      const email = normalize(String(member?.email || ""));
+      const phone = normalizePhone(String(member?.phone || ""));
+      if (!normalizedQuery && !phoneQuery) return true;
+      return (
+        (normalizedQuery && (id.includes(normalizedQuery) || name.includes(normalizedQuery) || email.includes(normalizedQuery))) ||
+        (phoneQuery && phone.includes(phoneQuery))
+      );
+    });
+    return matches.slice(0, 20);
+  }, [members, resetPickerQuery]);
 
   const generateSecureResetPassword = (): string => {
     const uuid = Crypto.randomUUID().replace(/-/g, "").toUpperCase();
@@ -423,7 +450,8 @@ export default function AccountSettingsScreen() {
       setConfirmPassword("");
       setCurrentPasswordTouched(false);
       setCurrentPasswordValid(null);
-      Alert.alert("အောင်မြင်ပါသည်", "Password ပြောင်းလဲပြီးပါပြီ။");
+      const nextLoginRoute = currentUser?.systemRole === "admin" ? "/admin-sign-in" : "/sign-in";
+      router.replace(nextLoginRoute as any);
     } finally {
       setChangingPassword(false);
     }
@@ -431,25 +459,42 @@ export default function AccountSettingsScreen() {
 
   const handleAdminReset = async () => {
     if (resettingPassword) return;
-    if (!resetIdentifier.trim()) {
+    const typedIdentifier = String(resetIdentifier || "").trim();
+    const selectedMemberId = String(selectedResetMemberId || "").trim();
+    const effectiveIdentifier = selectedMemberId || typedIdentifier;
+    if (!effectiveIdentifier) {
       Alert.alert("လိုအပ်ချက်", "Member ID / ID### / Phone / Email / Admin တစ်ခုခု ထည့်ပါ။");
       return;
     }
+    const matchedUser = Array.isArray(users)
+      ? users.find(
+          (user: any) =>
+            String(user?.systemRole || "") !== "admin" &&
+            String(user?.memberId || "").trim() === effectiveIdentifier
+        )
+      : undefined;
+    const resetLookupIdentifier = matchedUser?.id ? `uid:${matchedUser.id}` : effectiveIdentifier;
 
-    const nextPassword =
-      generatedResetPassword.trim() || generateSecureResetPassword();
+    const nextPassword = generateSecureResetPassword();
 
     setResettingPassword(true);
+    setResetStatusMessage("Password reset လုပ်နေပါသည်။ ခေတ္တစောင့်ပါ။");
+    Alert.alert("ဆောင်ရွက်နေပါသည်", "Password reset လုပ်နေပါသည်။ ခေတ္တစောင့်ပါ။");
     try {
-      const result = await resetPassword(resetIdentifier.trim(), nextPassword);
+      const result = await resetPassword(resetLookupIdentifier, nextPassword);
       if (!result.ok) {
-        Alert.alert("မတွေ့ပါ", "ဖော်ပြထားသည့် user ကိုမတွေ့ပါ သို့မဟုတ် reset မအောင်မြင်ပါ။");
+        const reason = String(result.reason || "").trim();
+        const reasonText = reason ? ` (${reason})` : "";
+        setResetStatusMessage("ဖော်ပြထားသည့် user ကိုမတွေ့ပါ သို့မဟုတ် reset မအောင်မြင်ပါ။");
+        Alert.alert("မတွေ့ပါ", `ဖော်ပြထားသည့် user ကိုမတွေ့ပါ သို့မဟုတ် reset မအောင်မြင်ပါ။${reasonText}`);
         return;
       }
       const targetUserId = String(result.userId || "").trim();
       const targetName = String(result.displayName || targetUserId || "-").trim();
       const targetPhone = String(result.phone || "").trim();
+      const targetEmail = String(result.email || "").trim();
       const issuedPassword = String(result.password || nextPassword).trim();
+      await refreshData({ skipPull: true });
       const messageBody =
         `Password Reset အသိပေးချက်\n` +
         `Username: ${targetUserId}\n` +
@@ -457,7 +502,7 @@ export default function AccountSettingsScreen() {
         `Login ဝင်ပြီးနောက် ကိုယ်ပိုင် Password ကို ချက်ချင်းပြောင်းပါ။`;
 
       setResetIdentifier("");
-      setGeneratedResetPassword("");
+      setSelectedResetMemberId("");
       const actionButtons: any[] = [
         {
           text: "Copy",
@@ -492,15 +537,29 @@ export default function AccountSettingsScreen() {
           },
         });
       }
-      if (targetPhone) {
-        actionButtons.push({
-          text: "Phone Message ပို့မည်",
-          onPress: () => {
-            void Linking.openURL(`sms:${targetPhone}?body=${encodeURIComponent(messageBody)}`).catch(() => {
-              Alert.alert("မအောင်မြင်ပါ", "Phone Message app မဖွင့်နိုင်ပါ။");
-            });
-          },
-        });
+      if (Platform.OS !== "web") {
+        if (targetEmail) {
+          actionButtons.push({
+            text: "Email ပို့မည်",
+            onPress: () => {
+              void Linking.openURL(
+                `mailto:${targetEmail}?subject=${encodeURIComponent("Password Reset")}&body=${encodeURIComponent(messageBody)}`
+              ).catch(() => {
+                Alert.alert("မအောင်မြင်ပါ", "Email app မဖွင့်နိုင်ပါ။");
+              });
+            },
+          });
+        }
+        if (targetPhone) {
+          actionButtons.push({
+            text: "Phone Message ပို့မည်",
+            onPress: () => {
+              void Linking.openURL(`sms:${targetPhone}?body=${encodeURIComponent(messageBody)}`).catch(() => {
+                Alert.alert("မအောင်မြင်ပါ", "Phone Message app မဖွင့်နိုင်ပါ။");
+              });
+            },
+          });
+        }
       }
       Alert.alert(
         "Reset ပြီးပါပြီ",
@@ -510,12 +569,16 @@ export default function AccountSettingsScreen() {
           { text: "ပိတ်မည်", style: "cancel" },
         ]
       );
+      setResetStatusMessage(`Password reset ပြီးပါပြီ။ Password: ${issuedPassword}`);
+    } catch {
+      setResetStatusMessage("Password reset မအောင်မြင်ပါ။");
+      Alert.alert("မအောင်မြင်ပါ", "Password reset မအောင်မြင်ပါ။");
     } finally {
       setResettingPassword(false);
     }
   };
 
-  const handleSyncNow = async () => {
+  const handleSyncNow = async (mode: "all" | "lan" | "cloud" = "all") => {
     if (syncing) return;
     setSyncing(true);
     try {
@@ -534,7 +597,7 @@ export default function AccountSettingsScreen() {
       const runtimeCloudEnabled = runtimeConfig.cloud.enabled;
       const runtimeLanUrl = normalizeUrl(runtimeConfig.lan.url || syncValues.syncServerUrl || DEFAULT_LAN_SYNC_URL);
 
-      if (runtimeLanEnabled && runtimeLanUrl) {
+      if (mode !== "cloud" && runtimeLanEnabled && runtimeLanUrl) {
         const health = await checkLanSyncHealth();
         if (!health.ok) {
           Alert.alert(
@@ -545,24 +608,24 @@ export default function AccountSettingsScreen() {
       }
 
       let cloudHealthLine = "Cloud: Disabled";
-      if (runtimeCloudEnabled) {
+      if (mode !== "lan" && runtimeCloudEnabled) {
         const cloudHealth = await checkCloudSyncHealth();
         cloudHealthLine = cloudHealth.ok
           ? "Cloud Health: OK"
           : `Cloud Health: Fail (${cloudHealth.reason || "unknown"}${cloudHealth.status ? `/${cloudHealth.status}` : ""})`;
       }
 
-      const pullLan = runtimeLanEnabled
+      const pullLan = mode !== "cloud" && runtimeLanEnabled
         ? await pullLanSnapshotToLocalDetailed()
         : ({ ok: false, reason: "disabled_or_empty_url" } as const);
-      const pullCloud = runtimeCloudEnabled
+      const pullCloud = mode !== "lan" && runtimeCloudEnabled
         ? await pullCloudSnapshotToLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
-      const pushLan = runtimeLanEnabled
+      const pushLan = mode !== "cloud" && runtimeLanEnabled
         ? await pushLanSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "disabled_or_empty_url" } as const);
-      const pushCloud = runtimeCloudEnabled
+      const pushCloud = mode !== "lan" && runtimeCloudEnabled
         ? await pushCloudSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
@@ -584,17 +647,20 @@ export default function AccountSettingsScreen() {
           : `${prefix}: Fail (${result.reason || "unknown"}${result.status ? `/${result.status}` : ""})`;
       };
 
-      const lanPullLine = asSyncLine("LAN Pull", pullLan, "pull");
-      const lanPushLine = asSyncLine("LAN Push", pushLan, "push");
-      const cloudPullLine = asSyncLine("Cloud Pull", pullCloud, "pull");
-      const cloudPushLine = asSyncLine("Cloud Push", pushCloud, "push");
+      const syncLines = [
+        mode !== "cloud" ? asSyncLine("LAN Pull", pullLan, "pull") : null,
+        mode !== "cloud" ? asSyncLine("LAN Push", pushLan, "push") : null,
+        mode !== "lan" ? asSyncLine("Cloud Pull", pullCloud, "pull") : null,
+        mode !== "lan" ? asSyncLine("Cloud Push", pushCloud, "push") : null,
+      ].filter(Boolean) as string[];
       const authHintNeeded = [pullCloud.reason, pushCloud.reason].some((r) => String(r || "").includes("unauthorized"));
       const authHint = authHintNeeded
         ? "\nHint: Cloud API Key ကို Google Apps Script ထဲက API_KEY နဲ့ တိတိကျကျတူအောင် ပြန်စစ်ပါ။ API_KEY မသုံးရင် နှစ်ဖက်လုံးအလွတ်ထားပါ။"
         : "";
 
       await refreshData({ skipPull: true });
-      Alert.alert("Sync", `${lanPullLine}\n${lanPushLine}\n${cloudPullLine}\n${cloudPushLine}\n${cloudHealthLine}${authHint}`);
+      const healthLine = mode === "lan" ? "LAN Health: OK" : cloudHealthLine;
+      Alert.alert("Sync", `${syncLines.join("\n")}\n${healthLine}${authHint}`);
     } finally {
       setSyncing(false);
     }
@@ -737,25 +803,41 @@ export default function AccountSettingsScreen() {
           <Pressable style={styles.lanApplyBtn} onPress={handleApplyLanShareId}>
             <Text style={styles.lanApplyText}>Apply LAN ID</Text>
           </Pressable>
-          <View style={styles.syncRow}>
-            <Pressable
-              style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive]}
-              onPress={() => setSyncEnabled((v) => !v)}
-            >
-              <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
-              <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
-                {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
-              </Text>
-            </Pressable>
-            <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
-              {syncing ? (
-                <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-              ) : (
-                <Ionicons name="sync-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
-              )}
-              <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
-            </Pressable>
-          </View>
+            <View style={styles.syncRow}>
+              <Pressable
+                style={[styles.syncToggleBtn, syncEnabled && styles.syncToggleBtnActive]}
+                onPress={() => setSyncEnabled((v) => !v)}
+              >
+                <Ionicons name={syncEnabled ? "checkmark-circle" : "ellipse-outline"} size={18} color={syncEnabled ? "#fff" : Colors.light.text} />
+                <Text style={[styles.syncToggleText, syncEnabled && styles.syncToggleTextActive]}>
+                  {syncEnabled ? "LAN Sync Enabled" : "LAN Sync Disabled"}
+                </Text>
+              </Pressable>
+              <Pressable style={styles.syncNowBtn} onPress={() => void handleSyncNow()} disabled={syncing}>
+                {syncing ? (
+                  <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                ) : (
+                  <Ionicons name="sync-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
+                )}
+                <Text style={styles.syncNowText}>{syncing ? "Syncing..." : "Sync Now (LAN/Cloud)"}</Text>
+              </Pressable>
+            </View>
+            <View style={styles.syncRow}>
+              <Pressable
+                style={[styles.cloudSyncNowBtn, !hasCloudSyncConfigured && styles.cloudSyncNowBtnDisabled]}
+                onPress={() => void handleSyncNow("cloud")}
+                disabled={syncing || !hasCloudSyncConfigured}
+              >
+                {syncing ? (
+                  <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                ) : (
+                  <Ionicons name="cloud-upload-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
+                )}
+                <Text style={styles.syncNowText}>
+                  {syncing ? "Syncing..." : "Cloud Sync Now"}
+                </Text>
+              </Pressable>
+            </View>
 
           <View style={styles.securityCard}>
             <Text style={styles.sectionTitle}>Managed Sync Configuration</Text>
@@ -796,6 +878,50 @@ export default function AccountSettingsScreen() {
             </View>
           </View>
         </>
+
+        <Modal visible={showResetPicker} transparent animationType="fade" onRequestClose={() => setShowResetPicker(false)}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+              <Text style={styles.sectionTitle}>User ရွေးရန်</Text>
+              <Text style={styles.sectionDesc}>Member ID / Name / Phone / Email ဖြင့်ရှာနိုင်ပါသည်။</Text>
+              <TextInput
+                style={styles.input}
+                value={resetPickerQuery}
+                onChangeText={setResetPickerQuery}
+                placeholder="ရှာဖွေရန်..."
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <ScrollView style={{ maxHeight: 260, marginTop: 10 }}>
+                {resetSuggestions.length === 0 ? (
+                  <Text style={styles.sectionDesc}>အချက်အလက် မတွေ့ပါ။</Text>
+                ) : (
+                  resetSuggestions.map((member: any) => (
+                    <Pressable
+                      key={member.id}
+                      style={styles.resetSuggestionItem}
+                      onPress={() => {
+                        setResetIdentifier(String(member.id || "").trim());
+                        setSelectedResetMemberId(String(member.id || "").trim());
+                        setShowResetPicker(false);
+                      }}
+                    >
+                      <Text style={styles.resetSuggestionPrimary}>
+                        {member.name || "-"} ({member.id || "-"})
+                      </Text>
+                      <Text style={styles.resetSuggestionSecondary}>{member.phone || member.email || "-"}</Text>
+                    </Pressable>
+                  ))
+                )}
+              </ScrollView>
+              <View style={styles.modalActions}>
+                <Pressable style={styles.modalPrimaryBtn} onPress={() => setShowResetPicker(false)}>
+                  <Text style={styles.modalPrimaryText}>Close</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={showLanQr} transparent animationType="fade" onRequestClose={() => setShowLanQr(false)}>
           <View style={styles.modalOverlay}>
@@ -1009,34 +1135,47 @@ export default function AccountSettingsScreen() {
           </Pressable>
         </View>
 
-        {currentUser?.systemRole === "admin" && (
-          <View style={styles.adminCard}>
-            <Text style={styles.sectionTitle}>Admin Password Reset</Text>
-            <Text style={styles.sectionDesc}>
-              Member ID / ID### / Username / Phone / Email / Admin ဖြင့် user ကိုရှာပြီး temporary password အသစ်သတ်မှတ်နိုင်ပါသည်။
-            </Text>
+          {normalizeOrgPosition(currentUser?.orgPosition || "") === "chairperson" && (
+            <View style={styles.adminCard}>
+              <Text style={styles.sectionTitle}>User Password Reset (Chairperson)</Text>
+              <Text style={styles.sectionDesc}>
+                ဥက္ကဌ အနေဖြင့် user ကိုရှာပြီး auto-generate password ဖြင့် reset လုပ်နိုင်ပါသည်။ Manual password သတ်မှတ်၍ မရပါ။
+              </Text>
 
-            <TextInput
-              style={styles.input}
-              value={resetIdentifier}
-              onChangeText={setResetIdentifier}
-              placeholder="ဥပမာ - ရဆသ-001 / ID001 / 09xxxxxxxxx / user@mail.com / Admin"
-            />
+              <TextInput
+                style={styles.input}
+                value={resetIdentifier}
+                onChangeText={(value) => {
+                  setResetIdentifier(value);
+                  setSelectedResetMemberId("");
+                }}
+                placeholder="ဥပမာ - ရဆသ-001 / ID001 / 09xxxxxxxxx / user@mail.com"
+              />
+              <View style={styles.resetPickerRow}>
+                <Pressable
+                  style={styles.resetPickerBtn}
+                  onPress={() => {
+                    setResetPickerQuery("");
+                    setShowResetPicker(true);
+                  }}
+                >
+                  <Text style={styles.resetPickerBtnText}>User ရွေးရန် (Dropdown)</Text>
+                </Pressable>
+              </View>
+              {resetIdentifier ? (
+                <Text style={styles.resetSelectedText}>ရွေးထားသည်: {resetIdentifier}</Text>
+              ) : null}
+              {resetStatusMessage ? (
+                <View style={styles.resetStatusBox}>
+                  <Text style={styles.resetStatusText}>{resetStatusMessage}</Text>
+                </View>
+              ) : null}
 
-            <TextInput
-              style={styles.input}
-              value={generatedResetPassword}
-              onChangeText={setGeneratedResetPassword}
-              placeholder="Temporary Password (မဖြည့်လျှင် auto-generate)"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            <Pressable style={styles.adminResetBtn} onPress={handleAdminReset} disabled={resettingPassword}>
-              <Text style={styles.passwordBtnText}>{resettingPassword ? "Resetting..." : "Generate / Reset Password"}</Text>
-            </Pressable>
-          </View>
-        )}
+              <Pressable style={styles.adminResetBtn} onPress={handleAdminReset} disabled={resettingPassword}>
+                <Text style={styles.passwordBtnText}>{resettingPassword ? "Resetting..." : "Generate / Reset Password"}</Text>
+              </Pressable>
+            </View>
+          )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -1284,6 +1423,65 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 12,
   },
+  resetPickerRow: {
+    marginTop: 10,
+  },
+  resetPickerBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: Colors.light.surface,
+  },
+  resetPickerBtnText: {
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+    fontSize: 13,
+  },
+  resetSelectedText: {
+    marginTop: 6,
+    color: Colors.light.textSecondary,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  resetStatusBox: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.tintLight,
+    padding: 10,
+  },
+  resetStatusText: {
+    color: Colors.light.text,
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
+  resetSuggestionBox: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    overflow: "hidden",
+  },
+  resetSuggestionItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  resetSuggestionPrimary: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  resetSuggestionSecondary: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
   passwordBtnText: {
     color: "#fff",
     fontFamily: "Inter_600SemiBold",
@@ -1363,6 +1561,19 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     flexDirection: "row",
+  },
+  cloudSyncNowBtn: {
+    borderRadius: 10,
+    backgroundColor: "#2563EB",
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    flex: 1,
+  },
+  cloudSyncNowBtnDisabled: {
+    opacity: 0.5,
   },
   syncNowText: {
     color: "#fff",

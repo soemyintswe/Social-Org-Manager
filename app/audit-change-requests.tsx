@@ -21,37 +21,11 @@ import AccessDenied from "@/components/AccessDenied";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { normalizeOrgPosition, type AuditChangeRequestStatus, type AuditChangeWorkflowStage } from "@/lib/types";
+import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS } from "@/lib/finance-categories";
 
 const STATUS_ORDER: AuditChangeRequestStatus[] = ["pending", "suspended", "approved", "rejected", "cancelled"];
 type DraftRoleKey = "treasurer" | "auditor" | "chairperson";
 type AuditFieldType = "text" | "date" | "amount" | "member" | "payment" | "readonly" | "recordType" | "category";
-
-type CategoryFilterOption = { id: string; label: string };
-
-const INCOME_CATEGORY_FILTERS: CategoryFilterOption[] = [
-  { id: "member_fees", label: "လစဉ်ကြေးရငွေ" },
-  { id: "donations", label: "အလှူငွေရရှိ" },
-  { id: "bank_interest", label: "ဘဏ်တိုးရငွေ" },
-  { id: "other_income", label: "အခြားရငွေ" },
-  { id: "loan_repayment", label: "ချေးငွေပြန်ဆပ်ရရှိငွေ" },
-  { id: "interest_income", label: "အတိုးရငွေ" },
-];
-const EXPENSE_CATEGORY_FILTERS: CategoryFilterOption[] = [
-  { id: "health_support", label: "ကျန်းမာရေးထောက်ပံ့ငွေ" },
-  { id: "education_support", label: "ပညာရေးထောက်ပံ့ငွေ" },
-  { id: "funeral_support", label: "နာရေးကူညီငွေ" },
-  { id: "loan_disbursement", label: "ချေးငွေထုတ်ပေးငွေ" },
-  { id: "bank_fees", label: "ဘဏ်စရိတ်ပေးငွေ" },
-  { id: "general_expense", label: "အထွေထွေအသုံးစရိတ်" },
-  { id: "other_expense", label: "အခြားအသုံးစရိတ်" },
-  { id: "entertainment", label: "ဧည့်ခံစရိတ်" },
-  { id: "donation_expense", label: "လှူဒါန်းငွေ" },
-];
-const TRANSFER_CATEGORY_FILTERS: CategoryFilterOption[] = [
-  { id: "bank_deposit", label: "ဘဏ်သို့ ငွေသွင်းခြင်း (Deposit)" },
-  { id: "bank_withdraw", label: "ဘဏ်မှ ငွေထုတ်ခြင်း (Withdraw)" },
-  { id: "bank_interest", label: "ဘဏ်တိုးရငွေ (Bank Interest)" },
-];
 
 const DRAFT_ROLE_LABELS: Record<DraftRoleKey, string> = {
   treasurer: "ဘဏ္ဍာရေးမှူး",

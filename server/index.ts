@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
@@ -94,6 +95,7 @@ function setupCors(app: express.Application) {
 
 function setupBodyParsing(app: express.Application) {
   app.use(
+    "/api",
     express.json({
       limit: "20mb",
       verify: (req, _res, buf) => {
@@ -102,7 +104,7 @@ function setupBodyParsing(app: express.Application) {
     }),
   );
 
-  app.use(express.urlencoded({ extended: false, limit: "20mb" }));
+  app.use("/api", express.urlencoded({ extended: false, limit: "20mb" }));
 }
 
 function setupRequestLogging(app: express.Application) {
@@ -229,6 +231,84 @@ function configureExpoAndLanding(app: express.Application) {
   const hasWebBuild =
     fs.existsSync(webBuildDir) &&
     fs.existsSync(path.join(webBuildDir, "index.html"));
+  const webIndexPath = path.join(webBuildDir, "index.html");
+  let cachedWebIndexHtml: string | null = null;
+  let cachedWebIndexMtimeMs = 0;
+
+  const buildInjectedWebIndex = (html: string): string => {
+    const managedOrgConfigsRaw = String(
+      process.env.EXPO_PUBLIC_MANAGED_ORG_CONFIGS || "",
+    ).trim();
+    let managedOrgConfigsPayload = JSON.stringify(managedOrgConfigsRaw);
+    if (managedOrgConfigsRaw) {
+      try {
+        managedOrgConfigsPayload = JSON.stringify(
+          JSON.parse(managedOrgConfigsRaw),
+        );
+      } catch {
+        // keep string payload if not valid JSON
+      }
+    }
+
+    const firebaseConfigRaw = String(process.env.EXPO_PUBLIC_FIREBASE_CONFIG_JSON || "").trim();
+    let firebaseConfigPayload = "null";
+    if (firebaseConfigRaw) {
+      try {
+        firebaseConfigPayload = JSON.stringify(JSON.parse(firebaseConfigRaw));
+      } catch {
+        firebaseConfigPayload = JSON.stringify(firebaseConfigRaw);
+      }
+    } else {
+      const apiKey = String(process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "").trim();
+      const authDomain = String(process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || "").trim();
+      const projectId = String(process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || "").trim();
+      const storageBucket = String(process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || "").trim();
+      const messagingSenderId = String(process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "").trim();
+      const appId = String(process.env.EXPO_PUBLIC_FIREBASE_APP_ID || "").trim();
+      const measurementId = String(process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID || "").trim();
+      if (apiKey && projectId && appId) {
+        firebaseConfigPayload = JSON.stringify({
+          apiKey,
+          authDomain: authDomain || undefined,
+          projectId,
+          storageBucket: storageBucket || undefined,
+          messagingSenderId: messagingSenderId || undefined,
+          appId,
+          measurementId: measurementId || undefined,
+        });
+      }
+    }
+
+    const injection = `<script>window.__APP_CONFIG__=window.__APP_CONFIG__||{};window.__APP_CONFIG__.managedOrgConfigs=${managedOrgConfigsPayload};window.__APP_CONFIG__.firebaseConfig=${firebaseConfigPayload};</script>`;
+    return html.replace("</head>", `${injection}</head>`);
+  };
+
+  const loadInjectedWebIndexHtml = (): string | null => {
+    if (!hasWebBuild) return null;
+    try {
+      const stat = fs.statSync(webIndexPath);
+      const mtimeMs = Number(stat?.mtimeMs || 0);
+      if (cachedWebIndexHtml && cachedWebIndexMtimeMs === mtimeMs) {
+        return cachedWebIndexHtml;
+      }
+      const raw = fs.readFileSync(webIndexPath, "utf-8");
+      const injected = buildInjectedWebIndex(raw);
+      cachedWebIndexHtml = injected;
+      cachedWebIndexMtimeMs = mtimeMs;
+      return injected;
+    } catch {
+      return null;
+    }
+  };
+
+  const sendWebIndex = (res: Response) => {
+    const cached = loadInjectedWebIndexHtml();
+    if (cached) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(200).send(cached);
+    }
+    return res.sendFile(webIndexPath);
+  };
 
   log("Serving static Expo files with dynamic manifest routing");
 
@@ -248,7 +328,7 @@ function configureExpoAndLanding(app: express.Application) {
 
     if (req.path === "/") {
       if (hasWebBuild) {
-        return res.sendFile(path.join(webBuildDir, "index.html"));
+        return sendWebIndex(res);
       }
       return serveLandingPage({
         req,
@@ -300,7 +380,7 @@ function configureExpoAndLanding(app: express.Application) {
     }
     app.use("/web", express.static(webBuildDir));
     app.get(/^\/web(\/.*)?$/, (_req, res) => {
-      return res.sendFile(path.join(webBuildDir, "index.html"));
+      return sendWebIndex(res);
     });
     app.use((req, res, next) => {
       if (req.path.startsWith("/api")) return next();
@@ -310,7 +390,7 @@ function configureExpoAndLanding(app: express.Application) {
       }
       const accept = String(req.header("accept") || "");
       if (!accept.includes("text/html")) return next();
-      return res.sendFile(path.join(webBuildDir, "index.html"));
+      return sendWebIndex(res);
     });
     log("Web build route enabled at /web");
   }
@@ -340,14 +420,14 @@ function setupErrorHandler(app: express.Application) {
 }
 
 (async () => {
+  const bootStartedAt = Date.now();
   setupCors(app);
   setupRateLimiting(app);
   setupBodyParsing(app);
   setupRequestLogging(app);
 
-  configureExpoAndLanding(app);
-
   const server = await registerRoutes(app);
+  configureExpoAndLanding(app);
 
   setupErrorHandler(app);
 
@@ -360,6 +440,6 @@ function setupErrorHandler(app: express.Application) {
     listenOptions.reusePort = true;
   }
   server.listen(listenOptions, () => {
-    log(`express server serving on port ${port}`);
+    log(`express server serving on port ${port} (boot ${Date.now() - bootStartedAt}ms)`);
   });
 })();

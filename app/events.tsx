@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { router, useLocalSearchParams } from "expo-router";
@@ -27,6 +27,8 @@ import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
+
+const AsyncStorage = orgStorage;
 
 type EventType = "activity" | "news" | "announcement";
 

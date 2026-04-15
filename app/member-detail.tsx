@@ -11,6 +11,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Modal,
+  Linking,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -18,7 +19,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
+import orgStorage from "@/lib/org-storage";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -39,6 +41,8 @@ import {
   MemberFamilyMember,
   normalizeOrgPosition,
 } from "@/lib/types";
+
+const AsyncStorage = orgStorage;
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -85,6 +89,9 @@ const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
 };
 
 const DEFAULT_MEMBER_JOIN_DATE_DMY = "01/01/2018";
+
+const buildGeneratedPassword = () =>
+  `ORG${secureRandomToken(4).toUpperCase()}${String(100 + Math.floor(Math.random() * 900))}`;
 
 const formatDateToDmy = (value: unknown, fallback = ""): string => {
   const text = String(value || "").trim();
@@ -213,10 +220,19 @@ export default function MemberDetailScreen() {
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { members, groups, updateMember, deleteMember, createMemberChangeRequest, transactions, loans, getLoanOutstanding } = useData() as any;
-  const { can, currentUser, profile } = useAuth();
+  const { members, users, groups, updateMember, deleteMember, createMemberChangeRequest, transactions, loans, getLoanOutstanding, refreshData } = useData() as any;
+  const { can, currentUser, profile, resetPassword } = useAuth();
   const member = members?.find((m: any) => m.id === id);
   const memberId = member?.id || "";
+  const linkedUser = useMemo(
+    () =>
+      (users || []).find(
+        (user: any) =>
+          String(user?.systemRole || "") !== "admin" &&
+          String(user?.memberId || "").trim() === String(member?.id || "").trim()
+      ),
+    [users, member?.id]
+  );
 
   const [editName, setEditName] = useState(member?.name || "");
   const [editMemberId, setEditMemberId] = useState(member?.id || "");
@@ -247,6 +263,9 @@ export default function MemberDetailScreen() {
   const [newCustomRelation, setNewCustomRelation] = useState("");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [resettingMemberPassword, setResettingMemberPassword] = useState(false);
+  const [deletingMember, setDeletingMember] = useState(false);
+  const [memberActionMessage, setMemberActionMessage] = useState("");
   const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
   const isChairOrVice =
     actorPosition === "chairperson" ||
@@ -644,32 +663,139 @@ export default function MemberDetailScreen() {
     }
   };
 
+  const handleMemberPasswordReset = async () => {
+    if (!member?.id || resettingMemberPassword) return;
+    const nextPassword = buildGeneratedPassword();
+    const resetIdentifier = String(linkedUser?.id || "").trim() ? `uid:${String(linkedUser?.id || "").trim()}` : member.id;
+    setResettingMemberPassword(true);
+    setMemberActionMessage("Password reset လုပ်နေပါသည်။ ခေတ္တစောင့်ပါ။");
+    Alert.alert("ဆောင်ရွက်နေပါသည်", "Password reset လုပ်နေပါသည်။ ခေတ္တစောင့်ပါ။");
+    try {
+      const result = await resetPassword(resetIdentifier, nextPassword);
+      if (!result.ok) {
+        const reason = String(result.reason || "").trim();
+        const reasonText = reason ? ` (${reason})` : "";
+        setMemberActionMessage("Password reset မအောင်မြင်ပါ။");
+        Alert.alert("မအောင်မြင်ပါ", `Password reset မအောင်မြင်ပါ။${reasonText}`);
+        return;
+      }
+
+      const targetUserId = String(result.userId || "").trim();
+      const targetName = String(result.displayName || targetUserId || "-").trim();
+      const targetPhone = String(result.phone || "").trim();
+      const targetEmail = String(result.email || "").trim();
+      const issuedPassword = String(result.password || nextPassword || "").trim();
+      await refreshData({ skipPull: true });
+      const messageBody =
+        `Password Reset အသိပေးချက်\n` +
+        `Username: ${targetUserId}\n` +
+        `Temporary Password: ${issuedPassword}\n` +
+        `Login ဝင်ပြီးနောက် ကိုယ်ပိုင် Password ကို ချက်ချင်းပြောင်းပါ။`;
+
+      const actionButtons: any[] = [
+        {
+          text: "Copy",
+          onPress: () => {
+            void Clipboard.setStringAsync(messageBody);
+          },
+        },
+      ];
+
+      if (Platform.OS !== "web") {
+        if (targetEmail) {
+          actionButtons.push({
+            text: "Email ပို့မည်",
+            onPress: () => {
+              void Linking.openURL(
+                `mailto:${targetEmail}?subject=${encodeURIComponent("Password Reset")}&body=${encodeURIComponent(messageBody)}`
+              ).catch(() => {
+                Alert.alert("မအောင်မြင်ပါ", "Email app မဖွင့်နိုင်ပါ။");
+              });
+            },
+          });
+        }
+        if (targetPhone) {
+          actionButtons.push({
+            text: "SMS ပို့မည်",
+            onPress: () => {
+              const separator = Platform.OS === "ios" ? "&" : "?";
+              void Linking.openURL(`sms:${targetPhone}${separator}body=${encodeURIComponent(messageBody)}`).catch(() => {
+                Alert.alert("မအောင်မြင်ပါ", "Phone Message app မဖွင့်နိုင်ပါ။");
+              });
+            },
+          });
+        }
+      }
+
+      Alert.alert(
+        "Reset ပြီးပါပြီ",
+        `${targetName} အတွက် password အသစ်သတ်မှတ်ပြီးပါပြီ။\n\nUsername: ${targetUserId}\nTemporary Password: ${issuedPassword}`,
+        [...actionButtons, { text: "ပိတ်မည်", style: "cancel" }]
+      );
+      setMemberActionMessage(`Password reset ပြီးပါပြီ။ Password: ${issuedPassword}`);
+    } catch {
+      setMemberActionMessage("Password reset မအောင်မြင်ပါ။");
+      Alert.alert("မအောင်မြင်ပါ", "Password reset မအောင်မြင်ပါ။");
+    } finally {
+      setResettingMemberPassword(false);
+    }
+  };
+
   const handleDelete = () => {
+    if (deletingMember) return;
+    const runDelete = async () => {
+      setDeletingMember(true);
+      setMemberActionMessage("အသင်းဝင်ဖျက်ခြင်း ဆောင်ရွက်နေပါသည်။");
+      try {
+        if (canDeleteAll) {
+          await deleteMember(member.id);
+          await refreshData({ skipPull: true });
+          setMemberActionMessage("အသင်းဝင်ကို ဖျက်ပြီးပါပြီ။");
+          Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်ကို ဖျက်ပြီးပါပြီ။");
+          router.replace("/members" as any);
+          return;
+        }
+        if (canProposeChanges && currentUser?.id) {
+          await createMemberChangeRequest({
+            action: "delete",
+            targetMemberId: member.id,
+            payload: {
+              note: "Member delete proposal",
+            },
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+          });
+          await refreshData({ skipPull: true });
+          setMemberActionMessage("ဖျက်ရန်တင်ပြချက်ကို approver ထံ ပို့ပြီးပါပြီ။");
+          Alert.alert("အောင်မြင်ပါသည်", "ဖျက်ရန်တင်ပြချက်ကို approver ထံ ပို့ပြီးပါပြီ။");
+          router.replace("/members" as any);
+        }
+      } catch {
+        setMemberActionMessage("အသင်းဝင်ဖျက်ခြင်း မအောင်မြင်ပါ။");
+        Alert.alert("မအောင်မြင်ပါ", "အသင်းဝင်ဖျက်ခြင်း မအောင်မြင်ပါ။");
+      } finally {
+        setDeletingMember(false);
+      }
+    };
+
+    if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+      const confirmed = window.confirm("ဤအသင်းဝင်ကို ဖျက်ရန်သေချာပါသလား?");
+      if (confirmed) {
+        void runDelete();
+      }
+      return;
+    }
+
     Alert.alert("အသင်းဝင်ဖျက်ရန်", "ဤအသင်းဝင်ကို ဖျက်ရန်သေချာပါသလား?", [
-      { text: "မလုပ်တော့ပါ", style: "cancel" },
+      {
+        text: "မလုပ်တော့ပါ",
+        style: "cancel",
+        onPress: () => setDeletingMember(false),
+      },
       {
         text: "ဖျက်မည်",
         style: "destructive",
-        onPress: async () => {
-          if (canDeleteAll) {
-            await deleteMember(member.id);
-            router.back();
-            return;
-          }
-          if (canProposeChanges && currentUser?.id) {
-            await createMemberChangeRequest({
-              action: "delete",
-              targetMemberId: member.id,
-              payload: {
-                note: "Member delete proposal",
-              },
-              createdByUserId: currentUser.id,
-              createdByMemberId: currentUser.memberId,
-            });
-            Alert.alert("အောင်မြင်ပါသည်", "ဖျက်ရန်တင်ပြချက်ကို approver ထံ ပို့ပြီးပါပြီ။");
-            router.back();
-          }
-        },
+        onPress: runDelete,
       },
     ]);
   };
@@ -680,6 +806,9 @@ export default function MemberDetailScreen() {
   const canDeleteAll = can("members.delete");
   const canProposeChanges = can("members.propose_changes");
   const canManage = canEditGeneralFields || canEditRestrictedFields;
+  const canResetPassword =
+    normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "") === "chairperson" ||
+    normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "") === "vice_chairperson";
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
   const canViewFinanceSelf = can("finance.view_self") && currentUser?.memberId === member.id;
   const canViewFinanceSection = canViewFinanceDetail || canViewFinanceSelf;
@@ -712,7 +841,7 @@ export default function MemberDetailScreen() {
       </View>
 
       <ScrollView
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         keyboardDismissMode="on-drag"
         contentContainerStyle={[
           styles.content,
@@ -1119,10 +1248,29 @@ export default function MemberDetailScreen() {
               ))
             )}
 
+            {canResetPassword && (
+              <Pressable
+                style={styles.resetBtn}
+                onPress={handleMemberPasswordReset}
+                disabled={resettingMemberPassword}
+              >
+                <Ionicons name="key-outline" size={20} color="#0F766E" />
+                <Text style={styles.resetBtnText}>{resettingMemberPassword ? "Resetting..." : "Password Reset"}</Text>
+              </Pressable>
+            )}
+
+            {memberActionMessage ? (
+              <View style={styles.actionMessageBox}>
+                <Text style={styles.actionMessageText}>{memberActionMessage}</Text>
+              </View>
+            ) : null}
+
             {(canDeleteAll || canProposeChanges) && (
-              <Pressable style={styles.deleteBtn} onPress={handleDelete}>
+              <Pressable style={styles.deleteBtn} onPress={handleDelete} disabled={deletingMember}>
                 <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                <Text style={styles.deleteBtnText}>{canDeleteAll ? "အသင်းဝင်ဖျက်မည်" : "ဖျက်ရန်တင်ပြမည်"}</Text>
+                <Text style={styles.deleteBtnText}>
+                  {deletingMember ? "ဖျက်နေသည်..." : canDeleteAll ? "အသင်းဝင်ဖျက်မည်" : "ဖျက်ရန်တင်ပြမည်"}
+                </Text>
               </Pressable>
             )}
           </View>
@@ -1401,6 +1549,32 @@ const styles = StyleSheet.create({
   familyCardTitle: { color: Colors.light.text, fontSize: 13, fontFamily: "Inter_600SemiBold" },
   deleteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, marginTop: 20 },
   deleteBtnText: { color: "#EF4444", fontWeight: "600" },
+  resetBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#0F766E",
+    borderRadius: 10,
+    backgroundColor: "#F0FDFA",
+  },
+  resetBtnText: { color: "#0F766E", fontWeight: "600" },
+  actionMessageBox: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.tintLight,
+    padding: 10,
+  },
+  actionMessageText: {
+    color: Colors.light.text,
+    fontSize: 12,
+    fontWeight: "600",
+  },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
   statCard: { width: '48%', backgroundColor: Colors.light.surface, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border },
   statLabel: { fontSize: 11, color: Colors.light.textSecondary, marginBottom: 4 },

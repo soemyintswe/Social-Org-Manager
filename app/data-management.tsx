@@ -22,12 +22,14 @@ import { router } from "expo-router";
 import * as DocumentPicker from 'expo-document-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import Colors from "@/constants/colors";
-import { clearAllLocalDataKeepSystemConfig, exportData, mergeData, restoreData } from "@/lib/storage";
+import { clearAllLocalDataKeepSystemConfig, exportData, mergeData, restoreData } from "@/lib/storage-service";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
+
+const AsyncStorage = orgStorage;
 
 export default function DataManagementScreen() {
   const insets = useSafeAreaInsets();

@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage, { systemStorage } from "./org-storage";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
@@ -49,19 +49,20 @@ import {
   DEFAULT_LAN_SYNC_URL as DEFAULT_LAN_SYNC_URL_BASE,
 } from "./sync-defaults";
 import {
-  getCloudSyncAccountEmail as getRemoteCloudSyncAccountEmail,
-  getCloudSyncApiKey as getRemoteCloudSyncApiKey,
-  getCloudSyncEndpoint as getRemoteCloudSyncEndpoint,
-  getCloudSyncFolderName as getRemoteCloudSyncFolderName,
+  getActiveOrgId,
   getManagedCloudSyncEnabled,
-  getManagedLanSyncEnabled,
-  getManagedLanSyncUrl,
+  getManagedLanSyncUrlForOrg,
   getManagedSyncLockdownEnabled,
+  REMOTE_CONFIG_KEYS,
+  resolveConfigValueWithPriorityForOrg,
   getSyncRetryBaseDelayMs,
   getSyncRetryMaxAttempts,
 } from "./remote-config";
+import { ensureOrgLicenseActive } from "./org-registry";
 import { computeSnapshotHash, verifySnapshotHash } from "./sync-integrity";
 import { runWithRetry } from "./sync-queue";
+
+const AsyncStorage = orgStorage;
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -98,6 +99,8 @@ const EXTRA_SHARED_KEYS = [
 
 const APP_STORAGE_PREFIX = "@orghub_";
 const SHARED_EXTRA_KEY_PREFIXES = ["@org_notice_custom_"] as const;
+const SYSTEM_ADMIN_PASSWORD_KEY = "@orghub_system_admin_password";
+const DEFAULT_SYSTEM_ADMIN_PASSWORD = "Admin";
 
 const BACKUP_EXCLUDED_KEYS = new Set<string>([
   "@orghub_auth_session",
@@ -129,6 +132,7 @@ const RESET_ONLY_KEYS = new Set<string>([
   MEMBER_JOIN_DATE_MIGRATION_V1_KEY,
 ]);
 const EMPTY_ORG_STATE_KEY = "@orghub_empty_org_state_v1";
+const SYNC_SCOPE_META_KEY = "@orghub_sync_scope_meta";
 
 function hasAnyPrefix(key: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => key.startsWith(prefix));
@@ -863,22 +867,58 @@ export const getMembers = async (): Promise<Member[]> => {
     return next;
   });
 
+  const seen = new Set<string>();
+  const dedupedReversed: Member[] = [];
+  for (let i = normalized.length - 1; i >= 0; i -= 1) {
+    const row = normalized[i];
+    const key = normalizeMemberIdForCompare(row?.id);
+    if (!key) {
+      dedupedReversed.push(row);
+      continue;
+    }
+    if (seen.has(key)) {
+      changed = true;
+      continue;
+    }
+    seen.add(key);
+    dedupedReversed.push(row);
+  }
+  const deduped = dedupedReversed.reverse();
+
   if (shouldRunJoinDateMigration) {
     await AsyncStorage.setItem(MEMBER_JOIN_DATE_MIGRATION_V1_KEY, "1");
   }
   if (changed || joinDateMigrationChanged) {
-    await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
+    await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(deduped));
   }
-  return normalized;
+  return deduped;
 };
 
 export async function syncUsersWithMembers(members: Member[]) {
   try {
     const users = await getUsers();
     const admins = users.filter(u => u.systemRole === 'admin');
-    
+
+    const existingByMember = new Map<string, UserAccount>();
+    users.forEach((user) => {
+      if (!user.memberId || user.systemRole === "admin") return;
+      const key = normalizeMemberIdForCompare(user.memberId);
+      if (!key) return;
+      const current = existingByMember.get(key);
+      if (!current) {
+        existingByMember.set(key, user);
+        return;
+      }
+      const currentTime = Date.parse(current.createdAt || "");
+      const nextTime = Date.parse(user.createdAt || "");
+      if (!Number.isNaN(nextTime) && (Number.isNaN(currentTime) || nextTime > currentTime)) {
+        existingByMember.set(key, user);
+      }
+    });
+
     const memberUsers: UserAccount[] = members.map(m => {
-      const existing = users.find(u => u.memberId === m.id);
+      const memberKey = normalizeMemberIdForCompare(m.id);
+      const existing = existingByMember.get(memberKey);
       const mAny = m as any;
       const position = mAny.orgPosition || (m.status === 'applicant' ? 'applicant' : 'member');
       return {
@@ -897,8 +937,23 @@ export async function syncUsersWithMembers(members: Member[]) {
 
 export const saveMembers = async (data: Member[]) => {
   const normalized = (Array.isArray(data) ? data : []).map((row: any) => normalizeMemberRecord(row));
-  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
-  await syncUsersWithMembers(normalized);
+  // ID တူညီမှုကို digit/script normalize ပြုလုပ်ပြီး duplicate rows ကိုတစ်ခုပဲထားပါ။
+  const seen = new Set<string>();
+  const dedupedReversed: Member[] = [];
+  for (let i = normalized.length - 1; i >= 0; i -= 1) {
+    const row = normalized[i];
+    const key = normalizeMemberIdForCompare(row?.id);
+    if (!key) {
+      dedupedReversed.push(row);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dedupedReversed.push(row);
+  }
+  const deduped = dedupedReversed.reverse();
+  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(deduped));
+  await syncUsersWithMembers(deduped);
 };
 
 export const getMemberChangeRequests = () => safeGet<MemberChangeRequest[]>(KEYS.MEMBER_CHANGE_REQUESTS, []);
@@ -1128,15 +1183,16 @@ export function buildMemberUsername(memberId?: string): string {
   return `ID${digits}`;
 }
 
-export function buildDefaultPassword(memberId?: string, isAdmin?: boolean): string {
-  if (isAdmin) return "Admin";
-  const digits = getTrailingDigits(memberId);
-  return digits || "member";
+function normalizeMemberIdForCompare(rawValue?: string): string {
+  return toEnglishDigits(String(rawValue || "")).trim().toLowerCase();
 }
 
-function buildDefaultStandaloneUserPassword(userId?: string): string {
-  const normalized = toEnglishDigits(String(userId || "")).trim();
-  return normalized || "orguser";
+export function buildDefaultPassword(): string {
+  return buildAutoGeneratedPassword();
+}
+
+function buildDefaultStandaloneUserPassword(): string {
+  return buildAutoGeneratedPassword();
 }
 
 async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Member[]): Promise<void> {
@@ -1146,16 +1202,14 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
   for (const user of users) {
     if (passwords[user.id]) continue;
     if (user.systemRole === "admin") {
-      passwords[user.id] = buildDefaultPassword(undefined, true);
-      changed = true;
       continue;
     }
     const member = members.find((item) => item.id === user.memberId);
     if (member) {
-      passwords[user.id] = buildDefaultPassword(member.id, false);
+      passwords[user.id] = buildAutoGeneratedPassword();
       changed = true;
     } else {
-      passwords[user.id] = buildDefaultStandaloneUserPassword(user.id);
+      passwords[user.id] = buildDefaultStandaloneUserPassword();
       changed = true;
     }
   }
@@ -1163,6 +1217,36 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
   if (changed) {
     await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(passwords));
   }
+}
+
+export async function ensureSystemAdminPassword(): Promise<string> {
+  try {
+    const systemExisting = String((await systemStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
+    if (systemExisting) return systemExisting;
+    const legacyExisting = String((await AsyncStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
+    if (legacyExisting) {
+      await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, legacyExisting);
+      try {
+        await AsyncStorage.removeItem(SYSTEM_ADMIN_PASSWORD_KEY);
+      } catch {}
+      return legacyExisting;
+    }
+    await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
+    return DEFAULT_SYSTEM_ADMIN_PASSWORD;
+  } catch {
+    return DEFAULT_SYSTEM_ADMIN_PASSWORD;
+  }
+}
+
+export async function verifySystemAdminPassword(passwordPlaintext: string): Promise<boolean> {
+  const stored = await ensureSystemAdminPassword();
+  return stored === String(passwordPlaintext || "").trim();
+}
+
+export async function setSystemAdminPassword(nextPassword: string): Promise<void> {
+  const trimmed = String(nextPassword || "").trim();
+  if (!trimmed) return;
+  await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed);
 }
 
 export async function changeUserPassword(userId: string, currentPassword: string, nextPassword: string): Promise<boolean> {
@@ -1176,55 +1260,110 @@ export async function changeUserPassword(userId: string, currentPassword: string
 export async function resetUserPasswordByIdentifier(
   identifier: string,
   nextPassword?: string
-): Promise<{ ok: boolean; userId?: string; reason?: string; displayName?: string; memberId?: string; phone?: string; password?: string }> {
-  const needle = toEnglishDigits(identifier || "").trim().toLowerCase();
+): Promise<{ ok: boolean; userId?: string; reason?: string; displayName?: string; memberId?: string; phone?: string; email?: string; password?: string }> {
+  const rawNeedle = toEnglishDigits(identifier || "").trim();
+  const needle = rawNeedle.toLowerCase();
   if (!needle) return { ok: false, reason: "empty" };
-
-  const [users, members] = await Promise.all([getUsers(), getMembers()]);
-  const targetUser = users.find((user) => {
-    if (!user.isActive) return false;
-    if (user.systemRole === "admin") {
-      return needle === "admin";
-    }
-
-    if (toEnglishDigits(String(user.id || "")).trim().toLowerCase() === needle) {
-      return true;
-    }
-
-    const member = members.find((item) => item.id === user.memberId);
-    if (!member) return false;
-
-    const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
-    const phoneCandidates = [primaryPhone, secondaryPhone]
-      .filter(Boolean)
-      .map((phone) => toEnglishDigits(phone).replace(/[^\d]/g, ""));
-    const emailCandidate = String(member.email || "").trim().toLowerCase();
-    const memberIdCandidate = toEnglishDigits(member.id).trim().toLowerCase();
-    const aliasCandidate = buildMemberUsername(member.id).toLowerCase();
-    const normalizedNeedleDigits = needle.replace(/[^\d]/g, "");
-
-    return (
-      needle === memberIdCandidate ||
-      needle === aliasCandidate ||
-      (emailCandidate && needle === emailCandidate) ||
-      (!!normalizedNeedleDigits && phoneCandidates.includes(normalizedNeedleDigits))
-    );
-  });
-
-  if (!targetUser) return { ok: false, reason: "not_found" };
-
-  const chosenPassword = String(nextPassword || "").trim();
-
-  if (targetUser.systemRole === "admin") {
-    const password = chosenPassword || buildDefaultPassword(undefined, true);
-    await setUserPassword(targetUser.id, password);
-    return { ok: true, userId: targetUser.id, displayName: targetUser.displayName || "Admin", password };
+  if (needle === "admin") {
+    const password = String(nextPassword || "").trim() || DEFAULT_SYSTEM_ADMIN_PASSWORD;
+    await setSystemAdminPassword(password);
+    return { ok: true, userId: "admin", displayName: "System Admin", password };
   }
 
-  const member = members.find((item) => item.id === targetUser.memberId);
+  const [users, members] = await Promise.all([getUsers(), getMembers()]);
+  const candidates = Array.from(
+    new Set(
+      [rawNeedle]
+        .concat(rawNeedle.split(/[\/|,;\n]+/g))
+        .map((item) => toEnglishDigits(String(item || "")).trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+
+  const findExactByNeedle = (currentNeedle: string): UserAccount | undefined => {
+    if (currentNeedle.startsWith("uid:")) {
+      const uidNeedle = toEnglishDigits(currentNeedle.slice(4)).trim().toLowerCase();
+      if (!uidNeedle) return undefined;
+      return users.find((user) => toEnglishDigits(String(user.id || "")).trim().toLowerCase() === uidNeedle && user.isActive);
+    }
+
+    return users.find((user) => {
+      if (!user.isActive) return false;
+      if (user.systemRole === "admin") {
+        return currentNeedle === "admin";
+      }
+
+      if (toEnglishDigits(String(user.id || "")).trim().toLowerCase() === currentNeedle) {
+        return true;
+      }
+
+      const member = members.find((item) => item.id === user.memberId);
+      if (!member) return false;
+
+      const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
+      const phoneCandidates = [primaryPhone, secondaryPhone]
+        .filter(Boolean)
+        .map((phone) => toEnglishDigits(phone).replace(/[^\d]/g, ""));
+      const emailCandidate = String(member.email || "").trim().toLowerCase();
+      const memberIdCandidate = toEnglishDigits(member.id).trim().toLowerCase();
+      const aliasCandidate = buildMemberUsername(member.id).toLowerCase();
+      const normalizedNeedleDigits = currentNeedle.replace(/[^\d]/g, "");
+
+      return (
+        currentNeedle === memberIdCandidate ||
+        currentNeedle === aliasCandidate ||
+        (emailCandidate && currentNeedle === emailCandidate) ||
+        (!!normalizedNeedleDigits && phoneCandidates.includes(normalizedNeedleDigits))
+      );
+    });
+  };
+
+  const targetUser =
+    candidates.map((candidate) => findExactByNeedle(candidate)).find(Boolean) ||
+    users.find((user) => {
+      if (!user.isActive) return false;
+      if (user.systemRole === "admin") return needle === "admin";
+      const member = members.find((item) => item.id === user.memberId);
+      if (!member) return false;
+      const memberName = String(member.name || "").trim().toLowerCase();
+      return memberName && memberName === needle;
+    });
+
+  if (!targetUser) return { ok: false, reason: "not_found" };
+  if (targetUser.systemRole === "admin") {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  const chosenPassword = String(nextPassword || "").trim();
+  const password = chosenPassword || buildAutoGeneratedPassword();
+  const targetMemberKey = normalizeMemberIdForCompare(targetUser.memberId);
+  const member = members.find((item) => normalizeMemberIdForCompare(item.id) === targetMemberKey);
+
+  const targetUsers: UserAccount[] = (() => {
+    if (!member) return [targetUser];
+    const sameMemberUsers = users.filter((user) => {
+      if (!user.isActive || user.systemRole === "admin") return false;
+      return normalizeMemberIdForCompare(user.memberId) === normalizeMemberIdForCompare(member.id);
+    });
+    return sameMemberUsers.length > 0 ? sameMemberUsers : [targetUser];
+  })();
+
+  const targetUserIds = Array.from(
+    new Set(targetUsers.map((user) => String(user.id || "").trim()).filter(Boolean))
+  );
+  if (!targetUserIds.length) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  await Promise.all(targetUserIds.map((userId) => setUserPassword(userId, password)));
+  await pushPasswordResetBestEffort();
+
+  const verifyResults = await Promise.all(targetUserIds.map((userId) => verifyPassword(userId, password)));
+  if (verifyResults.some((ok) => !ok)) {
+    return { ok: false, reason: "password_verify_failed" };
+  }
+
   if (!member) {
-    const password = chosenPassword || buildDefaultStandaloneUserPassword(targetUser.id);
-    await setUserPassword(targetUser.id, password);
     return {
       ok: true,
       userId: targetUser.id,
@@ -1234,54 +1373,200 @@ export async function resetUserPasswordByIdentifier(
   }
 
   const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
-  const password = chosenPassword || buildDefaultPassword(member.id);
-  await setUserPassword(targetUser.id, password);
+  const email = String(member.email || "").trim();
   return {
     ok: true,
     userId: targetUser.id,
     displayName: member.name || targetUser.displayName || targetUser.id,
     memberId: member.id,
     phone: primaryPhone || secondaryPhone || "",
+    email: email || undefined,
     password,
   };
 }
 
-export async function createInitialOrgUserAccount(input: {
-  username: string;
-  displayName: string;
-  password: string;
-  orgPosition: OrgPosition;
-}): Promise<UserAccount> {
-  const username = toEnglishDigits(String(input.username || "")).trim();
-  const displayName = String(input.displayName || "").trim();
-  const password = String(input.password || "").trim();
-  const orgPosition = normalizeOrgPosition(input.orgPosition || "chairperson");
+async function pushPasswordResetBestEffort(): Promise<void> {
+  try {
+    await Promise.allSettled([
+      pushLanSnapshotFromLocalDetailed(),
+      pushCloudSnapshotFromLocalDetailed(),
+    ]);
+  } catch {
+    // ignore sync errors; password is already updated locally
+  }
+}
 
-  if (!username) throw new Error("username_required");
+function buildAutoGeneratedPassword(): string {
+  const token = randomToken(4).toUpperCase();
+  const digits = String(100 + secureRandomInt(900));
+  return `ORG${token}${digits}`;
+}
+
+function buildInitialOrgUserId(users: UserAccount[], memberId?: string): string {
+  const normalizedMemberId = toEnglishDigits(String(memberId || "")).trim();
+  const base = normalizedMemberId ? `user-${normalizedMemberId}` : `chair-${randomToken(4).toUpperCase()}`;
+  let candidate = base;
+  let counter = 1;
+  const existingIds = new Set(
+    users.map((user) => toEnglishDigits(String(user.id || "")).trim().toLowerCase())
+  );
+  while (existingIds.has(candidate.toLowerCase())) {
+    candidate = `${base}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+function buildChairMemberId(members: Member[]): string {
+  const existingIds = new Set(
+    members.map((member) => toEnglishDigits(String(member.id || "")).trim().toLowerCase())
+  );
+  let counter = 1;
+  let candidate = `CHAIR-${String(counter).padStart(3, "0")}`;
+  while (existingIds.has(candidate.toLowerCase())) {
+    counter += 1;
+    candidate = `CHAIR-${String(counter).padStart(3, "0")}`;
+  }
+  return candidate;
+}
+
+function normalizePhoneDigits(input?: string | null): string {
+  return toEnglishDigits(String(input || "")).replace(/[^\d]/g, "");
+}
+
+export async function createInitialOrgUserAccount(input: {
+  displayName: string;
+  orgPosition: OrgPosition;
+  memberId?: string;
+  email?: string;
+  phone?: string;
+}): Promise<{ user: UserAccount; password: string }> {
+  const displayName = String(input.displayName || "").trim();
+  const orgPosition = normalizeOrgPosition(input.orgPosition || "chairperson");
+  const memberId = toEnglishDigits(String(input.memberId || "")).trim();
+
   if (!displayName) throw new Error("display_name_required");
-  if (!password) throw new Error("password_required");
 
   const users = await getUsers();
-  const normalizedUsername = username.toLowerCase();
-  const duplicate = users.find((user) => toEnglishDigits(String(user.id || "")).trim().toLowerCase() === normalizedUsername);
-  if (duplicate) throw new Error("username_exists");
-
   const existingInitialUser = users.find((user) => user.systemRole === "org_user" && !String(user.memberId || "").trim());
   if (existingInitialUser) throw new Error("initial_org_user_exists");
 
   const now = new Date().toISOString();
+  const userId = buildInitialOrgUserId(users, memberId);
   const nextUser: UserAccount = {
-    id: username,
+    id: userId,
     displayName,
     systemRole: "org_user",
     orgPosition,
+    memberId: memberId || undefined,
     isActive: true,
     createdAt: now,
   };
 
+  const password = buildAutoGeneratedPassword();
   await saveUsers([...users, nextUser]);
   await setUserPassword(nextUser.id, password);
-  return nextUser;
+  return { user: nextUser, password };
+}
+
+export async function ensureChairAccountFromRegistry(input: {
+  chairName: string;
+  chairEmail?: string;
+  chairPhone?: string;
+  chairPassword: string;
+}): Promise<{ ok: boolean; created?: boolean; memberId?: string; userId?: string; reason?: string }> {
+  const chairName = String(input.chairName || "").trim();
+  const chairEmail = String(input.chairEmail || "").trim().toLowerCase();
+  const chairPhone = String(input.chairPhone || "").trim();
+  const chairPassword = String(input.chairPassword || "").trim();
+
+  if (!chairName) return { ok: false, reason: "chair_name_required" };
+  if (!chairEmail && !chairPhone) return { ok: false, reason: "chair_contact_required" };
+  if (!chairPassword) return { ok: false, reason: "chair_password_required" };
+
+  const applyPasswordToMemberUsers = async (memberId: string): Promise<string | undefined> => {
+    const refreshedUsers = await getUsers();
+    const memberKey = normalizeMemberIdForCompare(memberId);
+    const targets = refreshedUsers.filter((user) => {
+      if (user.systemRole === "admin") return false;
+      return normalizeMemberIdForCompare(user.memberId) === memberKey;
+    });
+    const targetIds = Array.from(new Set(targets.map((u) => String(u.id || "").trim()).filter(Boolean)));
+    if (!targetIds.length) {
+      const fallbackUserId = `user-${memberId}`;
+      await setUserPassword(fallbackUserId, chairPassword);
+      return fallbackUserId;
+    }
+    await Promise.all(targetIds.map((userId) => setUserPassword(userId, chairPassword)));
+    return targetIds[0];
+  };
+
+  const [members, users] = await Promise.all([getMembers(), getUsers()]);
+  const existingChairMember = members.find(
+    (member) => normalizeOrgPosition(member.orgPosition || "") === "chairperson"
+  );
+  if (existingChairMember) {
+    const userId = await applyPasswordToMemberUsers(existingChairMember.id);
+    return { ok: true, created: false, memberId: existingChairMember.id, userId };
+  }
+
+  const existingChairUser = users.find(
+    (user) =>
+      user.systemRole === "org_user" &&
+      normalizeOrgPosition(user.orgPosition || "") === "chairperson" &&
+      !String(user.memberId || "").trim()
+  );
+  if (existingChairUser) {
+    await setUserPassword(existingChairUser.id, chairPassword);
+    return { ok: true, created: false, userId: existingChairUser.id };
+  }
+
+  const normalizedPhone = normalizePhoneDigits(chairPhone);
+  const normalizedEmail = chairEmail;
+  const matchedMember = members.find((member) => {
+    const memberEmail = String(member.email || "").trim().toLowerCase();
+    if (normalizedEmail && memberEmail && normalizedEmail === memberEmail) return true;
+    if (normalizedPhone) {
+      const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
+      const phoneCandidates = [primaryPhone, secondaryPhone]
+        .filter(Boolean)
+        .map((phone) => normalizePhoneDigits(phone));
+      return phoneCandidates.includes(normalizedPhone);
+    }
+    return false;
+  });
+
+  if (matchedMember) {
+    const updatedMembers = members.map((member) =>
+      member.id === matchedMember.id
+        ? { ...member, orgPosition: "chairperson" as OrgPosition, status: member.status || "active" }
+        : member
+    );
+    await saveMembers(updatedMembers);
+    const userId = await applyPasswordToMemberUsers(matchedMember.id);
+    return { ok: true, created: false, memberId: matchedMember.id, userId };
+  }
+
+  const now = new Date().toISOString();
+  const newMemberId = buildChairMemberId(members);
+  const newMember: Member = {
+    id: newMemberId,
+    name: chairName,
+    phone: chairPhone,
+    email: chairEmail || undefined,
+    joinDate: now.split("T")[0],
+    status: "active",
+    createdAt: now,
+    color: randomColor(),
+    avatarColor: randomColor(),
+    role: "member",
+    orgPosition: "chairperson",
+  };
+
+  await saveMembers([...members, newMember]);
+  const newUserId = (await applyPasswordToMemberUsers(newMemberId)) || `user-${newMemberId}`;
+  await setUserPassword(newUserId, chairPassword);
+  return { ok: true, created: true, memberId: newMemberId, userId: newUserId };
 }
 
 
@@ -1301,6 +1586,14 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
   const normalized = normalizeMemberPatch(member) as any;
+  const normalizedId = String(normalized.id || "").trim();
+  const normalizedIdKey = normalizeMemberIdForCompare(normalizedId);
+  if (normalizedId) {
+    const exists = members.some((m) => normalizeMemberIdForCompare(m.id) === normalizedIdKey);
+    if (exists) {
+      throw new Error("member_exists");
+    }
+  }
   const newMember = normalizeMemberRecord({
     ...normalized,
     id: normalized.id || generateId(),
@@ -1311,9 +1604,10 @@ export async function addMember(member: any): Promise<Member> {
     await saveMembers([...members, newMember]);
 
     const user = await getUsers()
-    const newUser = user.find((e) => e.memberId === newMember.id)
+    const newMemberKey = normalizeMemberIdForCompare(newMember.id);
+    const newUser = user.find((e) => normalizeMemberIdForCompare(e.memberId) === newMemberKey)
     if (newUser?.id) {
-      await setUserPassword(newUser.id, buildDefaultPassword(newMember.id));
+      await setUserPassword(newUser.id, buildAutoGeneratedPassword());
     }
 
   return newMember;
@@ -1321,15 +1615,17 @@ export async function addMember(member: any): Promise<Member> {
 
 export async function updateMember(id: string, updates: any) {
   const members = await getMembers();
-  const idx = members.findIndex(m => m.id === id);
+  const sourceIdKey = normalizeMemberIdForCompare(id);
+  const idx = members.findIndex((m) => normalizeMemberIdForCompare(m.id) === sourceIdKey);
   if (idx !== -1) {
     const normalized = normalizeMemberPatch(updates) as any;
     const previousMember = { ...members[idx] } as Member;
     const nextId = String(normalized.id || id).trim() || id;
-    if (nextId !== id) {
-      const exists = members.some((m, i) => i !== idx && String(m.id || "") === nextId);
+    const nextIdKey = normalizeMemberIdForCompare(nextId);
+    if (nextIdKey && nextIdKey !== sourceIdKey) {
+      const exists = members.some((m, i) => i !== idx && normalizeMemberIdForCompare(m.id) === nextIdKey);
       if (exists) throw new Error("member_exists");
-      await remapMemberIdReferences(id, nextId);
+      await remapMemberIdReferences(previousMember.id, nextId);
     }
     const merged = { ...members[idx], ...normalized, id: nextId };
     members[idx] = normalizeMemberRecord(merged, previousMember, normalized);
@@ -1339,7 +1635,29 @@ export async function updateMember(id: string, updates: any) {
 
 export async function deleteMember(id: string) {
   const members = await getMembers();
-  await saveMembers(members.filter(m => m.id !== id));
+  const idKey = normalizeMemberIdForCompare(id);
+  const nextMembers = members.filter(m => normalizeMemberIdForCompare(m.id) !== idKey);
+  await saveMembers(nextMembers);
+  try {
+    const users = await getUsers();
+    const toRemove = users.filter((u) => normalizeMemberIdForCompare(u.memberId) === idKey);
+    if (toRemove.length > 0) {
+      await saveUsers(users.filter((u) => normalizeMemberIdForCompare(u.memberId) !== idKey));
+      const passwords = await getUserPasswords();
+      let changed = false;
+      toRemove.forEach((u) => {
+        if (passwords[u.id]) {
+          delete passwords[u.id];
+          changed = true;
+        }
+      });
+      if (changed) {
+        await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(passwords));
+      }
+    }
+  } catch {
+    // ignore cleanup errors
+  }
 }
 
 export async function clearAllMembers(): Promise<void> {
@@ -1369,6 +1687,11 @@ export async function clearAllData(): Promise<void> {
 type PreservedSystemConfig = Pick<
   AccountSettings,
   | "orgName"
+  | "orgEmail"
+  | "orgPhone"
+  | "orgId"
+  | "orgSetupAt"
+  | "orgSetupCompleted"
   | "currency"
   | "syncServerUrl"
   | "syncEnabled"
@@ -1395,6 +1718,11 @@ type PreservedSystemConfig = Pick<
 function pickPreservedSystemConfig(settings: AccountSettings): PreservedSystemConfig {
   return {
     orgName: settings.orgName,
+    orgEmail: settings.orgEmail,
+    orgPhone: settings.orgPhone,
+    orgId: settings.orgId,
+    orgSetupAt: settings.orgSetupAt,
+    orgSetupCompleted: settings.orgSetupCompleted,
     currency: settings.currency,
     syncServerUrl: settings.syncServerUrl,
     syncEnabled: settings.syncEnabled,
@@ -3803,6 +4131,11 @@ export async function getAccountSettings(): Promise<AccountSettings> {
   const runtimeDefaultSyncServerUrl = getRuntimeDefaultSyncServerUrl();
   const defaults: AccountSettings = {
     orgName: "My Organization",
+    orgEmail: "",
+    orgPhone: "",
+    orgId: "",
+    orgSetupAt: "",
+    orgSetupCompleted: false,
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     currency: "MMK",
@@ -3925,6 +4258,15 @@ function getRuntimeDefaultSyncServerUrl(): string {
   const fromEnv = normalizeSyncServerUrl(String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || ""));
   if (fromEnv) return fromEnv;
 
+  if (Platform.OS === "web") {
+    try {
+      const origin = String((globalThis as any)?.location?.origin || "").trim();
+      if (/^https?:\/\//i.test(origin)) {
+        return normalizeSyncServerUrl(origin);
+      }
+    } catch {}
+  }
+
   const inferredHost = inferRuntimeLanHost();
   if (inferredHost) {
     return normalizeSyncServerUrl(`http://${inferredHost}:5000`);
@@ -3964,6 +4306,17 @@ function buildCloudApiKeyCandidates(apiKey: string): string[] {
   return Array.from(new Set(list));
 }
 
+function resolveOrgScopedCloudFolderName(baseFolderName: string, orgId?: string | null): string {
+  const base = String(baseFolderName || "").trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
+  const normalizedOrgId = String(orgId || "").trim().toUpperCase();
+  if (!normalizedOrgId) return base;
+  // Keep legacy ORG000 on the old shared folder so existing production data remains reachable.
+  if (normalizedOrgId === "ORG000") return base;
+  const baseLower = base.toLowerCase();
+  if (baseLower.includes(normalizedOrgId.toLowerCase())) return base;
+  return `${base}-${normalizedOrgId}`;
+}
+
 async function resolveCloudSyncConfig(): Promise<{
   enabled: boolean;
   endpoint: string;
@@ -3973,35 +4326,76 @@ async function resolveCloudSyncConfig(): Promise<{
   folderName: string;
 }> {
   const settings = await getAccountSettings();
+  const orgId =
+    String(settings?.orgId || "").trim().toUpperCase() ||
+    String(getActiveOrgId() || "").trim().toUpperCase() ||
+    (await resolveExpectedOrgId());
   const managedLockdownEnabled = getManagedSyncLockdownEnabled();
-  const remoteEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
-  const legacyEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const managedCloudOverrideActive = managedLockdownEnabled && !!remoteEndpoint;
-  const endpoint = managedCloudOverrideActive ? remoteEndpoint : (legacyEndpoint || remoteEndpoint);
+  const manualEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+  const resolvedManagedEndpoint = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT,
+    orgId,
+  });
+  const resolvedStandardEndpoint = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_ENDPOINT,
+    orgId,
+  });
+  const resolvedEndpoint = normalizeCloudSyncEndpoint(
+    resolvedManagedEndpoint.value || resolvedStandardEndpoint.value || ""
+  );
+  const managedCloudOverrideActive = managedLockdownEnabled && !!resolvedManagedEndpoint.value;
+  const endpoint = manualEndpoint || resolvedEndpoint;
   const managedEnabled = getManagedCloudSyncEnabled();
-  const remoteApiKey = sanitizeCloudApiKey(getRemoteCloudSyncApiKey() || "");
-  const legacyApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
-  const apiKey = managedCloudOverrideActive ? remoteApiKey : (legacyApiKey || remoteApiKey);
+  const manualApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
+  const resolvedManagedApiKey = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY,
+    orgId,
+  });
+  const resolvedStandardApiKey = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_API_KEY,
+    orgId,
+  });
+  const resolvedApiKey = sanitizeCloudApiKey(
+    resolvedManagedApiKey.value || resolvedStandardApiKey.value || ""
+  );
+  const apiKey = manualApiKey || resolvedApiKey;
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
-  const remoteAccountEmail = String(getRemoteCloudSyncAccountEmail() || "").trim();
-  const accountEmail = managedCloudOverrideActive
-    ? remoteAccountEmail
-    : (String(settings.cloudSyncGoogleAccountEmail || "").trim() || remoteAccountEmail);
-  const remoteFolderName = String(getRemoteCloudSyncFolderName() || "").trim();
-  const folderName = managedCloudOverrideActive
-    ? (remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
-    : (String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
-  const hasLegacyEndpoint = !!legacyEndpoint;
+  const manualAccountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
+  const resolvedManagedAccountEmail = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL,
+    orgId,
+  });
+  const resolvedStandardAccountEmail = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_ACCOUNT_EMAIL,
+    orgId,
+  });
+  const accountEmail =
+    manualAccountEmail ||
+    String(resolvedManagedAccountEmail.value || "").trim() ||
+    String(resolvedStandardAccountEmail.value || "").trim();
+  const manualFolderName = String(settings.cloudSyncFolderName || "").trim();
+  const resolvedManagedFolderName = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME,
+    orgId,
+  });
+  const resolvedStandardFolderName = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_FOLDER_NAME,
+    orgId,
+  });
+  const folderName =
+    manualFolderName ||
+    String(resolvedManagedFolderName.value || "").trim() ||
+    String(resolvedStandardFolderName.value || "").trim() ||
+    DEFAULT_CLOUD_SYNC_FOLDER_NAME;
+  const scopedFolderName = resolveOrgScopedCloudFolderName(folderName, orgId);
   const enabledFlag =
     managedEnabled !== null
       ? managedEnabled
       : managedCloudOverrideActive
         ? true
-        : hasLegacyEndpoint
-          ? true
-          : settings.cloudSyncEnabled === true;
+        : settings.cloudSyncEnabled === true || !!manualEndpoint || !!resolvedEndpoint;
   const enabled = enabledFlag && !!endpoint;
-  return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
+  return { enabled, endpoint, apiKey, provider, accountEmail, folderName: scopedFolderName };
 }
 
 function parseImageDataUrl(value: string): { mime: string; base64: string } | null {
@@ -4053,12 +4447,17 @@ async function compressImageDataUrl(value: string): Promise<string> {
 
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
-  const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+  const orgId = settings?.orgId || getActiveOrgId();
+  const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrlForOrg(orgId) || "");
   const url = normalizeSyncServerUrl(
     settings.syncServerUrl || remoteUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL
   );
   const hasLocalUrl = !!normalizeSyncServerUrl(String(settings.syncServerUrl || ""));
-  const enabledFlag = hasLocalUrl ? true : settings.syncEnabled !== false;
+  const hasManagedUrl = !!remoteUrl;
+  const isLegacyOrg = String(orgId || "").trim().toUpperCase() === "ORG000";
+  // Non-legacy orgs should not use default/shared LAN sync to avoid cross-org mixing.
+  const allowDefaultLan = isLegacyOrg || hasManagedUrl;
+  const enabledFlag = allowDefaultLan ? (hasLocalUrl ? true : settings.syncEnabled !== false) : false;
   const enabled = enabledFlag && !!url;
   return { url, enabled };
 }
@@ -4074,7 +4473,8 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
   }> {
     const settings = await getAccountSettings();
     const managedLockdownEnabled = getManagedSyncLockdownEnabled();
-    const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+    const orgId = settings?.orgId || getActiveOrgId();
+    const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrlForOrg(orgId) || "");
     const managedLanOverrideActive = false;
     const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || managedLanUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
     const lan = await resolveSyncServerUrl();
@@ -4087,7 +4487,12 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
       ? "managed_remote_config"
       : "default";
 
-    const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
+    const managedCloudEndpoint = normalizeCloudSyncEndpoint(
+      resolveConfigValueWithPriorityForOrg({
+        key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT,
+        orgId,
+      }).value || ""
+    );
     const managedCloudOverrideActive = managedLockdownEnabled && !!managedCloudEndpoint;
     const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
     const cloud = await resolveCloudSyncConfig();
@@ -4113,14 +4518,100 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
   };
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 8000): Promise<Response> {
+function parsePositiveIntFromEnv(raw: unknown, fallback: number): number {
+  const value = Number(String(raw ?? "").trim());
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
+}
+
+const SYNC_REQUEST_TIMEOUT_MS = parsePositiveIntFromEnv(
+  (process.env as any).EXPO_PUBLIC_SYNC_REQUEST_TIMEOUT_MS,
+  20000
+);
+const RENDER_COLD_START_TIMEOUT_MS = parsePositiveIntFromEnv(
+  (process.env as any).EXPO_PUBLIC_RENDER_COLD_START_TIMEOUT_MS,
+  45000
+);
+const RENDER_COLD_START_ATTEMPTS = parsePositiveIntFromEnv(
+  (process.env as any).EXPO_PUBLIC_RENDER_COLD_START_ATTEMPTS,
+  8
+);
+const RENDER_COLD_START_BASE_DELAY_MS = parsePositiveIntFromEnv(
+  (process.env as any).EXPO_PUBLIC_RENDER_COLD_START_BASE_DELAY_MS,
+  1200
+);
+const RENDER_COLD_START_WARMUP_TTL_MS = parsePositiveIntFromEnv(
+  (process.env as any).EXPO_PUBLIC_RENDER_COLD_START_WARMUP_TTL_MS,
+  10 * 60 * 1000
+);
+
+const renderWarmupTracker = new Map<string, number>();
+
+function toRequestTargetString(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  try {
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      return String(input.url || "");
+    }
+  } catch {}
+  return String((input as any)?.url || "");
+}
+
+function parseRequestTargetUrl(input: RequestInfo | URL): URL | null {
+  const raw = String(toRequestTargetString(input) || "").trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isRenderHost(hostname: string): boolean {
+  const host = String(hostname || "").trim().toLowerCase();
+  if (!host) return false;
+  return host.endsWith(".onrender.com") || host.endsWith(".render.com");
+}
+
+function isRenderRequestTarget(input: RequestInfo | URL): boolean {
+  const parsed = parseRequestTargetUrl(input);
+  if (!parsed) return false;
+  return isRenderHost(parsed.hostname);
+}
+
+async function maybeWarmupRenderService(input: RequestInfo | URL): Promise<void> {
+  const parsed = parseRequestTargetUrl(input);
+  if (!parsed || !isRenderHost(parsed.hostname)) return;
+  if (parsed.pathname.startsWith("/api/sync/health")) return;
+
+  const origin = parsed.origin;
+  const now = Date.now();
+  const lastWarmupAt = Number(renderWarmupTracker.get(origin) || 0);
+  if (now - lastWarmupAt < RENDER_COLD_START_WARMUP_TTL_MS) return;
+
+  renderWarmupTracker.set(origin, now);
+  const warmupUrl = `${origin}/api/sync/health?warmup=1`;
+  try {
+    await fetchWithTimeout(warmupUrl, { method: "GET" }, RENDER_COLD_START_TIMEOUT_MS);
+  } catch {
+    // warmup is best-effort only
+  }
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = SYNC_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  const ms = Math.max(1000, Math.floor(timeoutMs || SYNC_REQUEST_TIMEOUT_MS));
   return await Promise.race([
     fetch(input, init),
     new Promise<Response>((_, reject) => {
       const timer = setTimeout(() => {
         clearTimeout(timer);
         reject(new Error("timeout"));
-      }, timeoutMs);
+      }, ms);
     }),
   ]);
 }
@@ -4132,20 +4623,35 @@ function isRetryableHttpStatus(status: number): boolean {
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init?: RequestInit,
-  timeoutMs = 8000,
+  timeoutMs = SYNC_REQUEST_TIMEOUT_MS,
   attempts = getSyncRetryMaxAttempts(),
   baseDelayMs = getSyncRetryBaseDelayMs()
 ): Promise<Response> {
+  const isRenderTarget = isRenderRequestTarget(input);
+  const effectiveTimeoutMs = isRenderTarget
+    ? Math.max(Math.floor(timeoutMs || 0), RENDER_COLD_START_TIMEOUT_MS)
+    : Math.max(1000, Math.floor(timeoutMs || 0) || SYNC_REQUEST_TIMEOUT_MS);
+  const effectiveAttempts = isRenderTarget
+    ? Math.max(Math.floor(attempts || 0), RENDER_COLD_START_ATTEMPTS)
+    : Math.max(1, Math.floor(attempts || 0) || getSyncRetryMaxAttempts());
+  const effectiveBaseDelayMs = isRenderTarget
+    ? Math.max(Math.floor(baseDelayMs || 0), RENDER_COLD_START_BASE_DELAY_MS)
+    : Math.max(100, Math.floor(baseDelayMs || 0) || getSyncRetryBaseDelayMs());
+
+  if (isRenderTarget) {
+    await maybeWarmupRenderService(input);
+  }
+
   return await runWithRetry(async () => {
-    const res = await fetchWithTimeout(input, init, timeoutMs);
+    const res = await fetchWithTimeout(input, init, effectiveTimeoutMs);
     if (isRetryableHttpStatus(res.status)) {
       throw new Error(`http_${res.status}`);
     }
     return res;
   }, {
-    attempts,
-    baseDelayMs,
-    maxDelayMs: Math.max(baseDelayMs * 8, 12_000),
+    attempts: effectiveAttempts,
+    baseDelayMs: effectiveBaseDelayMs,
+    maxDelayMs: Math.max(effectiveBaseDelayMs * 8, 20_000),
   });
 }
 
@@ -4169,20 +4675,54 @@ async function compressLargeDataUrlDeep(input: unknown): Promise<unknown> {
 
 export async function sanitizeExportForLanSync(data: Record<string, string>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  const expectedOrgId = await resolveExpectedOrgId();
   for (const [key, raw] of Object.entries(data)) {
     try {
       const parsed = JSON.parse(raw);
+      if (key === KEYS.ACCOUNT_SETTINGS && parsed && typeof parsed === "object") {
+        const currentOrgId = String((parsed as any).orgId || "").trim().toUpperCase();
+        // Only auto-fill missing orgId.
+        // If orgId already exists and differs, keep it untouched so callers can detect mismatch
+        // and block cross-org pushes instead of silently rewriting the snapshot owner.
+        if (expectedOrgId && !currentOrgId) {
+          (parsed as any).orgId = expectedOrgId;
+        }
+      }
       const cleaned = await compressLargeDataUrlDeep(parsed);
       result[key] = JSON.stringify(cleaned);
     } catch {
       result[key] = raw;
     }
   }
+  if (expectedOrgId) {
+    result[SYNC_SCOPE_META_KEY] = JSON.stringify({
+      orgId: expectedOrgId,
+      version: 1,
+      generatedAt: new Date().toISOString(),
+    });
+  }
   return result;
+}
+
+async function ensureSyncLicense(): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const settings = await getAccountSettings();
+    const orgId = String(settings?.orgId || getActiveOrgId() || "").trim();
+    if (!orgId) return { ok: false, reason: "missing_org_id" };
+    const license = await ensureOrgLicenseActive({ orgId, forceOnlineCheck: true });
+    if (!license.allowed) {
+      return { ok: false, reason: license.reason || "license_denied" };
+    }
+    return { ok: true };
+  } catch (error: any) {
+    return { ok: false, reason: String(error?.message || "license_check_failed") };
+  }
 }
 
 export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string; reason?: string; status?: number }> {
   try {
+    const license = await ensureSyncLicense();
+    if (!license.ok) return { ok: false, reason: license.reason || "license_denied" };
     const { url, enabled } = await resolveSyncServerUrl();
     if (!enabled) return { ok: false, url, reason: "disabled_or_empty_url" };
     const res = await fetchWithRetry(`${url}/api/sync/health`, { method: "GET" }, 12000);
@@ -4361,6 +4901,8 @@ async function postCloudSyncWithApiKeyFallback(
 
 export async function checkCloudSyncHealth(): Promise<CloudSyncResult> {
   try {
+    const license = await ensureSyncLicense();
+    if (!license.ok) return { ok: false, reason: license.reason || "license_denied" };
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
     const result = await postCloudSyncWithApiKeyFallback(endpoint, {
@@ -4437,20 +4979,204 @@ export type LanSyncResult = {
   url?: string;
 };
 
-export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult> {
+function extractScopeOrgIdFromSnapshotData(data?: Record<string, string> | null): string {
+  if (!data || typeof data !== "object") return "";
   try {
-    const { url, enabled } = await resolveSyncServerUrl();
-    if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
-    const raw = await exportData();
-    const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
-    const snapshotHash = await computeSnapshotHash(data);
-    const payload = {
-      updatedAt: new Date().toISOString(),
-      source: "mobile",
-      data,
-      snapshotHash,
-    };
-    const res = await fetchWithRetry(`${url}/api/sync/snapshot`, {
+    const raw = (data as Record<string, string>)[SYNC_SCOPE_META_KEY];
+    if (!raw) return "";
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return String(parsed?.orgId || "").trim().toUpperCase();
+  } catch {
+    return "";
+  }
+}
+
+function extractOrgIdFromSnapshotData(data?: Record<string, string> | null): string {
+  const scopedOrgId = extractScopeOrgIdFromSnapshotData(data);
+  if (scopedOrgId) return scopedOrgId;
+  if (!data || typeof data !== "object") return "";
+  try {
+    const raw = (data as Record<string, string>)[KEYS.ACCOUNT_SETTINGS];
+    if (!raw) return "";
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const orgId = String(parsed?.orgId || "").trim().toUpperCase();
+    return orgId;
+  } catch {
+    return "";
+  }
+}
+
+async function resolveExpectedOrgId(): Promise<string> {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    try {
+      const params = new URLSearchParams(window.location?.search || "");
+      const fromQuery = String(params.get("orgId") || "").trim().toUpperCase();
+      if (fromQuery) return fromQuery;
+    } catch {}
+    try {
+      const fromSession = String(window.sessionStorage?.getItem("@orghub_active_org_id") || "")
+        .trim()
+        .toUpperCase();
+      if (fromSession) return fromSession;
+    } catch {}
+  }
+  const active = String(getActiveOrgId() || "").trim().toUpperCase();
+  if (active) return active;
+  try {
+    const settings = await getAccountSettings();
+    const fromSettings = String(settings?.orgId || "").trim().toUpperCase();
+    if (fromSettings) return fromSettings;
+  } catch {}
+  try {
+    const raw = await AsyncStorage.getItem("@orghub_active_org_id");
+    const normalized = String(raw || "").trim().toUpperCase();
+    if (normalized) return normalized;
+  } catch {}
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    try {
+      const fromLocal = String(window.localStorage?.getItem("@orghub_last_connected_org_id") || "")
+        .trim()
+        .toUpperCase();
+      if (fromLocal) return fromLocal;
+    } catch {}
+  }
+  return "";
+}
+
+async function buildLanSnapshotUrl(baseUrl: string): Promise<string> {
+  const orgId = String(await resolveExpectedOrgId()).trim();
+  if (!orgId) return `${baseUrl}/api/sync/snapshot`;
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}/api/sync/snapshot${separator}orgId=${encodeURIComponent(orgId)}`;
+}
+
+async function applySnapshotDataFromSync(snapshotData: Record<string, string>): Promise<boolean> {
+  if (!snapshotData || typeof snapshotData !== "object") return false;
+
+  const incomingEntries: [string, string][] = [];
+  const incomingKeySet = new Set<string>();
+  for (const [key, rawValue] of Object.entries(snapshotData)) {
+    if (!isSharedBackupKey(key)) continue;
+    const normalizedValue =
+      typeof rawValue === "string" ? rawValue : JSON.stringify(rawValue ?? null);
+    incomingEntries.push([key, normalizedValue]);
+    incomingKeySet.add(key);
+  }
+
+  let changed = false;
+  const allKeys = await getAllSharedBackupKeys();
+  const removableKeys = allKeys.filter((key) => {
+    if (!isSharedBackupKey(key)) return false;
+    if (key === KEYS.ACCOUNT_SETTINGS) return false;
+    return !incomingKeySet.has(key);
+  });
+  if (removableKeys.length > 0) {
+    await AsyncStorage.multiRemove(removableKeys);
+    changed = true;
+  }
+
+  if (incomingEntries.length > 0) {
+    const existingPairs = await AsyncStorage.multiGet(incomingEntries.map(([key]) => key));
+    const existingMap = new Map<string, string | null>(existingPairs);
+    const changedEntries = incomingEntries.filter(([key, value]) => {
+      return String(existingMap.get(key) ?? "") !== String(value ?? "");
+    });
+    if (changedEntries.length > 0) {
+      await AsyncStorage.multiSet(changedEntries);
+      changed = true;
+    }
+  }
+
+  const members = await getMembers();
+  await setEmptyOrgState(!(Array.isArray(members) && members.length > 0));
+
+  const expectedOrgId = await resolveExpectedOrgId();
+  if (expectedOrgId) {
+    const settings = await getAccountSettings();
+    const currentOrgId = String(settings?.orgId || "").trim().toUpperCase();
+    if (currentOrgId !== expectedOrgId) {
+      await saveAccountSettings({
+        ...settings,
+        orgId: expectedOrgId,
+        orgSetupCompleted: true,
+        orgSetupAt: settings.orgSetupAt || new Date().toISOString(),
+      });
+      changed = true;
+    }
+  }
+
+  const pruned = await pruneDeletedTargetsFromStorage();
+  if (pruned) changed = true;
+
+  return changed;
+}
+
+async function validateSnapshotOrgBeforePush(
+  snapshotData: Record<string, string>
+): Promise<{ ok: boolean; expectedOrgId: string; snapshotOrgId: string; reason?: string }> {
+  const expectedOrgId = String(await resolveExpectedOrgId()).trim().toUpperCase();
+  const snapshotOrgId = extractOrgIdFromSnapshotData(snapshotData);
+  if (!expectedOrgId) {
+    return { ok: false, expectedOrgId, snapshotOrgId, reason: "missing_expected_org" };
+  }
+  if (!snapshotOrgId) {
+    return { ok: false, expectedOrgId, snapshotOrgId, reason: "snapshot_org_missing" };
+  }
+  if (snapshotOrgId !== expectedOrgId) {
+    return { ok: false, expectedOrgId, snapshotOrgId, reason: "snapshot_org_mismatch" };
+  }
+  return { ok: true, expectedOrgId, snapshotOrgId };
+}
+
+function validateSnapshotOrgOnPull(snapshotData: Record<string, string>, expectedOrgId: string): {
+  ok: boolean;
+  snapshotOrgId: string;
+  reason?: string;
+} {
+  const expected = String(expectedOrgId || "").trim().toUpperCase();
+  const scopeOrgId = extractScopeOrgIdFromSnapshotData(snapshotData);
+  const snapshotOrgId = extractOrgIdFromSnapshotData(snapshotData);
+  if (!expected) {
+    return { ok: false, snapshotOrgId, reason: "missing_expected_org" };
+  }
+
+  if (scopeOrgId) {
+    if (scopeOrgId !== expected) {
+      return { ok: false, snapshotOrgId: scopeOrgId, reason: "org_mismatch_snapshot_scope" };
+    }
+    return { ok: true, snapshotOrgId: scopeOrgId };
+  }
+
+  // Legacy fallback: only ORG000 can accept old snapshots without scope meta.
+  if (expected !== "ORG000") {
+    return { ok: false, snapshotOrgId, reason: "snapshot_scope_missing_non_legacy" };
+  }
+  // Legacy ORG000 kept permissive to avoid breaking old installations that
+  // had inconsistent account_settings.orgId in snapshots.
+  return { ok: true, snapshotOrgId };
+}
+
+  export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult> {
+    try {
+      const license = await ensureSyncLicense();
+      if (!license.ok) return { ok: false, reason: license.reason || "license_denied" };
+      const { url, enabled } = await resolveSyncServerUrl();
+      if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
+      const raw = await exportData();
+      const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+      const scopeCheck = await validateSnapshotOrgBeforePush(data);
+      if (!scopeCheck.ok) {
+        return { ok: false, reason: scopeCheck.reason || "org_scope_invalid_local_snapshot", url };
+      }
+      const snapshotHash = await computeSnapshotHash(data);
+      const payload = {
+        updatedAt: new Date().toISOString(),
+        source: "mobile",
+        orgId: scopeCheck.expectedOrgId || undefined,
+        data,
+        snapshotHash,
+      };
+    const res = await fetchWithRetry(await buildLanSnapshotUrl(url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -4464,10 +5190,16 @@ export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult>
 
 export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncResult> {
   try {
+    const license = await ensureSyncLicense();
+    if (!license.ok) return { ok: false, reason: license.reason || "license_denied" };
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
     const raw = await exportData();
     const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const scopeCheck = await validateSnapshotOrgBeforePush(data);
+    if (!scopeCheck.ok) {
+      return { ok: false, reason: scopeCheck.reason || "org_scope_invalid_local_snapshot", endpoint };
+    }
     const snapshotHash = await computeSnapshotHash(data);
     const payload = {
       action: "pushSnapshot",
@@ -4503,23 +5235,34 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
   }
 }
 
-export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
-  try {
-    const { url, enabled } = await resolveSyncServerUrl();
-    if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
-    const res = await fetchWithRetry(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
-    if (res.status === 404) {
-      return { ok: true, changed: false, reason: "snapshot_not_found", status: res.status, url };
-    }
-    if (!res.ok) return { ok: false, reason: "pull_http_error", status: res.status, url };
-    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string>; snapshotHash?: string };
-    if (!payload || typeof payload !== "object" || !payload.data) {
-      return { ok: false, reason: "invalid_snapshot_payload", url };
-    }
-    const verify = await verifySnapshotHash({ snapshotData: payload.data, expectedHash: payload.snapshotHash });
-    if (!verify.ok) {
-      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", url };
-    }
+  export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
+    try {
+      const license = await ensureSyncLicense();
+      if (!license.ok) return { ok: false, reason: license.reason || "license_denied" };
+      const { url, enabled } = await resolveSyncServerUrl();
+      if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
+      const expectedOrgId = String(await resolveExpectedOrgId()).trim().toUpperCase();
+      if (!expectedOrgId) {
+        return { ok: false, reason: "missing_expected_org", url };
+      }
+      const res = await fetchWithRetry(await buildLanSnapshotUrl(url), { method: "GET" }, 20000);
+      if (res.status === 404) {
+        return { ok: true, changed: false, reason: "snapshot_not_found", status: res.status, url };
+      }
+      if (!res.ok) return { ok: false, reason: "pull_http_error", status: res.status, url };
+      const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string>; snapshotHash?: string };
+      if (!payload || typeof payload !== "object" || !payload.data) {
+        return { ok: false, reason: "invalid_snapshot_payload", url };
+      }
+      const verify = await verifySnapshotHash({ snapshotData: payload.data, expectedHash: payload.snapshotHash });
+      if (!verify.ok) {
+        return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", url };
+      }
+
+      const scopeCheck = validateSnapshotOrgOnPull(payload.data, expectedOrgId);
+      if (!scopeCheck.ok) {
+        return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", url };
+      }
 
     const incomingUpdatedAt = String(payload.updatedAt || "");
     const lastApplied = String((await AsyncStorage.getItem(SYNC_LAST_SERVER_UPDATED_AT_KEY)) || "");
@@ -4527,7 +5270,7 @@ export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
       return { ok: true, changed: false, reason: "already_applied", url };
     }
 
-    const merged = await mergeData(JSON.stringify(payload.data));
+    const merged = await applySnapshotDataFromSync(payload.data);
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(SYNC_LAST_SERVER_UPDATED_AT_KEY, incomingUpdatedAt);
     }
@@ -4539,6 +5282,12 @@ export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
 
 export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResult> {
   try {
+    const license = await ensureSyncLicense();
+    if (!license.ok) return { ok: false, reason: license.reason || "license_denied" };
+    const expectedOrgId = String(await resolveExpectedOrgId()).trim().toUpperCase();
+    if (!expectedOrgId) {
+      return { ok: false, reason: "missing_expected_org" };
+    }
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
     const result = await postCloudSyncWithApiKeyFallback(endpoint, {
@@ -4598,12 +5347,17 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
         // If local hash can't be computed, fall through to merge.
       }
     }
-    const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
-    if (!verify.ok) {
-      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
-    }
+      const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
+      if (!verify.ok) {
+        return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
+      }
 
-    const merged = await mergeData(JSON.stringify(snapshot.data));
+      const scopeCheck = validateSnapshotOrgOnPull(snapshot.data, expectedOrgId);
+      if (!scopeCheck.ok) {
+        return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", endpoint };
+      }
+
+      const merged = await applySnapshotDataFromSync(snapshot.data);
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
     }
@@ -4637,15 +5391,43 @@ export async function pullCloudSnapshotToLocal(): Promise<boolean> {
 }
 
 // --- Users ---
-export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
+export const getUsers = async (): Promise<UserAccount[]> => {
+  const rows = await safeGet<UserAccount[]>(KEYS.USERS, []);
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  const byUserId = new Map<string, UserAccount>();
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
+    const current = byUserId.get(id);
+    if (!current) {
+      byUserId.set(id, row);
+      continue;
+    }
+    const currentTime = Date.parse(String(current.createdAt || ""));
+    const nextTime = Date.parse(String(row?.createdAt || ""));
+    if (!Number.isNaN(nextTime) && (Number.isNaN(currentTime) || nextTime > currentTime)) {
+      byUserId.set(id, row);
+    }
+  }
+
+  const deduped = Array.from(byUserId.values());
+  if (deduped.length !== rows.length) {
+    await saveUsers(deduped);
+  }
+  return deduped;
+};
 export const saveUsers = (data: UserAccount[]) => AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
 
 export async function seedDefaultAdminUser(options?: { allowDefaultDataSeed?: boolean }) {
   const allowDefaultDataSeed = options?.allowDefaultDataSeed !== false;
   const emptyStateMode = String((await AsyncStorage.getItem(EMPTY_ORG_STATE_KEY)) || "") === "1";
+  const settings = await getAccountSettings();
+  const orgId = String(settings?.orgId || "").trim().toUpperCase();
+  const shouldSeedDefaultData = allowDefaultDataSeed && !emptyStateMode && orgId === "ORG000";
   // 1. Seeding: If no members exist, try to load from default-data.json
   const existingMembers = await getMembers();
-  if (existingMembers.length === 0 && allowDefaultDataSeed && !emptyStateMode) {
+  if (existingMembers.length === 0 && shouldSeedDefaultData) {
     try {
       // Expo Go တွင် Data များပါလာစေရန် require ကိုအသုံးပြု၍ Bundle လုပ်ပါသည်
       // @ts-ignore
@@ -4666,19 +5448,11 @@ export async function seedDefaultAdminUser(options?: { allowDefaultDataSeed?: bo
   }
 
   const users = await getUsers();
-  const adminExists = users.some(u => u.systemRole === "admin");
-  if (!adminExists) {
-    const admin: UserAccount = {
-      id: "admin-001",
-      displayName: "System Admin",
-      systemRole: "admin",
-      isActive: true,
-
-
-      createdAt: new Date().toISOString()
-    };
-    await saveUsers([admin, ...users]);
+  const filteredUsers = users.filter(u => u.systemRole !== "admin");
+  if (filteredUsers.length !== users.length) {
+    await saveUsers(filteredUsers);
   }
+  await ensureSystemAdminPassword();
 
   // Sync existing members to user accounts
   const members = await getMembers();

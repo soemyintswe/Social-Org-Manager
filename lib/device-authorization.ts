@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "./org-storage";
 import * as Application from "expo-application";
 import * as Crypto from "expo-crypto";
 import { Platform } from "react-native";
@@ -34,10 +34,10 @@ const INSTALLATION_ID_KEY = "@orghub_installation_id_v1";
 const DEVICE_AUTH_CACHE_KEY = "@orghub_device_auth_cache_v1";
 
 async function getOrCreateInstallationId(): Promise<string> {
-  const existing = String((await AsyncStorage.getItem(INSTALLATION_ID_KEY)) || "").trim();
+  const existing = String((await orgStorage.getItem(INSTALLATION_ID_KEY)) || "").trim();
   if (existing) return existing;
   const created = String(Crypto.randomUUID()).replace(/-/g, "");
-  await AsyncStorage.setItem(INSTALLATION_ID_KEY, created);
+  await orgStorage.setItem(INSTALLATION_ID_KEY, created);
   return created;
 }
 
@@ -81,7 +81,7 @@ function parseDateMs(value: unknown): number {
 
 async function readCachedAuthorization(deviceHash: string): Promise<DeviceAuthorizationCache | null> {
   try {
-    const raw = String((await AsyncStorage.getItem(DEVICE_AUTH_CACHE_KEY)) || "").trim();
+    const raw = String((await orgStorage.getItem(DEVICE_AUTH_CACHE_KEY)) || "").trim();
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DeviceAuthorizationCache;
     if (!parsed || parsed.deviceHash !== deviceHash) return null;
@@ -99,7 +99,7 @@ async function writeCachedAuthorization(result: DeviceAuthorizationResult): Prom
     reason: result.reason,
     deviceHash: result.deviceHash,
   };
-  await AsyncStorage.setItem(DEVICE_AUTH_CACHE_KEY, JSON.stringify(payload));
+  await orgStorage.setItem(DEVICE_AUTH_CACHE_KEY, JSON.stringify(payload));
 }
 
 function isCacheStillValid(cache: DeviceAuthorizationCache, cacheHours: number): boolean {

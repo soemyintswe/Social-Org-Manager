@@ -14,7 +14,7 @@ import {
   Platform,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -23,6 +23,8 @@ import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
 import { CATEGORY_LABELS, TransactionCategory } from "@/lib/types";
+
+const AsyncStorage = orgStorage;
 
 if (Platform.OS === 'web') {
   const originalWarn = console.warn;

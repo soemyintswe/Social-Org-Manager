@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 
 export const REMOTE_CONFIG_KEYS = {
   SERVER_API_URL: "server_api_url",
@@ -15,6 +16,7 @@ export const REMOTE_CONFIG_KEYS = {
   MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL: "managed_cloud_sync_account_email",
   MANAGED_CLOUD_SYNC_FOLDER_NAME: "managed_cloud_sync_folder_name",
   MANAGED_CLOUD_SYNC_ENABLED: "managed_cloud_sync_enabled",
+  MANAGED_ORG_CONFIGS: "managed_org_configs",
   DEVICE_AUTH_REQUIRED: "device_auth_required",
   DEVICE_AUTH_ALLOWED_HASHES: "device_auth_allowed_hashes",
   DEVICE_AUTH_ORG_ID: "device_auth_org_id",
@@ -39,6 +41,7 @@ export const REMOTE_CONFIG_ENV_FALLBACKS: Record<string, string> = {
   [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL]: String((process.env as any).EXPO_PUBLIC_MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL || ""),
   [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME]: String((process.env as any).EXPO_PUBLIC_MANAGED_CLOUD_SYNC_FOLDER_NAME || ""),
   [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENABLED]: String((process.env as any).EXPO_PUBLIC_MANAGED_CLOUD_SYNC_ENABLED || ""),
+  [REMOTE_CONFIG_KEYS.MANAGED_ORG_CONFIGS]: String((process.env as any).EXPO_PUBLIC_MANAGED_ORG_CONFIGS || ""),
   [REMOTE_CONFIG_KEYS.DEVICE_AUTH_REQUIRED]: String((process.env as any).EXPO_PUBLIC_DEVICE_AUTH_REQUIRED || ""),
   [REMOTE_CONFIG_KEYS.DEVICE_AUTH_ALLOWED_HASHES]: String((process.env as any).EXPO_PUBLIC_DEVICE_AUTH_ALLOWED_HASHES || ""),
   [REMOTE_CONFIG_KEYS.DEVICE_AUTH_ORG_ID]: String((process.env as any).EXPO_PUBLIC_DEVICE_AUTH_ORG_ID || "default"),
@@ -48,6 +51,25 @@ export const REMOTE_CONFIG_ENV_FALLBACKS: Record<string, string> = {
   [REMOTE_CONFIG_KEYS.SYNC_RETRY_BASE_DELAY_MS]: String((process.env as any).EXPO_PUBLIC_SYNC_RETRY_BASE_DELAY_MS || "600"),
 };
 
+const EXPO_EXTRA_KEY_MAP: Record<string, string> = {
+  [REMOTE_CONFIG_KEYS.MANAGED_ORG_CONFIGS]: "managedOrgConfigs",
+};
+
+type ManagedOrgConfig = {
+  orgEmail?: string;
+  managed_cloud_sync_endpoint?: string;
+  managed_cloud_sync_api_key?: string;
+  managed_cloud_sync_account_email?: string;
+  managed_cloud_sync_folder_name?: string;
+  managed_cloud_sync_enabled?: boolean | string;
+  managed_lan_sync_url?: string;
+  managed_lan_sync_enabled?: boolean | string;
+  managed_sync_lockdown_enabled?: boolean | string;
+  server_api_url?: string;
+};
+
+type ManagedOrgConfigMap = Record<string, ManagedOrgConfig>;
+
 type RemoteConfigFactory = () => {
   getValue: (key: string) => { asString: () => string };
   setDefaults: (values: Record<string, string | number | boolean>) => Promise<void>;
@@ -56,6 +78,14 @@ type RemoteConfigFactory = () => {
 };
 
 let cachedRemoteConfigFactory: RemoteConfigFactory | null | undefined;
+let cachedManagedOrgConfigRaw = "";
+let cachedManagedOrgConfigParsed: ManagedOrgConfigMap | null = null;
+let activeOrgId: string | null = null;
+const registryManagedOrgConfigs: ManagedOrgConfigMap = {};
+const USE_MANAGED_ORG_CONFIGS =
+  String((process.env as any).EXPO_PUBLIC_USE_MANAGED_ORG_CONFIGS || "")
+    .trim()
+    .toLowerCase() === "true";
 
 function getRemoteConfigFactory(): RemoteConfigFactory | null {
   if (Platform.OS === "web") return null;
@@ -84,6 +114,46 @@ function parsePositiveInt(raw: string): number | null {
   return Math.floor(n);
 }
 
+function normalizeOrgId(raw?: string | null): string {
+  return String(raw || "").trim().toUpperCase();
+}
+
+function getGlobalConfigString(key: string): string {
+  try {
+    const extraKey = EXPO_EXTRA_KEY_MAP[key];
+    if (!extraKey) return "";
+    const globalAny = globalThis as Record<string, any> | undefined;
+    const value = globalAny?.__APP_CONFIG__?.[extraKey];
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value.trim();
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value).trim();
+    }
+  } catch {
+    return "";
+  }
+}
+
+function getExpoExtraString(key: string): string {
+  try {
+    const extraKey = EXPO_EXTRA_KEY_MAP[key];
+    if (!extraKey) return "";
+    const extra = (Constants?.expoConfig || Constants?.manifest)?.extra as Record<string, any> | undefined;
+    const value = extra?.[extraKey];
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value.trim();
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value).trim();
+    }
+  } catch {
+    return "";
+  }
+}
+
 export function getRemoteConfigStringRaw(key: string): string {
   const factory = getRemoteConfigFactory();
   if (!factory) return "";
@@ -95,7 +165,134 @@ export function getRemoteConfigStringRaw(key: string): string {
 }
 
 export function getEnvFallbackString(key: string): string {
-  return String(REMOTE_CONFIG_ENV_FALLBACKS[key] || "").trim();
+  const env = String(REMOTE_CONFIG_ENV_FALLBACKS[key] || "").trim();
+  if (env) return env;
+  const globalValue = getGlobalConfigString(key);
+  if (globalValue) return globalValue;
+  return getExpoExtraString(key);
+}
+
+function parseManagedOrgConfigs(raw: string): ManagedOrgConfigMap {
+  if (!raw) return {};
+  try {
+    let parsed: unknown = raw;
+    if (typeof parsed === "string") {
+      parsed = JSON.parse(parsed);
+    }
+    if (typeof parsed === "string") {
+      parsed = JSON.parse(parsed);
+    }
+    const parsedObject = parsed as Record<string, ManagedOrgConfig> | null;
+    if (!parsedObject || typeof parsedObject !== "object") return {};
+    const normalized: ManagedOrgConfigMap = {};
+    for (const [orgKey, value] of Object.entries(parsedObject)) {
+      if (!value || typeof value !== "object") continue;
+      normalized[normalizeOrgId(orgKey)] = value;
+    }
+    return normalized;
+  } catch {
+    return {};
+  }
+}
+
+function getManagedOrgConfigs(): ManagedOrgConfigMap {
+  if (!USE_MANAGED_ORG_CONFIGS) return {};
+  const raw = getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_ORG_CONFIGS);
+  if (raw === cachedManagedOrgConfigRaw && cachedManagedOrgConfigParsed) {
+    return cachedManagedOrgConfigParsed;
+  }
+  cachedManagedOrgConfigRaw = raw;
+  cachedManagedOrgConfigParsed = parseManagedOrgConfigs(raw);
+  return cachedManagedOrgConfigParsed;
+}
+
+export function setRegistryManagedOrgConfig(orgId: string, config?: ManagedOrgConfig | null): void {
+  const normalized = normalizeOrgId(orgId);
+  if (!normalized) return;
+  if (!config) {
+    delete registryManagedOrgConfigs[normalized];
+    return;
+  }
+  registryManagedOrgConfigs[normalized] = config;
+}
+
+function getRegistryManagedOrgConfig(orgId?: string | null): ManagedOrgConfig | null {
+  const normalized = normalizeOrgId(orgId);
+  if (!normalized) return null;
+  return registryManagedOrgConfigs[normalized] || null;
+}
+
+export function setActiveOrgId(orgId: string | null): void {
+  const normalized = normalizeOrgId(orgId);
+  activeOrgId = normalized || null;
+}
+
+export function getActiveOrgId(): string | null {
+  return activeOrgId ? normalizeOrgId(activeOrgId) : null;
+}
+
+export function prewarmOrgScopedRemoteConfig(orgId?: string | null): void {
+  if (orgId) setActiveOrgId(orgId);
+  getManagedOrgConfigs();
+}
+
+export function validateManagedOrgCredentials(
+  orgId: string,
+  orgEmail: string
+): { ok: boolean; reason?: string } {
+  const id = normalizeOrgId(orgId);
+  const email = String(orgEmail || "").trim().toLowerCase();
+  if (!id || !email) {
+    return { ok: false, reason: "missing_org_credentials" };
+  }
+  const configs = getManagedOrgConfigs();
+  const config = configs[id];
+  if (!config) {
+    return { ok: false, reason: "org_not_registered" };
+  }
+  const configEmail = String(config.orgEmail || "").trim().toLowerCase();
+  if (!configEmail) {
+    return { ok: false, reason: "org_email_missing" };
+  }
+  if (configEmail !== email) {
+    return { ok: false, reason: "org_email_mismatch" };
+  }
+  return { ok: true };
+}
+
+function getOrgConfigValue(orgId: string | null | undefined, key: string): string {
+  const normalized = normalizeOrgId(orgId);
+  if (!normalized) return "";
+  const registryConfig = getRegistryManagedOrgConfig(normalized);
+  if (registryConfig && Object.prototype.hasOwnProperty.call(registryConfig, key)) {
+    const raw = (registryConfig as Record<string, unknown>)[key];
+    return String(raw ?? "").trim();
+  }
+  const configs = getManagedOrgConfigs();
+  const config = configs[normalized];
+  if (!config) return "";
+  const raw = (config as Record<string, unknown>)[key];
+  return String(raw ?? "").trim();
+}
+
+export function resolveConfigValueWithPriorityForOrg(input: {
+  key: string;
+  orgId?: string | null;
+  manualValue?: string | null;
+}): { value: string; source: "manual" | "org_config" | "remote_config" | "env" | "empty" } {
+  const manual = String(input.manualValue || "").trim();
+  if (manual) return { value: manual, source: "manual" };
+
+  const orgValue = getOrgConfigValue(input.orgId || null, input.key);
+  if (orgValue) return { value: orgValue, source: "org_config" };
+
+  const remote = getRemoteConfigStringRaw(input.key);
+  if (remote) return { value: remote, source: "remote_config" };
+
+  const env = getEnvFallbackString(input.key);
+  if (env) return { value: env, source: "env" };
+
+  return { value: "", source: "empty" };
 }
 
 export function resolveConfigValueWithPriority(input: {
@@ -123,6 +320,14 @@ export function getRemoteConfigString(key: string): string {
 
 export function getServerApiUrl(): string {
   return getRemoteConfigString(REMOTE_CONFIG_KEYS.SERVER_API_URL);
+}
+
+export function getServerApiUrlForOrg(orgId?: string | null): string {
+  const resolved = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.SERVER_API_URL,
+    orgId,
+  });
+  return resolved.value || getServerApiUrl();
 }
 
 export function getAppUpdateJsonUrl(): string {
@@ -161,6 +366,14 @@ export function getManagedLanSyncUrl(): string {
   return getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL);
 }
 
+export function getManagedLanSyncUrlForOrg(orgId?: string | null): string {
+  const resolved = resolveConfigValueWithPriorityForOrg({
+    key: REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL,
+    orgId,
+  });
+  return resolved.value;
+}
+
 export function getManagedLanSyncEnabled(): boolean | null {
   return parseBoolean(getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_ENABLED));
 }
@@ -172,10 +385,10 @@ export function getManagedCloudSyncEnabled(): boolean | null {
 function hasManagedSyncOverridesConfigured(): boolean {
   return Boolean(
     getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL) ||
-    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT) ||
-    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY) ||
-    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL) ||
-    getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME)
+      getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT) ||
+      getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY) ||
+      getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL) ||
+      getRemoteConfigString(REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME)
   );
 }
 
@@ -252,7 +465,7 @@ export async function initializeRemoteConfig(
     await remote.setDefaults({
       welcome_message: "Welcome to OrgHub",
       feature_new_ui_enabled: false,
-        [REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED]: false,
+      [REMOTE_CONFIG_KEYS.MANAGED_SYNC_LOCKDOWN_ENABLED]: false,
       [REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_URL]: "",
       [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT]: "",
       [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY]: "",
@@ -260,6 +473,7 @@ export async function initializeRemoteConfig(
       [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME]: "",
       [REMOTE_CONFIG_KEYS.MANAGED_LAN_SYNC_ENABLED]: "",
       [REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENABLED]: "",
+      [REMOTE_CONFIG_KEYS.MANAGED_ORG_CONFIGS]: "{}",
       [REMOTE_CONFIG_KEYS.CLOUD_SYNC_FOLDER_NAME]: "",
       [REMOTE_CONFIG_KEYS.DEVICE_AUTH_REQUIRED]: false,
       [REMOTE_CONFIG_KEYS.DEVICE_AUTH_ALLOWED_HASHES]: "",

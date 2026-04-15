@@ -22,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
-import * as store from "@/lib/storage";
+import * as store from "@/lib/storage-service";
 import { normalizeMemberStatus, normalizeOrgPosition, type Member } from "@/lib/types";
 import { normalizeDateText, splitPhoneNumbers } from "@/lib/member-utils";
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   StyleSheet,
   Text,
@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   ActivityIndicator,
   Modal,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -19,13 +20,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
+import orgStorage from "@/lib/org-storage";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { isCommitteePosition } from "@/lib/access-control";
 import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
 import { secureRandomInt, secureRandomToken } from "@/lib/secure-random";
+import { toEnglishDigits } from "@/lib/member-utils";
 import {
   ORG_POSITION_LABELS,
   OrgPosition,
@@ -39,8 +42,15 @@ import {
   normalizeOrgPosition,
 } from "@/lib/types";
 import AccessDenied from "@/components/AccessDenied";
+
+const AsyncStorage = orgStorage;
 // AVATAR အတွက် အရောင်ကျပန်း ရွေးချယ်ပေးရန်
 const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"];
+const buildGeneratedPassword = () => {
+  const token = secureRandomToken(4).toUpperCase();
+  const digits = String(100 + secureRandomInt(900));
+  return `ORG${token}${digits}`;
+};
 
 const getAvatarLabel = (name: string) => {
   if (!name) return "?";
@@ -141,7 +151,7 @@ function toFamilyPayload(rows: FamilyFormMember[]): MemberFamilyMember[] {
 export default function AddMemberScreen() {
   const insets = useSafeAreaInsets();
   const { members, addMember, updateMember, createMemberChangeRequest } = useData() as any;
-  const { can, currentUser, profile } = useAuth();
+  const { can, currentUser, profile, resetPassword } = useAuth();
   const { editId } = useLocalSearchParams<{ editId: string }>();
   const normalizedEditId = String(editId || "").trim();
   const isEditMode = normalizedEditId.length > 0;
@@ -175,6 +185,15 @@ export default function AddMemberScreen() {
   const [customRelations, setCustomRelations] = useState<string[]>([]);
   const [newCustomRelation, setNewCustomRelation] = useState("");
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [saveNotice, setSaveNotice] = useState<{
+    title: string;
+    message: string;
+    username: string;
+    password: string;
+    email?: string;
+    phone?: string;
+  } | null>(null);
   const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
   const isChairOrVice =
     actorPosition === "chairperson" ||
@@ -342,18 +361,56 @@ export default function AddMemberScreen() {
 
   const canSave = name.trim().length > 0 && memberId.trim().length > 0;
 
+  const deliverPasswordNotice = useCallback(
+    async (email: string, phone: string, messageBody: string) => {
+      let emailSent = false;
+      let smsSent = false;
+      if (Platform.OS === "web") {
+        return { emailSent, smsSent };
+      }
+      if (email) {
+        try {
+          await Linking.openURL(
+            `mailto:${email}?subject=${encodeURIComponent("OrgHub Member Account")}&body=${encodeURIComponent(messageBody)}`
+          );
+          emailSent = true;
+        } catch {
+          emailSent = false;
+        }
+      }
+
+      if (!emailSent && phone) {
+        try {
+          const separator = Platform.OS === "ios" ? "&" : "?";
+          await Linking.openURL(`sms:${phone}${separator}body=${encodeURIComponent(messageBody)}`);
+          smsSent = true;
+        } catch {
+          smsSent = false;
+        }
+      }
+
+      return { emailSent, smsSent };
+    },
+    []
+  );
+
   const handleSave = async () => {
-    if (!canSave) return;
+    if (!canSave || savingRef.current || saving || !!saveNotice) return;
+    savingRef.current = true;
     setSaving(true);
+    let shouldNavigateBack = true;
 
     try {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       const randomColor = AVATAR_COLORS[secureRandomInt(AVATAR_COLORS.length)];
+      const normalizedMemberId = memberId.trim();
+      const normalizedMemberIdKey = toEnglishDigits(normalizedMemberId).trim().toLowerCase();
+      const normalizedName = name.trim();
 
       const memberData: any = {
-        id: memberId,
-        name: name.trim(),
+        id: normalizedMemberId,
+        name: normalizedName,
         gender,
         occupation: occupation.trim(),
         phone: phone.trim(),
@@ -382,7 +439,11 @@ export default function AddMemberScreen() {
           return;
         }
         if (memberId.trim() !== editId) {
-          const duplicate = members.find((m: any) => m.id === memberId.trim() && m.id !== editId);
+          const duplicate = members.find(
+            (m: any) =>
+              toEnglishDigits(String(m.id || "")).trim().toLowerCase() === normalizedMemberIdKey &&
+              toEnglishDigits(String(m.id || "")).trim().toLowerCase() !== toEnglishDigits(editId).trim().toLowerCase()
+          );
           if (duplicate) {
             Alert.alert("Error", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
             setSaving(false);
@@ -485,7 +546,48 @@ export default function AddMemberScreen() {
         }
       } else {
         if (canCreateMember) {
+          const duplicate = members.find(
+            (m: any) => toEnglishDigits(String(m.id || "")).trim().toLowerCase() === normalizedMemberIdKey
+          );
+          if (duplicate) {
+            Alert.alert("အမှား", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
+            setSaving(false);
+            return;
+          }
           await addMember(memberData);
+          try {
+            const generatedPassword = buildGeneratedPassword();
+            const resetResult = await resetPassword(memberData.id, generatedPassword);
+            if (!resetResult.ok) {
+              throw new Error(`member_password_reset_failed:${resetResult.reason || "unknown"}`);
+            }
+            const targetUserId = String(resetResult.userId || memberData.id || "").trim();
+            const targetName = String(resetResult.displayName || memberData.name || targetUserId || "-").trim();
+            const targetEmail = String(resetResult.email || memberData.email || "").trim();
+            const targetPhone = String(resetResult.phone || memberData.phone || "").trim();
+            const issuedPassword = String(resetResult.password || generatedPassword).trim();
+            const messageBody =
+              `အသင်းဝင် အကောင့်အသစ် ဖွင့်ပြီးပါပြီ။\n` +
+              `Username: ${targetUserId}\n` +
+              `Temporary Password: ${issuedPassword}\n` +
+              `Login ဝင်ပြီးနောက် ကိုယ်ပိုင် Password ကို ချက်ချင်းပြောင်းပါ။`;
+
+            try {
+              await Clipboard.setStringAsync(messageBody);
+            } catch {}
+            await deliverPasswordNotice(targetEmail, targetPhone, messageBody);
+            setSaveNotice({
+              title: "အောင်မြင်ပါသည်",
+              message: `${targetName} အတွက် Password အလိုအလျောက်ထုတ်ပြီးပါပြီ။\n\nUsername: ${targetUserId}\nTemporary Password: ${issuedPassword}`,
+              username: targetUserId,
+              password: issuedPassword,
+              email: targetEmail || undefined,
+              phone: targetPhone || undefined,
+            });
+            shouldNavigateBack = false;
+          } catch {
+            throw new Error("member_created_but_password_reset_failed");
+          }
         } else if (canProposeMemberChanges && currentUser?.id) {
           await createMemberChangeRequest({
             action: "create",
@@ -499,12 +601,25 @@ export default function AddMemberScreen() {
           Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အသစ် request ကို approver ထံပို့ပြီးပါပြီ။");
         }
       }
-      router.back();
+      if (shouldNavigateBack) {
+        router.replace("/");
+      }
     } catch (error) {
       console.error("member-save-error", error);
-      Alert.alert("အမှားအယွင်း", `သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။ (${String((error as any)?.message || "")})`);
+      const message = String((error as any)?.message || "");
+      if (message.includes("member_exists")) {
+        Alert.alert("အမှား", "ဤ Member ID ဖြင့် အသင်းဝင်ရှိပြီးသားဖြစ်နေပါသည်။");
+      } else if (message.includes("member_created_but_password_reset_failed")) {
+        Alert.alert(
+          "သတိပေးချက်",
+          "အသင်းဝင်အသစ် သိမ်းပြီးပါပြီ။ သို့သော် Password သတ်မှတ်မှု မအောင်မြင်သေးပါ။ Member Detail မှ Password Reset ကိုတစ်ကြိမ်ပြန်နှိပ်ပါ။"
+        );
+      } else {
+        Alert.alert("အမှားအယွင်း", `သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။ (${message})`);
+      }
     } finally {
       setSaving(false);
+      savingRef.current = false;
     }
   };
 
@@ -1128,6 +1243,51 @@ export default function AddMemberScreen() {
             </View>
           </Pressable>
         </Modal>
+
+        <Modal
+          visible={!!saveNotice}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => {
+            setSaveNotice(null);
+            router.replace("/");
+          }}
+        >
+          <Pressable
+            style={styles.modalOverlay}
+            onPress={() => {
+              setSaveNotice(null);
+              router.replace("/");
+            }}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{saveNotice?.title || "အောင်မြင်ပါသည်"}</Text>
+              <Text style={styles.saveNoticeText}>{saveNotice?.message || ""}</Text>
+              <View style={styles.saveNoticeActionRow}>
+                <Pressable
+                  style={styles.saveNoticeSecondaryBtn}
+                  onPress={() => {
+                    const user = saveNotice?.username || "";
+                    const pass = saveNotice?.password || "";
+                    void Clipboard.setStringAsync(`Username: ${user}\nTemporary Password: ${pass}`);
+                    Alert.alert("Copied", "Username နှင့် Password ကို ကူးထားပြီးပါပြီ။");
+                  }}
+                >
+                  <Text style={styles.saveNoticeSecondaryBtnText}>Copy</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.saveNoticePrimaryBtn}
+                  onPress={() => {
+                    setSaveNotice(null);
+                    router.replace("/");
+                  }}
+                >
+                  <Text style={styles.saveNoticePrimaryBtnText}>ပြီးပြီ</Text>
+                </Pressable>
+              </View>
+            </View>
+          </Pressable>
+        </Modal>
       </KeyboardAvoidingView>
     </View>
   );
@@ -1185,6 +1345,42 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "80%", backgroundColor: Colors.light.surface, borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 15, textAlign: "center" },
+  saveNoticeText: {
+    fontSize: 15,
+    color: Colors.light.text,
+    lineHeight: 22,
+    marginBottom: 14,
+  },
+  saveNoticeActionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 10,
+  },
+  saveNoticeSecondaryBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: Colors.light.background,
+  },
+  saveNoticeSecondaryBtnText: {
+    fontSize: 14,
+    color: Colors.light.text,
+    fontFamily: "Inter_600SemiBold",
+  },
+  saveNoticePrimaryBtn: {
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: Colors.light.tint,
+  },
+  saveNoticePrimaryBtnText: {
+    fontSize: 14,
+    color: "#fff",
+    fontFamily: "Inter_600SemiBold",
+  },
   modalOption: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   modalOptionText: { fontSize: 16, color: Colors.light.text },
   familySectionHeader: {

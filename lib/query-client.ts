@@ -1,6 +1,6 @@
 import { fetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import { getServerApiUrl } from "./remote-config";
+import { getActiveOrgId, getServerApiUrlForOrg } from "./remote-config";
 
 /**
  * Gets the base URL for the Express API server (e.g., "http://localhost:3000")
@@ -8,7 +8,7 @@ import { getServerApiUrl } from "./remote-config";
  */
 export function getApiUrl(): string {
   // 1. Try Firebase Remote Config first
-  const remoteUrl = getServerApiUrl();
+  const remoteUrl = getServerApiUrlForOrg(getActiveOrgId());
   if (remoteUrl) {
     // Basic validation: ensure it starts with http/https
     if (remoteUrl.startsWith("http")) {

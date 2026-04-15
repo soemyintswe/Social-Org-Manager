@@ -35,7 +35,7 @@ import type {
   AppNotification,
   OrgPosition,
 } from "./types";
-import * as store from "./storage";
+import { storageService as store } from "./storage-service";
 import { computeLoanMetrics } from "./loan-metrics";
 import {
   DEFAULT_CLOUD_SYNC_ENDPOINT,
@@ -43,6 +43,8 @@ import {
   DEFAULT_LAN_SYNC_URL,
 } from "./sync-defaults";
 import { syncQueue } from "./sync-queue";
+import { setActiveOrgId } from "./remote-config";
+import { persistOrgStorageContext } from "./org-storage";
 
 interface DataContextValue {
   members: Member[];
@@ -81,7 +83,13 @@ interface DataContextValue {
   editLoan: (id: string, u: Partial<Loan>) => Promise<void>;
   removeLoan: (id: string) => Promise<void>;
   upsertUserAccount: (u: UserAccount) => Promise<void>;
-  createInitialOrgUserAccount: (input: { username: string; displayName: string; password: string; orgPosition: OrgPosition }) => Promise<UserAccount>;
+  createInitialOrgUserAccount: (input: {
+    displayName: string;
+    orgPosition: OrgPosition;
+    memberId?: string;
+    email?: string;
+    phone?: string;
+  }) => Promise<{ user: UserAccount; password: string }>;
   removeUserAccount: (id: string) => Promise<void>;
   updateAccountSettings: (s: AccountSettings) => Promise<void>;
   createMemberChangeRequest: (input: {
@@ -357,7 +365,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const LOCAL_PULL_GUARD_MS = 12000;
   const LOCAL_MUTATION_PUSH_WINDOW_MS = 15000;
   const AUTO_PUSH_DEBOUNCE_MS = 800;
-  const AUTO_PULL_INTERVAL_MS = Platform.OS === "web" ? 6000 : 15000;
+  // Web မှာ background auto-pull ကြောင့် org data overwrite/cross-mix ဖြစ်နိုင်သောကြောင့်
+  // manual sync only mode သို့ default ပြောင်းထားသည်။
+  const AUTO_PULL_INTERVAL_MS = Platform.OS === "web" ? 0 : 15000;
 
   const pushAllSyncTargets = useCallback(async () => {
     try {
@@ -463,7 +473,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (pruned) {
         lastLocalMutationAtRef.current = Date.now();
       }
-      const [m, e, g, a, t, l, u, r, acr, ael, ec, mpr, sar, sacr, cth, ctm, n, s] = await Promise.all([
+        const s = await store.getAccountSettings();
+        await persistOrgStorageContext({ orgId: s?.orgId, orgEmail: s?.orgEmail });
+        setActiveOrgId(s?.orgId || null);
+      const [m, e, g, a, t, l, u, r, acr, ael, ec, mpr, sar, sacr, cth, ctm, n] = await Promise.all([
         store.getMembers(),
         store.getEvents(),
         store.getGroups(),
@@ -481,7 +494,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
         store.getChatThreads(),
         store.getChatMessages(),
         store.getNotifications(),
-        store.getAccountSettings(),
       ]);
       setMembers(m);
       setEvents(e);
@@ -574,6 +586,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
   ]);
 
   const runAutoPull = useCallback(async () => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      const pathname = String(window.location?.pathname || "").toLowerCase();
+      if (
+        pathname.includes("/sign-in") ||
+        pathname.includes("/admin-sign-in") ||
+        pathname.includes("/org-connect") ||
+        pathname.includes("/system")
+      ) {
+        return;
+      }
+    }
     if (pullInFlightRef.current) return;
     if (Platform.OS === "web") {
       try {
@@ -597,6 +620,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [pullAllSyncTargets, refreshData, flushPendingCloudBackfill, LOCAL_PULL_GUARD_MS]);
 
   useEffect(() => {
+    if (AUTO_PULL_INTERVAL_MS <= 0) return;
     const timer = setInterval(() => {
       void runAutoPull();
     }, AUTO_PULL_INTERVAL_MS);
@@ -627,17 +651,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const addMember = async (m: Omit<Member, "id">) => {
     const newMember = await store.addMember(m);
     await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
     return newMember;
   };
 
   const updateMember = async (id: string, u: Partial<Member>) => {
     await store.updateMember(id, u);
     await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
   };
 
   const deleteMember = async (id: string) => {
     await store.deleteMember(id);
     await refreshData({ skipPull: true });
+    void pushAllSyncTargets();
   };
 
   const addEvent = async (e: Omit<OrgEvent, "id">) => {
@@ -716,14 +743,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
   };
 
   const createInitialOrgUserAccount = async (input: {
-    username: string;
     displayName: string;
-    password: string;
     orgPosition: OrgPosition;
+    memberId?: string;
+    email?: string;
+    phone?: string;
   }) => {
-    const user = await store.createInitialOrgUserAccount(input);
+    const payload = await store.createInitialOrgUserAccount(input);
     await refreshData({ skipPull: true });
-    return user;
+    return payload;
   };
 
   const removeUserAccount = async (id: string) => {

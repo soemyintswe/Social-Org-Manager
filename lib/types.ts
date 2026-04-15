@@ -122,6 +122,11 @@ export interface AttendanceRecord {
 
 export interface AccountSettings {
   orgName: string;
+  orgEmail?: string;
+  orgPhone?: string;
+  orgId?: string;
+  orgSetupAt?: string;
+  orgSetupCompleted?: boolean;
   currency: string;
   openingBalanceCash: number;
   openingBalanceBank: number;

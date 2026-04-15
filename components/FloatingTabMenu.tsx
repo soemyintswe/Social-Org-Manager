@@ -35,7 +35,6 @@ export default function FloatingTabMenu({
     if (isSystemAdmin) {
       return [
         { name: "ပင်မစာမျက်နှာ", icon: "home-outline", route: "/" },
-        { name: "Messages", icon: "chatbubbles-outline", route: "/messages", enabled: true },
         { name: "System Information", icon: "settings-outline", route: "/system", enabled: true },
         { name: "ချိန်ညှိရန်", icon: "options-outline", route: "/account-settings", enabled: true },
       ];

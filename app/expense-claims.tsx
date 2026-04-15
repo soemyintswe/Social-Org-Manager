@@ -1,5 +1,5 @@
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -12,6 +12,8 @@ import { useData } from "@/lib/DataContext";
 import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { normalizeOrgPosition, type ExpenseClaim, type StandardAmountChangeRequest, type StandardAmountRule } from "@/lib/types";
+
+const AsyncStorage = orgStorage;
 
 type Tab = "claims" | "amounts";
 type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";

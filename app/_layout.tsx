@@ -22,7 +22,7 @@ import {
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage, { persistOrgStorageContext, restoreOrgStorageContext } from "@/lib/org-storage";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import FloatingTabMenu from "@/components/FloatingTabMenu";
 import { queryClient } from "@/lib/query-client";
@@ -30,8 +30,21 @@ import { DataProvider } from "@/lib/DataContext";
 import { AuthProvider, useAuth } from "@/lib/AuthContext";
 import Colors from "@/constants/colors";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "@/lib/app-update";
-import { initializeRemoteConfig } from "@/lib/remote-config";
+import { initializeRemoteConfig, prewarmOrgScopedRemoteConfig, setActiveOrgId } from "@/lib/remote-config";
 import { verifyDeviceAuthorization } from "@/lib/device-authorization";
+import { ensureOrgLicenseActive, hydrateRegistryManagedConfig } from "@/lib/org-registry";
+import {
+  checkCloudSyncHealth,
+  checkLanSyncHealth,
+  getAccountSettings,
+  getMembers,
+  getEffectiveSyncRuntimeConfig,
+  pullCloudSnapshotToLocalDetailed,
+  pullLanSnapshotToLocalDetailed,
+  pushCloudSnapshotFromLocalDetailed,
+  pushLanSnapshotFromLocalDetailed,
+  saveAccountSettings,
+} from "@/lib/storage-service";
 import {
   useFonts,
   Inter_400Regular,
@@ -39,6 +52,8 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
+
+const AsyncStorage = orgStorage;
 
 SplashScreen.preventAutoHideAsync();
 
@@ -235,7 +250,31 @@ function RootLayoutNav() {
   const segments = useSegments();
   const router = useRouter();
   const inLogin = (segments[0] as string) === "sign-in";
+  const inAdminLogin = (segments[0] as string) === "admin-sign-in";
+  const inAnyLogin = inLogin || inAdminLogin;
+  const inOrgIdRoute = (segments[0] as string) === "[orgId]";
+  const inOrgConnect = (segments[0] as string) === "org-connect";
+  const inSystemRoute = (segments[0] as string) === "(tabs)" && (segments[1] as string) === "system";
   const isSystemAdmin = currentUser?.systemRole === "admin";
+  const isLocalhost =
+    Platform.OS === "web" &&
+    typeof window !== "undefined" &&
+    ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
+  const allowOrgConnect =
+    Platform.OS === "web" &&
+    typeof window !== "undefined" &&
+    (new URLSearchParams(window.location.search || "").get("orgConnect") === "1" ||
+      (() => {
+        try {
+          return (
+            window.sessionStorage?.getItem("@orghub_org_connect_override") === "1" ||
+            window.localStorage?.getItem("@orghub_org_connect_override") === "1"
+          );
+        } catch {
+          return false;
+        }
+      })());
+  const canViewOrgConnect = isSystemAdmin || allowOrgConnect;
   const topIdentityName = String(currentMember?.name || currentUser?.displayName || "").trim();
   const topIdentityMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
   const topIdentityText = topIdentityName && topIdentityMemberId
@@ -250,38 +289,131 @@ function RootLayoutNav() {
   const [deviceAuthorized, setDeviceAuthorized] = useState(true);
   const [deviceAuthReason, setDeviceAuthReason] = useState("");
   const [deviceAuthHash, setDeviceAuthHash] = useState("");
+  const [licenseChecked, setLicenseChecked] = useState(false);
+  const [licenseAllowed, setLicenseAllowed] = useState(true);
+  const [licenseReason, setLicenseReason] = useState("");
+  const [licenseExpiry, setLicenseExpiry] = useState("");
+  const [licenseStatus, setLicenseStatus] = useState("");
+  const [orgSetupRequired, setOrgSetupRequired] = useState<boolean | null>(null);
   const updateCheckInFlightRef = useRef(false);
   const lastActiveCheckAtRef = useRef(0);
   const updateDownloadRef = useRef<FileSystem.DownloadResumable | null>(null);
   const updateDownloadUrlRef = useRef("");
   const updateDownloadFileRef = useRef("");
+  const autoSyncRunningRef = useRef(false);
+  const lastAutoSyncAtRef = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    const loadOrgSetup = async () => {
+      try {
+        let settings = await getAccountSettings();
+        if (!String(settings.orgId || "").trim()) {
+          let hintedOrgId = "";
+          try {
+            const restored = await restoreOrgStorageContext();
+            hintedOrgId = String(restored?.orgId || "").trim().toUpperCase();
+          } catch {}
+          if (!hintedOrgId && Platform.OS === "web" && typeof window !== "undefined") {
+            try {
+              hintedOrgId = String(
+                window.sessionStorage?.getItem("@orghub_active_org_id") ||
+                window.sessionStorage?.getItem("@orghub_last_connected_org_id") ||
+                window.localStorage?.getItem("@orghub_active_org_id") ||
+                window.localStorage?.getItem("@orghub_last_connected_org_id") ||
+                ""
+              )
+                .trim()
+                .toUpperCase();
+            } catch {}
+          }
+
+          if (hintedOrgId) {
+            const nextSettings = {
+              ...settings,
+              orgId: hintedOrgId,
+              orgSetupAt: settings.orgSetupAt || new Date().toISOString(),
+              orgSetupCompleted: true,
+            };
+            await saveAccountSettings(nextSettings);
+            settings = nextSettings;
+          } else {
+            const legacyMembers = await getMembers().catch(() => [] as any[]);
+            if (Array.isArray(legacyMembers) && legacyMembers.length > 0) {
+              const legacyOrgId = "ORG000";
+              const nextSettings = {
+                ...settings,
+                orgId: legacyOrgId,
+                orgName: settings.orgName || "My Organization",
+                orgSetupAt: settings.orgSetupAt || new Date().toISOString(),
+                orgSetupCompleted: true,
+              };
+              await saveAccountSettings(nextSettings);
+              settings = nextSettings;
+            }
+          }
+        }
+        const resolvedOrgId = String(settings.orgId || "").trim().toUpperCase();
+        if (resolvedOrgId === "ORG000") {
+          try {
+            await orgStorage.removeItem("@orghub_login_guard");
+          } catch {}
+        }
+        const hasEmail = Boolean(String(settings.orgEmail || "").trim());
+        const hasPhone = Boolean(String(settings.orgPhone || "").trim());
+        const orgId = resolvedOrgId;
+        const hasOrgId = Boolean(orgId);
+        const hasContact = hasEmail || hasPhone || orgId === "ORG000";
+        if (!active) return;
+        setOrgSetupRequired(!(hasOrgId && hasContact));
+      } catch {
+        if (!active) return;
+        setOrgSetupRequired(true);
+      }
+    };
+    void loadOrgSetup();
+    return () => {
+      active = false;
+    };
+  }, [inOrgConnect, isAuthenticated]);
 
   useEffect(() => {
     if (loading) return;
-    if (!isAuthenticated && !inLogin) {
+    if (orgSetupRequired === null) return;
+
+    if (orgSetupRequired) {
+      if (!isSystemAdmin && !isLocalhost && !inSystemRoute && !inAdminLogin && !inOrgIdRoute) {
+        if (!inOrgConnect) {
+          router.replace("/org-connect" as any);
+        }
+        return;
+      }
+    }
+
+    if (!isAuthenticated && !inAnyLogin && !inOrgIdRoute && !(inOrgConnect && allowOrgConnect)) {
       router.replace("/sign-in" as any);
       return;
     }
-    if (isAuthenticated && inLogin) {
-      router.replace("/" as any);
+    if (isAuthenticated && (inAnyLogin || inOrgIdRoute)) {
+      if (allowOrgConnect) return;
+      router.replace(isSystemAdmin ? ("/system" as any) : ("/" as any));
     }
-  }, [isAuthenticated, loading, inLogin, router]);
+  }, [isAuthenticated, isLocalhost, isSystemAdmin, inSystemRoute, loading, inAnyLogin, inAdminLogin, inOrgIdRoute, inOrgConnect, orgSetupRequired, router, allowOrgConnect]);
 
   useEffect(() => {
-    if (loading || !isAuthenticated || !isSystemAdmin || inLogin) return;
+    if (loading || !isAuthenticated || !isSystemAdmin || inAnyLogin) return;
     const rootSegment = String(segments[0] || "");
     const childSegment = String(segments[1] || "");
     const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
     const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
     const isAdminAccountSettings = rootSegment === "account-settings";
-    const isAdminMessages = rootSegment === "messages";
-    const isAdminDataManagement = rootSegment === "data-management";
-    if (isAdminHome || isAdminSystem || isAdminAccountSettings || isAdminMessages || isAdminDataManagement) return;
+    if (isAdminHome || isAdminSystem || isAdminAccountSettings) return;
+    if (inOrgConnect && canViewOrgConnect) return;
     router.replace("/" as any);
-  }, [segments, loading, isAuthenticated, isSystemAdmin, inLogin, router]);
+  }, [segments, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect]);
 
   useEffect(() => {
-    if (loading || Platform.OS === "web" || !isAuthenticated || inLogin) return;
+    if (loading || Platform.OS === "web" || !isAuthenticated || inAnyLogin) return;
     let disposed = false;
     let intervalTimer: ReturnType<typeof setInterval> | null = null;
     let initialTimer: ReturnType<typeof setTimeout> | null = null;
@@ -342,7 +474,51 @@ function RootLayoutNav() {
       if (interactionTask?.cancel) interactionTask.cancel();
       sub.remove();
     };
-  }, [loading, isAuthenticated, inLogin]);
+  }, [loading, isAuthenticated, inAnyLogin]);
+
+  const runAutoSync = async () => {
+    if (Platform.OS === "web") return;
+    if (isSystemAdmin) return;
+    if (licenseChecked && !licenseAllowed) return;
+    if (autoSyncRunningRef.current) return;
+    const now = Date.now();
+    if (now - lastAutoSyncAtRef.current < 30_000) return;
+    autoSyncRunningRef.current = true;
+    try {
+      const runtimeConfig = await getEffectiveSyncRuntimeConfig();
+      const lanEnabled = runtimeConfig.lan.enabled;
+      const cloudEnabled = runtimeConfig.cloud.enabled;
+
+      if (lanEnabled) {
+        const lanHealth = await checkLanSyncHealth();
+        if (lanHealth.ok) {
+          await pullLanSnapshotToLocalDetailed();
+          await pushLanSnapshotFromLocalDetailed();
+        }
+      }
+      if (cloudEnabled) {
+        const cloudHealth = await checkCloudSyncHealth();
+        if (cloudHealth.ok) {
+          await pullCloudSnapshotToLocalDetailed();
+          await pushCloudSnapshotFromLocalDetailed();
+        }
+      }
+    } catch (error) {
+      logTaskError("auto sync", error);
+    } finally {
+      autoSyncRunningRef.current = false;
+      lastAutoSyncAtRef.current = Date.now();
+    }
+  };
+
+  useEffect(() => {
+    if (loading || orgSetupRequired !== false || !isAuthenticated || inLogin || isSystemAdmin) return;
+    return scheduleDeferredTask({
+      label: "auto sync",
+      delayMs: 2500,
+      run: runAutoSync,
+    });
+  }, [loading, orgSetupRequired, isAuthenticated, inLogin, isSystemAdmin]);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -422,6 +598,55 @@ function RootLayoutNav() {
       cleanup();
     };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    if (orgSetupRequired !== false) {
+      setLicenseChecked(false);
+      setLicenseAllowed(true);
+      setLicenseReason("");
+      setLicenseExpiry("");
+      setLicenseStatus("");
+    }
+    const runLicenseCheck = async (force = false) => {
+      try {
+        if (orgSetupRequired !== false) return;
+        const settings = await getAccountSettings();
+        const orgId = String(settings?.orgId || "").trim();
+        if (!orgId) {
+          setLicenseChecked(true);
+          setLicenseAllowed(true);
+          return;
+        }
+        const result = await ensureOrgLicenseActive({ orgId, forceOnlineCheck: force });
+        if (disposed) return;
+        setLicenseChecked(true);
+        setLicenseAllowed(result.allowed);
+        setLicenseReason(String(result.reason || ""));
+        setLicenseExpiry(String(result.expiryDate || ""));
+        setLicenseStatus(String(result.status || ""));
+      } catch {
+        if (!disposed) {
+          setLicenseChecked(true);
+        }
+      }
+    };
+    const cleanup = scheduleDeferredTask({
+      label: "license check",
+      delayMs: 4500,
+      run: () => runLicenseCheck(false),
+    });
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void runLicenseCheck(true);
+      }
+    });
+    return () => {
+      disposed = true;
+      cleanup();
+      sub.remove();
+    };
+  }, [orgSetupRequired]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -623,10 +848,14 @@ function RootLayoutNav() {
   };
 
   if (loading) {
+    const loadingText =
+      inOrgConnect && allowOrgConnect
+        ? "အသင်းအဖွဲ့သစ်ဖြင့် ချိတ်ဆက်နိုင်ရန် ဆောင်ရွက်နေပါသည်။"
+        : "လုပ်ဆောင်နေပါတယ် ခေတ္တစောင့်ပါ။";
     return (
       <View style={styles.appLoadingShell}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
-        <Text style={styles.appLoadingText}>လုပ်ဆောင်နေပါတယ် ခေတ္တစောင့်ပါ။</Text>
+        <Text style={styles.appLoadingText}>{loadingText}</Text>
         <View style={styles.appLoadingTrack}>
           <View style={styles.appLoadingFill} />
         </View>
@@ -637,7 +866,7 @@ function RootLayoutNav() {
   return (
     <>
       <View style={styles.rootShell}>
-        {isAuthenticated && !inLogin ? (
+        {isAuthenticated && !inAnyLogin ? (
           <View style={[styles.topIdentityBar, { paddingTop: insets.top + 4 }]}>
             <View style={styles.topIdentityRow}>
               <Pressable
@@ -662,7 +891,10 @@ function RootLayoutNav() {
 
         <View style={styles.stackHost}>
           <Stack screenOptions={{ headerBackTitle: "Back" }}>
+            <Stack.Screen name="org-connect" options={{ headerShown: false }} />
             <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+            <Stack.Screen name="admin-sign-in" options={{ headerShown: false }} />
+            <Stack.Screen name="[orgId]" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="add-member" options={{ headerShown: false, presentation: "modal" }} />
             <Stack.Screen name="add-event" options={{ headerShown: false, presentation: "modal" }} />
@@ -769,8 +1001,103 @@ function RootLayoutNav() {
           </View>
         </View>
       </Modal>
+
+      <Modal transparent animationType="fade" visible={licenseChecked && !licenseAllowed}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>License Inactive</Text>
+            <Text style={styles.modalText}>This organization license is not active.</Text>
+            {licenseStatus ? (
+              <Text style={styles.modalText}>Status: {licenseStatus}</Text>
+            ) : null}
+            {licenseExpiry ? (
+              <Text style={styles.modalText}>Expiry: {licenseExpiry}</Text>
+            ) : null}
+            {licenseReason ? (
+              <Text style={styles.modalNotes}>Reason: {licenseReason}</Text>
+            ) : null}
+            <Text style={styles.modalNotes}>
+              Please contact the system administrator to renew or re-activate the license.
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </>
   );
+}
+
+function OrgBootstrap({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const run = async () => {
+      try {
+        let urlOrgId = "";
+        let lastConnectedOrgId = "";
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          try {
+            const params = new URLSearchParams(window.location.search || "");
+            const fromQuery = String(params.get("orgId") || "").trim();
+            const isOrgConnect = String(params.get("orgConnect") || "").trim() === "1";
+            lastConnectedOrgId = String(
+              window.sessionStorage?.getItem("@orghub_last_connected_org_id") ||
+              window.localStorage?.getItem("@orghub_last_connected_org_id") ||
+              ""
+            ).trim();
+            if (isOrgConnect && fromQuery) {
+              urlOrgId = fromQuery;
+              try {
+                window.sessionStorage?.setItem("@orghub_last_connected_org_id", fromQuery);
+                window.localStorage?.setItem("@orghub_last_connected_org_id", fromQuery);
+              } catch {}
+            }
+          } catch {}
+        }
+        const restored = await restoreOrgStorageContext();
+        const settings = await getAccountSettings();
+        const fallbackOrgId = String(settings?.orgId || "").trim();
+        const fallbackEmail = String(settings?.orgEmail || "").trim();
+        const orgId = String(urlOrgId || restored?.orgId || fallbackOrgId || lastConnectedOrgId).trim();
+        const orgEmail = String(restored?.orgEmail || fallbackEmail).trim();
+        await persistOrgStorageContext({ orgId, orgEmail });
+        if (orgId && !fallbackOrgId) {
+          await saveAccountSettings({
+            ...settings,
+            orgId,
+            orgEmail: orgEmail || settings.orgEmail,
+            orgSetupAt: settings.orgSetupAt || new Date().toISOString(),
+            orgSetupCompleted: true,
+          });
+        }
+        setActiveOrgId(orgId || null);
+        prewarmOrgScopedRemoteConfig(orgId || null, orgEmail || undefined);
+        await hydrateRegistryManagedConfig(orgId || null);
+      } catch {
+        // No-op: allow app to continue even if org settings are missing.
+      } finally {
+        if (active) setReady(true);
+      }
+    };
+    void run();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (!ready) {
+    return (
+      <View style={styles.appLoadingShell}>
+        <ActivityIndicator size="large" color={Colors.light.tint} />
+        <Text style={styles.appLoadingText}>Org registry ကိုစစ်ဆေးနေပါတယ်…</Text>
+        <View style={styles.appLoadingTrack}>
+          <View style={styles.appLoadingFill} />
+        </View>
+      </View>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 export default function RootLayout() {
@@ -824,11 +1151,13 @@ export default function RootLayout() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView style={{ flex: 1 }}>
+          <OrgBootstrap>
             <DataProvider>
               <AuthProvider>
                 <RootLayoutNav />
               </AuthProvider>
             </DataProvider>
+          </OrgBootstrap>
         </GestureHandlerRootView>
       </QueryClientProvider>
     </ErrorBoundary>

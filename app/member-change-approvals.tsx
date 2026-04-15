@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import orgStorage from "@/lib/org-storage";
 import React, { useEffect, useMemo, useState } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -12,6 +12,8 @@ import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import AccessDenied from "@/components/AccessDenied";
 import type { MemberChangeRequest } from "@/lib/types";
+
+const AsyncStorage = orgStorage;
 
 const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
 const PENDING_OVERDUE_DAYS = 3;

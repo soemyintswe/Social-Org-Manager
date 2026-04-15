@@ -1,0 +1,9 @@
+id,payment_method,amount,category,member_id,payer_payee,date,receipt_number,notes,fee_period_start,fee_period_end
+bankint-I-022(Old),bank,15681.88,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,2018-03-30,I-022 (Old),,,
+bankint-I-052(Old),bank,56945.45,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,2018-06-29,I-052 (Old),,,
+bankint-I-084A(Old),bank,66205.88,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,43110.000543981485,I-084A (Old),,,
+bankint-I-084B(Old),bank,74196.66,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,2019-01-01,I-084B (Old),,,
+bankint-I-115(Old),bank,73272.26,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,43469.000543981485,I-115 (Old),,,
+bankint-I-145(Old),bank,77397.54,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,2019-06-28,I-145 (Old),,,
+bankint-I-186(Old),bank,63263.66,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,2019-09-30,I-186 (Old),,,
+bankint-I-188(Old),bank,2647.27,bank_interest,,KBZ Bank ဘဏ်တိုးရ‌ငွေ,2019-12-30,I-188 (Old),,,

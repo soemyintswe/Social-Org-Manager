@@ -43,6 +43,19 @@ import AccessDenied from "@/components/AccessDenied";
 import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "@/lib/transaction-display";
 import { toEnglishDigits } from "@/lib/member-utils";
 import { exportXlsxFile } from "@/lib/xlsx-export";
+import {
+  buildCashBookRows,
+  buildFilteredMemberRows,
+  buildMemberRowsWithMetrics,
+  computeBalancesAt,
+  computeCashBookSummary,
+  computeExecutiveMembers,
+  computeFundStats,
+  computeIncomeExpenseStats,
+  computeLoanStats,
+  computeMemberFlowStats,
+  computeMemberSummaryStats,
+} from "@/lib/reporting-service";
 
 const PERIOD_OPTIONS = [
   { label: "ယခုလ", months: 0 },
@@ -105,21 +118,6 @@ const REPORT_REGISTER_PAGE_SIZE = 50;
 const REPORT_CASHBOOK_PAGE_SIZE = 80;
 const REPORT_AUDIT_PAGE_SIZE = 50;
 const REPORT_MEMBER_PAGE_SIZE = 40;
-const EXECUTIVE_POSITIONS = [
-  "patron",
-  "chairperson",
-  "vice_chairperson",
-  "secretary",
-  "joint_secretary",
-  "treasurer",
-  "auditor",
-  "committee_member",
-] as const;
-
-function isExecutivePosition(position: unknown): boolean {
-  return EXECUTIVE_POSITIONS.includes(normalizeOrgPosition(position) as any);
-}
-
 function csvEscape(value: unknown): string {
   const text = String(value ?? "");
   if (text.includes(",") || text.includes("\"") || text.includes("\n")) {
@@ -202,64 +200,6 @@ function transactionBelongsToMember(tx: any, memberId: string, memberName: strin
   }
 
   return false;
-}
-
-function inferGenderFromName(rawName: string): "male" | "female" | "other" {
-  const name = String(rawName || "").trim();
-  if (!name) return "other";
-  const n = name.toLowerCase();
-  if (
-    name.startsWith("ဆရာတော်") ||
-    name.startsWith("ဦး") ||
-    name.startsWith("ကို") ||
-    name.startsWith("မောင်") ||
-    name.startsWith("ကိုရင်") ||
-    name.startsWith("ဦးဇင်း") ||
-    n.startsWith("u ") ||
-    n.startsWith("ko ") ||
-    n.startsWith("mg ")
-  ) {
-    return "male";
-  }
-  if (
-    name.startsWith("ဒေါ်") ||
-    name.startsWith("မ") ||
-    name.startsWith("မိ") ||
-    name.startsWith("သီလရှင်") ||
-    name.startsWith("ဆရာလေး") ||
-    n.startsWith("daw ") ||
-    n.startsWith("ma ")
-  ) {
-    return "female";
-  }
-  return "other";
-}
-
-function calculateAge(dob?: string, refDate: Date = new Date()): number | null {
-  const birthMs = parseDateMs(dob);
-  if (!Number.isFinite(birthMs) || birthMs <= 0) return null;
-  const birthDate = new Date(birthMs);
-  let age = refDate.getFullYear() - birthDate.getFullYear();
-  const monthDiff = refDate.getMonth() - birthDate.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
-    age -= 1;
-  }
-  return age >= 0 ? age : null;
-}
-
-function getAgeBucket(age: number | null): "under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown" {
-  if (age === null) return "unknown";
-  if (age < 18) return "under18";
-  if (age <= 35) return "18_35";
-  if (age <= 60) return "36_60";
-  if (age <= 75) return "61_75";
-  return "over75";
-}
-
-function resolveMemberGender(member: any): "male" | "female" | "other" {
-  const explicit = String(member?.gender || "").toLowerCase();
-  if (explicit === "male" || explicit === "female" || explicit === "other") return explicit;
-  return inferGenderFromName(String(member?.name || ""));
 }
 
 function normalizeMemberPositionTimeline(
@@ -611,213 +551,70 @@ export default function ReportsScreen() {
     return members.filter((member: any) => member.id === scopedMemberId);
   }, [members, scopedMemberId]);
 
-  const getMemberReferenceDateMs = useCallback(
-    (member: any): number => {
-      if (memberDateBasis === "status") {
-        return parseDateMs(member?.statusDate || member?.resignDate || member?.joinDate || member?.createdAt);
-      }
-      if (memberDateBasis === "created") {
-        return parseDateMs(member?.createdAt || member?.joinDate);
-      }
-      return parseDateMs(member?.joinDate || member?.createdAt || member?.statusDate || member?.resignDate);
-    },
-    [memberDateBasis]
+  const memberRowsWithMetrics = useMemo(
+    () =>
+      buildMemberRowsWithMetrics({
+        members: reportMembers,
+        endDate,
+        memberDateBasis,
+        shouldComputeMembers,
+      }),
+    [reportMembers, endDate, memberDateBasis, shouldComputeMembers]
   );
 
-  const memberRowsWithMetrics = useMemo(() => {
-    if (!shouldComputeMembers) return [];
-    const refDate = endDate;
-    return (reportMembers || []).map((member: any) => {
-      const status = normalizeMemberStatus(member?.status);
-      const defaultPosition = normalizeOrgPosition(member?.orgPosition || status);
-      const gender = resolveMemberGender(member);
-      const age = calculateAge(member?.dob, refDate);
-      const joinDateMsRaw = parseDateMs(
-        member?.joinDate ||
-          member?.createdAt ||
-          member?.orgPositionHistory?.[0]?.effectiveDate ||
-          member?.statusDate ||
-          member?.resignDate
-      );
-      const joinDateMs = joinDateMsRaw > 0 ? joinDateMsRaw : parseDateMs("2018-01-01");
-      const rawExitDateMs = parseDateMs(member?.statusDate || member?.resignDate);
-      const hasExitStatus = ["resigned", "deceased", "expelled", "suspended"].includes(status);
-      const exitDateMs = hasExitStatus && Number.isFinite(rawExitDateMs) ? rawExitDateMs : 0;
-      return {
-        ...member,
-        __status: status,
-        __defaultPosition: defaultPosition,
-        __gender: gender,
-        __age: age,
-        __ageBucket: getAgeBucket(age),
-        __joinDateMs: joinDateMs,
-        __exitDateMs: exitDateMs,
-        __refDateMs: getMemberReferenceDateMs(member),
-      };
-    });
-  }, [reportMembers, endDate, getMemberReferenceDateMs, shouldComputeMembers]);
+  const memberFlowStats = useMemo(
+    () =>
+      computeMemberFlowStats({
+        memberRowsWithMetrics,
+        startDate,
+        endDate,
+        shouldComputeMembers,
+      }),
+    [memberRowsWithMetrics, startDate, endDate, shouldComputeMembers]
+  );
 
-  const memberFlowStats = useMemo(() => {
-    if (!shouldComputeMembers) return { opening: 0, joined: 0, exited: 0, closing: 0 };
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-    const startMs = start.getTime();
-    const endMs = end.getTime();
-
-    let opening = 0;
-    let joined = 0;
-    let exited = 0;
-    let closing = 0;
-
-    memberRowsWithMetrics.forEach((member: any) => {
-      const joinMs = Number(member?.__joinDateMs || 0);
-      const exitMs = Number(member?.__exitDateMs || 0);
-      if (!Number.isFinite(joinMs) || joinMs <= 0) return;
-
-      const activeAtStart = joinMs < startMs && (exitMs <= 0 || exitMs >= startMs);
-      const joinedInRange = joinMs >= startMs && joinMs <= endMs;
-      const exitedInRange = exitMs > 0 && exitMs >= startMs && exitMs <= endMs;
-      const activeAtEnd = joinMs <= endMs && (exitMs <= 0 || exitMs > endMs);
-
-      if (activeAtStart) opening += 1;
-      if (joinedInRange) joined += 1;
-      if (exitedInRange) exited += 1;
-      if (activeAtEnd) closing += 1;
-    });
-
-    return { opening, joined, exited, closing };
-  }, [memberRowsWithMetrics, startDate, endDate, shouldComputeMembers]);
-
-  const filteredMemberRows = useMemo(() => {
-    if (!shouldComputeMembers) return [];
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-    const startMs = start.getTime();
-    const endMs = end.getTime();
-
-    return memberRowsWithMetrics
-      .map((member: any) => {
-        const positionSnapshot = getMemberPositionsInRange(member, startMs, endMs);
-        return {
-          ...member,
-          __positionsInRange: positionSnapshot.positions,
-          __positionPrimary: positionSnapshot.primaryPosition,
-        };
-      })
-      .filter((member: any) => {
-        const joinMs = Number(member?.__joinDateMs || 0);
-        const exitMs = Number(member?.__exitDateMs || 0);
-        if (!Number.isFinite(joinMs) || joinMs <= 0) return false;
-        const existsInRange = joinMs <= endMs && (exitMs <= 0 || exitMs >= startMs);
-        if (!existsInRange) return false;
-
-        if (memberStatusFilter !== "all" && member.__status !== memberStatusFilter) return false;
-        if (memberGenderFilter !== "all" && member.__gender !== memberGenderFilter) return false;
-        if (memberAgeFilter !== "all" && member.__ageBucket !== memberAgeFilter) return false;
-        const positionsInRange: OrgPosition[] = Array.isArray(member.__positionsInRange) ? member.__positionsInRange : [];
-        if (memberPositionFilter === "executive" && !positionsInRange.some((position) => isExecutivePosition(position))) return false;
-        if (
-          memberPositionFilter !== "all" &&
-          memberPositionFilter !== "executive" &&
-          !positionsInRange.includes(memberPositionFilter as OrgPosition)
-        ) return false;
-        return true;
-      })
-      .sort((a: any, b: any) => {
-        if (a.__refDateMs !== b.__refDateMs) return b.__refDateMs - a.__refDateMs;
-        return String(a?.id || "").localeCompare(String(b?.id || ""));
-      });
-  }, [
-    memberRowsWithMetrics,
-    memberStatusFilter,
-    memberGenderFilter,
-    memberAgeFilter,
-    memberPositionFilter,
-    startDate,
-    endDate,
-    shouldComputeMembers,
-  ]);
+  const filteredMemberRows = useMemo(
+    () =>
+      buildFilteredMemberRows({
+        memberRowsWithMetrics,
+        startDate,
+        endDate,
+        memberStatusFilter,
+        memberGenderFilter,
+        memberAgeFilter,
+        memberPositionFilter,
+        shouldComputeMembers,
+      }),
+    [
+      memberRowsWithMetrics,
+      startDate,
+      endDate,
+      memberStatusFilter,
+      memberGenderFilter,
+      memberAgeFilter,
+      memberPositionFilter,
+      shouldComputeMembers,
+    ]
+  );
 
   const executiveMembers = useMemo(
-    () => {
-      if (!shouldComputeMembers) return [];
-      return filteredMemberRows
-        .filter((member: any) => {
-          const positionsInRange: OrgPosition[] = Array.isArray(member?.__positionsInRange) ? member.__positionsInRange : [];
-          return positionsInRange.some((position) => isExecutivePosition(position));
-        })
-        .sort((a: any, b: any) => {
-          const rank = (pos: string): number => {
-            const idx = EXECUTIVE_POSITIONS.indexOf(pos as any);
-            return idx >= 0 ? idx : 999;
-          };
-          const ra = rank(a.__positionPrimary || a.__defaultPosition || "member");
-          const rb = rank(b.__positionPrimary || b.__defaultPosition || "member");
-          if (ra !== rb) return ra - rb;
-          return String(a?.id || "").localeCompare(String(b?.id || ""));
-        });
-    },
+    () =>
+      computeExecutiveMembers({
+        filteredMemberRows,
+        shouldComputeMembers,
+      }),
     [filteredMemberRows, shouldComputeMembers]
   );
 
-  const memberSummaryStats = useMemo(() => {
-    if (!shouldComputeMembers) {
-      return {
-        total: 0,
-        statusCounts: { active: 0, resigned: 0, deceased: 0, expelled: 0, suspended: 0, applicant: 0 } as Record<MemberStatus, number>,
-        genderCounts: { male: 0, female: 0, other: 0 } as Record<"male" | "female" | "other", number>,
-        ageCounts: { under18: 0, "18_35": 0, "36_60": 0, "61_75": 0, over75: 0, unknown: 0 } as Record<"under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown", number>,
-        topPositions: [] as { position: string; count: number }[],
-        executiveCount: 0,
-      };
-    }
-    const statusCounts: Record<MemberStatus, number> = {
-      active: 0,
-      resigned: 0,
-      deceased: 0,
-      expelled: 0,
-      suspended: 0,
-      applicant: 0,
-    };
-    const genderCounts: Record<"male" | "female" | "other", number> = { male: 0, female: 0, other: 0 };
-    const ageCounts: Record<"under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown", number> = {
-      under18: 0,
-      "18_35": 0,
-      "36_60": 0,
-      "61_75": 0,
-      over75: 0,
-      unknown: 0,
-    };
-    const positionCounts = new Map<string, number>();
-
-    filteredMemberRows.forEach((member: any) => {
-      const statusKey = member.__status as MemberStatus;
-      const genderKey = member.__gender as "male" | "female" | "other";
-      const ageKey = member.__ageBucket as "under18" | "18_35" | "36_60" | "61_75" | "over75" | "unknown";
-      if (statusCounts[statusKey] !== undefined) statusCounts[statusKey] += 1;
-      if (genderCounts[genderKey] !== undefined) genderCounts[genderKey] += 1;
-      if (ageCounts[ageKey] !== undefined) ageCounts[ageKey] += 1;
-      const key = String(member.__positionPrimary || member.__defaultPosition || "member");
-      positionCounts.set(key, (positionCounts.get(key) || 0) + 1);
-    });
-
-    const topPositions = Array.from(positionCounts.entries())
-      .map(([position, count]) => ({ position, count }))
-      .sort((a, b) => b.count - a.count);
-
-    return {
-      total: filteredMemberRows.length,
-      statusCounts,
-      genderCounts,
-      ageCounts,
-      topPositions,
-      executiveCount: executiveMembers.length,
-    };
-  }, [filteredMemberRows, executiveMembers.length, shouldComputeMembers]);
+  const memberSummaryStats = useMemo(
+    () =>
+      computeMemberSummaryStats({
+        filteredMemberRows,
+        executiveMembers,
+        shouldComputeMembers,
+      }),
+    [filteredMemberRows, executiveMembers, shouldComputeMembers]
+  );
 
   const reportTransactions = useMemo(() => {
     if (scopedMemberId === null) return transactions;
@@ -943,242 +740,57 @@ export default function ReportsScreen() {
     [computeTransactions, startDate, endDate, matchesTransactionKeyword]
   );
 
-  const incomeExpenseStats = useMemo(() => {
-    const income = filteredTxns
-      .filter((t: any) => t.type === "income" && t.category !== "loan_repayment")
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-    const expense = filteredTxns
-      .filter((t: any) => t.type === "expense" && t.category !== "loan_disbursement")
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-    return { income, expense, net: income - expense };
-  }, [filteredTxns]);
+  const incomeExpenseStats = useMemo(() => computeIncomeExpenseStats(filteredTxns), [filteredTxns]);
 
-  const loanStats = useMemo(() => {
-    const disbursed = filteredTxns
-      .filter((t: any) => t.category === "loan_disbursement")
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-    const repaid = filteredTxns
-      .filter((t: any) => t.category === "loan_repayment")
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-    const interest = filteredTxns
-      .filter((t: any) => t.category === "interest_income")
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-    
-    // Business rule: principal outstanding = total disbursed - total repaid (within selected filter scope)
-    const principalOutstanding = Math.max(0, Number(disbursed || 0) - Number(repaid || 0));
+  const loanStats = useMemo(
+    () =>
+      computeLoanStats({
+        filteredTxns,
+        computeLoans,
+        getLoanInterestDue,
+      }),
+    [filteredTxns, computeLoans, getLoanInterestDue]
+  );
 
-    const interestOutstanding = (computeLoans || []).reduce((acc: number, l: any) => {
-      const amount = Number(getLoanInterestDue(l.id) || 0);
-      return acc + (Number.isFinite(amount) ? Math.max(0, amount) : 0);
-    }, 0);
-    
-    return { disbursed, repaid, interest, principalOutstanding, interestOutstanding };
-  }, [filteredTxns, computeLoans, getLoanInterestDue]);
+  const getBalancesAt = useCallback(
+    (date: Date) =>
+      computeBalancesAt({
+        date,
+        accountSettings,
+        transactions: computeTransactions,
+      }),
+    [accountSettings, computeTransactions]
+  );
 
-  const getBalancesAt = useCallback((date: Date) => {
-    let cash = accountSettings?.openingBalanceCash || 0;
-    let bank = accountSettings?.openingBalanceBank || 0;
-    
-    computeTransactions.forEach((t: any) => {
-      const tDate = new Date(t.date);
-      if (tDate <= date) {
-         const amt = t.amount;
-         if (t.type === 'income') {
-            if (t.paymentMethod === 'bank') bank += amt;
-            else cash += amt;
-         } else if (t.type === 'expense') {
-            if (t.paymentMethod === 'bank') bank -= amt;
-            else cash -= amt;
-         } else if (t.type === 'transfer') {
-            if (t.category === 'bank_deposit') { cash -= amt; bank += amt; }
-            if (t.category === 'bank_withdraw') { bank -= amt; cash += amt; }
-         }
-      }
-    });
-    return { cash, bank, total: cash + bank };
-  }, [accountSettings, computeTransactions]);
+  const fundStats = useMemo(
+    () =>
+      computeFundStats({
+        startDate,
+        endDate,
+        getBalancesAt,
+      }),
+    [startDate, endDate, getBalancesAt]
+  );
 
-  const fundStats = useMemo(() => {
-    const start = new Date(startDate); start.setDate(start.getDate() - 1);
-    const opening = getBalancesAt(start);
-    const closing = getBalancesAt(endDate);
-    return { opening, closing };
-  }, [startDate, endDate, getBalancesAt]);
+  const cashBookRows = useMemo(
+    () =>
+      buildCashBookRows({
+        filteredTxns,
+        startDate,
+        getBalancesAt,
+        shouldComputeCashBook,
+      }),
+    [filteredTxns, startDate, getBalancesAt, shouldComputeCashBook]
+  );
 
-  const cashBookRows = useMemo(() => {
-    if (!shouldComputeCashBook) return [];
-    const startBoundary = new Date(startDate);
-    startBoundary.setHours(0, 0, 0, 0);
-    const openingRefDate = new Date(startBoundary);
-    openingRefDate.setDate(openingRefDate.getDate() - 1);
-    const opening = getBalancesAt(openingRefDate);
-
-    const sorted = [...filteredTxns].sort((a: any, b: any) => {
-      const da = new Date(a?.date).getTime();
-      const db = new Date(b?.date).getTime();
-      if (da !== db) return da - db;
-      return String(a?.receiptNumber || a?.id || "").localeCompare(String(b?.receiptNumber || b?.id || ""));
-    });
-
-    const rows: {
-      rowType: "opening" | "entry" | "daily_total";
-      id: string;
-      date: string;
-      receipt: string;
-      particulars: string;
-      cashIn: number;
-      cashOut: number;
-      bankIn: number;
-      bankOut: number;
-      cashBalance: number;
-      bankBalance: number;
-      totalBalance: number;
-    }[] = [];
-
-    let runningCash = Number(opening.cash || 0);
-    let runningBank = Number(opening.bank || 0);
-    let currentDay = "";
-    let dayCashIn = 0;
-    let dayCashOut = 0;
-    let dayBankIn = 0;
-    let dayBankOut = 0;
-
-    const pushDailyTotal = (day: string) => {
-      if (!day) return;
-      rows.push({
-        rowType: "daily_total",
-        id: `day-total-${day}`,
-        date: day,
-        receipt: "",
-        particulars: "နေ့စဉ်စုစုပေါင်း",
-        cashIn: dayCashIn,
-        cashOut: dayCashOut,
-        bankIn: dayBankIn,
-        bankOut: dayBankOut,
-        cashBalance: runningCash,
-        bankBalance: runningBank,
-        totalBalance: runningCash + runningBank,
-      });
-      dayCashIn = 0;
-      dayCashOut = 0;
-      dayBankIn = 0;
-      dayBankOut = 0;
-    };
-
-    rows.push({
-      rowType: "opening",
-      id: "opening-balance",
-      date: startDate.toISOString().split("T")[0],
-      receipt: "",
-      particulars: "စာရင်းဖွင့်လက်ကျန်",
-      cashIn: 0,
-      cashOut: 0,
-      bankIn: 0,
-      bankOut: 0,
-      cashBalance: runningCash,
-      bankBalance: runningBank,
-      totalBalance: runningCash + runningBank,
-    });
-
-    sorted.forEach((t: any) => {
-      const dateText = String(t?.date || "");
-      if (currentDay && dateText !== currentDay) pushDailyTotal(currentDay);
-      currentDay = dateText;
-
-      const amount = Number(t?.amount || 0);
-      let cashIn = 0;
-      let cashOut = 0;
-      let bankIn = 0;
-      let bankOut = 0;
-
-      if (t?.type === "income") {
-        if (t?.paymentMethod === "bank") bankIn = amount;
-        else cashIn = amount;
-      } else if (t?.type === "expense") {
-        if (t?.paymentMethod === "bank") bankOut = amount;
-        else cashOut = amount;
-      } else if (t?.type === "transfer") {
-        if (t?.category === "bank_deposit") {
-          cashOut = amount;
-          bankIn = amount;
-        } else if (t?.category === "bank_withdraw") {
-          bankOut = amount;
-          cashIn = amount;
-        }
-      }
-
-      runningCash += cashIn - cashOut;
-      runningBank += bankIn - bankOut;
-      dayCashIn += cashIn;
-      dayCashOut += cashOut;
-      dayBankIn += bankIn;
-      dayBankOut += bankOut;
-
-      const categoryLabel = getCategoryLabel(t.category);
-      const payerPayee = String(t.payerPayee || t.memberId || "").trim();
-      const notes = getReadableNotes(t.notes);
-      const particulars = [
-        categoryLabel,
-        payerPayee ? `အမည် - ${payerPayee}` : "",
-        notes ? `မှတ်ချက် - ${notes}` : "",
-      ]
-        .filter(Boolean)
-        .join(" | ");
-
-      rows.push({
-        rowType: "entry",
-        id: String(t.id || `${dateText}-${rows.length}`),
-        date: dateText,
-        receipt: String(t?.receiptNumber || ""),
-        particulars,
-        cashIn,
-        cashOut,
-        bankIn,
-        bankOut,
-        cashBalance: runningCash,
-        bankBalance: runningBank,
-        totalBalance: runningCash + runningBank,
-      });
-    });
-
-    pushDailyTotal(currentDay);
-    return rows;
-  }, [filteredTxns, getBalancesAt, startDate, shouldComputeCashBook]);
-
-  const cashBookSummary = useMemo(() => {
-    if (!shouldComputeCashBook) {
-      return {
-        openingCash: 0,
-        openingBank: 0,
-        closingCash: 0,
-        closingBank: 0,
-        cashIn: 0,
-        cashOut: 0,
-        bankIn: 0,
-        bankOut: 0,
-      };
-    }
-    const openingRow = cashBookRows.find((r) => r.rowType === "opening");
-    const lastRow = cashBookRows[cashBookRows.length - 1];
-    const entryRows = cashBookRows.filter((r) => r.rowType === "entry");
-    const totals = entryRows.reduce(
-      (acc, row) => {
-        acc.cashIn += row.cashIn;
-        acc.cashOut += row.cashOut;
-        acc.bankIn += row.bankIn;
-        acc.bankOut += row.bankOut;
-        return acc;
-      },
-      { cashIn: 0, cashOut: 0, bankIn: 0, bankOut: 0 }
-    );
-    return {
-      openingCash: openingRow?.cashBalance || 0,
-      openingBank: openingRow?.bankBalance || 0,
-      closingCash: lastRow?.cashBalance || 0,
-      closingBank: lastRow?.bankBalance || 0,
-      ...totals,
-    };
-  }, [cashBookRows, shouldComputeCashBook]);
+  const cashBookSummary = useMemo(
+    () =>
+      computeCashBookSummary({
+        cashBookRows,
+        shouldComputeCashBook,
+      }),
+    [cashBookRows, shouldComputeCashBook]
+  );
 
   const defaultMonthlyFeeRate = useMemo(() => {
     const monthlyRule = (standardAmountRules || []).find((row: any) => String(row?.key || "") === "monthly_fee_rate");
