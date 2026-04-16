@@ -1222,16 +1222,24 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
 export async function ensureSystemAdminPassword(): Promise<string> {
   try {
     const systemExisting = String((await systemStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
-    if (systemExisting) return systemExisting;
     const legacyExisting = String((await AsyncStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
+    if (systemExisting) {
+      // Keep legacy key aligned so old builds/cached clients don't fall back to a stale password.
+      if (legacyExisting !== systemExisting) {
+        try {
+          await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, systemExisting);
+        } catch {}
+      }
+      return systemExisting;
+    }
     if (legacyExisting) {
       await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, legacyExisting);
-      try {
-        await AsyncStorage.removeItem(SYSTEM_ADMIN_PASSWORD_KEY);
-      } catch {}
       return legacyExisting;
     }
     await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
+    try {
+      await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
+    } catch {}
     return DEFAULT_SYSTEM_ADMIN_PASSWORD;
   } catch {
     return DEFAULT_SYSTEM_ADMIN_PASSWORD;
@@ -1246,7 +1254,10 @@ export async function verifySystemAdminPassword(passwordPlaintext: string): Prom
 export async function setSystemAdminPassword(nextPassword: string): Promise<void> {
   const trimmed = String(nextPassword || "").trim();
   if (!trimmed) return;
-  await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed);
+  await Promise.all([
+    systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
+    AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
+  ]);
 }
 
 export async function changeUserPassword(userId: string, currentPassword: string, nextPassword: string): Promise<boolean> {
