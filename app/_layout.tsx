@@ -294,6 +294,11 @@ function RootLayoutNav() {
   const [licenseReason, setLicenseReason] = useState("");
   const [licenseExpiry, setLicenseExpiry] = useState("");
   const [licenseStatus, setLicenseStatus] = useState("");
+  const shouldShowLicenseModal =
+    licenseChecked &&
+    !licenseAllowed &&
+    !inAdminLogin &&
+    !isSystemAdmin;
   const [orgSetupRequired, setOrgSetupRequired] = useState<boolean | null>(null);
   const updateCheckInFlightRef = useRef(false);
   const lastActiveCheckAtRef = useRef(0);
@@ -1002,7 +1007,7 @@ function RootLayoutNav() {
         </View>
       </Modal>
 
-      <Modal transparent animationType="fade" visible={licenseChecked && !licenseAllowed}>
+      <Modal transparent animationType="fade" visible={shouldShowLicenseModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>License Inactive</Text>
