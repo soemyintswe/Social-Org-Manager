@@ -386,6 +386,17 @@ async function writeRegistryCache(cache: Record<string, RegistryCacheEntry>): Pr
   await systemStorage.setItem(REGISTRY_CACHE_KEY, JSON.stringify(cache));
 }
 
+async function removeCachedOrgRegistryEntry(orgIdInput: string): Promise<void> {
+  const orgId = normalizeOrgId(orgIdInput);
+  if (!orgId) return;
+  const cache = await readRegistryCache();
+  if (cache[orgId]) {
+    delete cache[orgId];
+    await writeRegistryCache(cache);
+  }
+  setRegistryManagedOrgConfig(orgId, null);
+}
+
 export async function cacheOrgRegistryEntry(entry: OrgRegistryEntry): Promise<void> {
   const orgId = normalizeOrgId(entry?.orgId);
   if (!orgId) return;
@@ -524,27 +535,50 @@ export async function listOrgRegistryEntries(): Promise<{ ok: boolean; entries?:
   }
 }
 
-export async function upsertOrgRegistryEntry(input: OrgRegistryEntry): Promise<{ ok: boolean; entry?: OrgRegistryEntry; reason?: string }> {
+export async function upsertOrgRegistryEntry(
+  input: OrgRegistryEntry,
+  options?: { previousOrgId?: string | null }
+): Promise<{ ok: boolean; entry?: OrgRegistryEntry; reason?: string }> {
   const orgId = normalizeOrgId(input?.orgId);
   if (!orgId) return { ok: false, reason: "missing_org_id" };
+  const previousOrgId = normalizeOrgId(options?.previousOrgId);
+  const isRename = Boolean(previousOrgId && previousOrgId !== orgId);
+
   if (Platform.OS === "web") {
     const web = await getFirestoreWeb();
     if (!web.db) return { ok: false, reason: web.reason || "firestore_unavailable" };
     try {
-      const { doc, getDoc, setDoc } = await import("firebase/firestore");
+      const { doc, getDoc, setDoc, deleteDoc } = await import("firebase/firestore");
       const docRef = doc(web.db, REGISTRY_COLLECTION, orgId);
       const existing = await getDoc(docRef);
+      let sourceCreatedAt = existing.exists() ? (existing.data() as any)?.createdAt : undefined;
+      let previousDocRef: any = null;
+
+      if (isRename) {
+        if (existing.exists()) {
+          return { ok: false, reason: "target_org_id_exists" };
+        }
+        previousDocRef = doc(web.db, REGISTRY_COLLECTION, previousOrgId);
+        const previousSnapshot = await getDoc(previousDocRef);
+        if (previousSnapshot.exists()) {
+          sourceCreatedAt = (previousSnapshot.data() as any)?.createdAt || sourceCreatedAt;
+        }
+      }
+
       const now = new Date().toISOString();
       const normalized = normalizeRegistryEntry(input, orgId);
-      const existingCreatedAt = existing.exists() ? (existing.data() as any)?.createdAt : undefined;
       const payload: OrgRegistryEntry = {
         ...normalized,
         orgId,
-        createdAt: String(existingCreatedAt || normalized.createdAt || now),
+        createdAt: String(sourceCreatedAt || normalized.createdAt || now),
         updatedAt: now,
       };
       const cleanedPayload = stripUndefined(payload);
       await setDoc(docRef, cleanedPayload, { merge: true });
+      if (isRename && previousDocRef) {
+        await deleteDoc(previousDocRef);
+        await removeCachedOrgRegistryEntry(previousOrgId);
+      }
       await cacheOrgRegistryEntry(payload);
       return { ok: true, entry: payload };
     } catch (error: any) {
@@ -559,20 +593,69 @@ export async function upsertOrgRegistryEntry(input: OrgRegistryEntry): Promise<{
     const db = firestoreFactory();
     const docRef = db.collection(REGISTRY_COLLECTION).doc(orgId);
     const existing = await docRef.get();
+    let sourceCreatedAt = existing?.data?.()?.createdAt;
+    let previousDocRef: any = null;
+
+    if (isRename) {
+      if (existing?.exists) {
+        return { ok: false, reason: "target_org_id_exists" };
+      }
+      previousDocRef = db.collection(REGISTRY_COLLECTION).doc(previousOrgId);
+      const previousSnapshot = await previousDocRef.get();
+      if (previousSnapshot?.exists) {
+        sourceCreatedAt = previousSnapshot?.data?.()?.createdAt || sourceCreatedAt;
+      }
+    }
+
     const now = new Date().toISOString();
     const normalized = normalizeRegistryEntry(input, orgId);
     const payload: OrgRegistryEntry = {
       ...normalized,
       orgId,
-      createdAt: String(existing?.data?.()?.createdAt || normalized.createdAt || now),
+      createdAt: String(sourceCreatedAt || normalized.createdAt || now),
       updatedAt: now,
     };
     const cleanedPayload = stripUndefined(payload);
     await docRef.set(cleanedPayload, { merge: true });
+    if (isRename && previousDocRef) {
+      await previousDocRef.delete();
+      await removeCachedOrgRegistryEntry(previousOrgId);
+    }
     await cacheOrgRegistryEntry(payload);
     return { ok: true, entry: payload };
   } catch (error: any) {
     return { ok: false, reason: String(error?.message || "registry_upsert_failed") };
+  }
+}
+
+export async function deleteOrgRegistryEntry(orgIdInput: string): Promise<{ ok: boolean; reason?: string }> {
+  const orgId = normalizeOrgId(orgIdInput);
+  if (!orgId) return { ok: false, reason: "missing_org_id" };
+
+  if (Platform.OS === "web") {
+    const web = await getFirestoreWeb();
+    if (!web.db) return { ok: false, reason: web.reason || "firestore_unavailable" };
+    try {
+      const { doc, deleteDoc } = await import("firebase/firestore");
+      const docRef = doc(web.db, REGISTRY_COLLECTION, orgId);
+      await deleteDoc(docRef);
+      await removeCachedOrgRegistryEntry(orgId);
+      return { ok: true };
+    } catch (error: any) {
+      return { ok: false, reason: String(error?.message || "registry_delete_failed") };
+    }
+  }
+
+  const firestoreFactory = getFirestoreFactory();
+  if (!firestoreFactory) return { ok: false, reason: "firestore_unavailable" };
+
+  try {
+    const db = firestoreFactory();
+    await db.collection(REGISTRY_COLLECTION).doc(orgId).delete();
+    await removeCachedOrgRegistryEntry(orgId);
+    return { ok: true };
+  } catch (error: any) {
+    return { ok: false, reason: String(error?.message || "registry_delete_failed") };
   }
 }
 

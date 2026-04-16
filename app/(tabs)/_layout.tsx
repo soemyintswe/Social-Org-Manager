@@ -1,5 +1,5 @@
 // import { useAuth } from "../../lib/AuthContext";
-import { Redirect, Tabs } from "expo-router";
+import { Redirect, Tabs, useSegments } from "expo-router";
 import React from "react";
 import { ActivityIndicator, View } from "react-native";
 // လမ်းကြောင်းကို Folder တစ်ဆင့်ပဲ ပြန်ထွက်ရန် ပြင်ဆင်ထားသည်
@@ -7,6 +7,10 @@ import { useAuth } from "../../lib/AuthContext";
 
 export default function TabLayout() {
   const { loading, isAuthenticated } = useAuth();
+  const segments = useSegments();
+  const rootSegment = String(segments[0] || "");
+  const childSegment = String(segments[1] || "");
+  const inSystemTab = (rootSegment === "(tabs)" && childSegment === "system") || rootSegment === "system";
 
   if (loading) {
     return (
@@ -17,7 +21,7 @@ export default function TabLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Redirect href="/sign-in" />;
+    return <Redirect href={inSystemTab ? "/admin-sign-in" : "/sign-in"} />;
   }
 
   return (

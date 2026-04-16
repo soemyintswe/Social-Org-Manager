@@ -14,6 +14,7 @@ import { clearAllLocalDataKeepSystemConfig } from "../../lib/storage-service";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "../../lib/app-update";
 import {
   buildOrgRegistryEntry,
+  deleteOrgRegistryEntry,
   fetchOrgRegistryEntry,
   generateOrgChairPassword,
   listOrgRegistryEntries,
@@ -84,6 +85,7 @@ export default function SystemScreen() {
   const [registryListError, setRegistryListError] = React.useState("");
   const [registryListInfo, setRegistryListInfo] = React.useState("");
   const [registrySelectedOrgId, setRegistrySelectedOrgId] = React.useState<string | null>(null);
+  const [deletingRegistryOrgId, setDeletingRegistryOrgId] = React.useState<string | null>(null);
   const [showRegistryForm, setShowRegistryForm] = React.useState(false);
   const [registryDetailEntry, setRegistryDetailEntry] = React.useState<OrgRegistryEntry | null>(null);
   const registryListLoadingRef = React.useRef(false);
@@ -404,9 +406,63 @@ export default function SystemScreen() {
     };
   };
 
+  const confirmDeleteRegistry = async (orgId: string): Promise<boolean> => {
+    if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+      return window.confirm(`${orgId} ကို Registry မှ ဖျက်မည်လား?\n\nဒီအချက်အလက်ကို ပြန်ယူဖို့ Firestore history မရှိလျှင် မရနိုင်ပါ။`);
+    }
+    return await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        "Delete Org Registry",
+        `${orgId} ကို Registry မှ ဖျက်မည်လား?\nဒီအချက်အလက်ကို ပြန်ယူဖို့ Firestore history မရှိလျှင် မရနိုင်ပါ။`,
+        [
+          { text: "မဖျက်ပါ", style: "cancel", onPress: () => resolve(false) },
+          { text: "ဖျက်မည်", style: "destructive", onPress: () => resolve(true) },
+        ]
+      );
+    });
+  };
+
+  const handleDeleteRegistry = async (entry?: OrgRegistryEntry | null) => {
+    if (!canManageSystem || !entry || deletingRegistryOrgId) return;
+    const orgId = String(entry.orgId || "").trim().toUpperCase();
+    if (!orgId) return;
+
+    const confirmed = await confirmDeleteRegistry(orgId);
+    if (!confirmed) return;
+
+    try {
+      setDeletingRegistryOrgId(orgId);
+      setRegistryStatus("info", `${orgId} ကို ဖျက်နေပါသည်...`);
+      const result = await deleteOrgRegistryEntry(orgId);
+      if (!result.ok) {
+        const msg =
+          result.reason === "firebase_web_not_configured"
+            ? "Firebase Web Config မရှိပါ။"
+            : result.reason === "firestore_unavailable"
+              ? "Firestore မချိတ်ဆက်နိုင်ပါ။"
+              : `ဖျက်ရာတွင် အမှားဖြစ်နေပါသည်။ ${result.reason || ""}`;
+        setRegistryStatus("error", msg);
+        Alert.alert("Registry", msg);
+        return;
+      }
+
+      setRegistryList((prev) => prev.filter((item) => item.orgId !== orgId));
+      if (registrySelectedOrgId === orgId) setRegistrySelectedOrgId(null);
+      if (registryDetailEntry?.orgId === orgId) setRegistryDetailEntry(null);
+      if (String(registryOrgId || "").trim().toUpperCase() === orgId) setShowRegistryForm(false);
+      setRegistryStatus("success", `${orgId} ကို Registry မှ ဖျက်ပြီးပါပြီ။`);
+      void handleLoadRegistryList();
+    } catch {
+      setRegistryStatus("error", "Registry ဖျက်ရာတွင် အမှားဖြစ်နေပါသည်။");
+      Alert.alert("Registry", "Registry ဖျက်ရာတွင် အမှားဖြစ်နေပါသည်။");
+    } finally {
+      setDeletingRegistryOrgId(null);
+    }
+  };
+
   const handleSaveRegistry = async () => {
     if (!canManageSystem || savingRegistry) return;
-    const orgId = registryOrgId.trim();
+    const orgId = registryOrgId.trim().toUpperCase();
     const orgName = registryOrgName.trim();
     const orgLocation = registryOrgLocation.trim();
     const orgEmail = registryOrgEmail.trim();
@@ -426,6 +482,8 @@ export default function SystemScreen() {
     const chairName = registryChairName.trim();
     const chairEmail = registryChairEmail.trim();
     const chairPhone = registryChairPhone.trim();
+    const previousOrgId = String(registrySelectedOrgId || "").trim().toUpperCase();
+    const isRename = Boolean(previousOrgId && previousOrgId !== orgId);
 
     if (!orgId) {
       Alert.alert("လိုအပ်ချက်", "Org ID ကိုဖြည့်ပါ။");
@@ -483,6 +541,24 @@ export default function SystemScreen() {
       Alert.alert("လိုအပ်ချက်", msg);
       return;
     }
+    if (isRename) {
+      const confirmed = await (async () => {
+        if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+          return window.confirm(`${previousOrgId} ကို ${orgId} သို့ ပြောင်းမည်လား?`);
+        }
+        return await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "Org ID ပြောင်းမည်",
+            `${previousOrgId} ကို ${orgId} သို့ ပြောင်းမည်လား?`,
+            [
+              { text: "မပြောင်းပါ", style: "cancel", onPress: () => resolve(false) },
+              { text: "ပြောင်းမည်", onPress: () => resolve(true) },
+            ]
+          );
+        });
+      })();
+      if (!confirmed) return;
+    }
 
     try {
       setSavingRegistry(true);
@@ -517,19 +593,27 @@ export default function SystemScreen() {
         chairPassword: password,
         chairPasswordUpdatedAt: new Date().toISOString(),
       });
-      const result = await upsertOrgRegistryEntry(entry);
+      const result = await upsertOrgRegistryEntry(entry, {
+        previousOrgId: isRename ? previousOrgId : undefined,
+      });
       if (!result.ok || !result.entry) {
         const msg =
           result.reason === "firebase_web_not_configured"
             ? "Firebase Web Config မရှိပါ။ .env မှာ EXPO_PUBLIC_FIREBASE_CONFIG_JSON သို့မဟုတ် EXPO_PUBLIC_FIREBASE_API_KEY/PROJECT_ID/APP_ID ထည့်ပါ။"
             : result.reason === "firestore_unavailable"
               ? "Firestore မချိတ်ဆက်နိုင်ပါ။ Web build ဖြစ်နိုင်ပါတယ်။"
+              : result.reason === "target_org_id_exists"
+                ? `Target Org ID (${orgId}) ရှိပြီးသားဖြစ်နေပါသည်။ Org ID အသစ်တစ်ခု သုံးပါ။`
               : `သိမ်းဆည်းရာတွင် အမှားဖြစ်နေပါသည်။ ${result.reason || ""}`;
         setRegistryStatus("error", msg);
         Alert.alert("Registry", msg);
         return;
       }
       populateRegistryForm(result.entry);
+      setRegistrySelectedOrgId(result.entry.orgId);
+      if (registryDetailEntry?.orgId === previousOrgId || registryDetailEntry?.orgId === result.entry.orgId) {
+        setRegistryDetailEntry(result.entry);
+      }
       const messageBody =
         `Org Registry Credentials\n` +
         `Org ID: ${result.entry.orgId}\n` +
@@ -778,6 +862,18 @@ export default function SystemScreen() {
                           >
                             <Text style={styles.registryListUseButtonText}>Edit</Text>
                           </Pressable>
+                        <Pressable
+                          style={[
+                            styles.registryListDeleteButton,
+                            deletingRegistryOrgId === entry.orgId && styles.registryListDeleteButtonDisabled,
+                          ]}
+                          onPress={() => void handleDeleteRegistry(entry)}
+                          disabled={Boolean(deletingRegistryOrgId)}
+                        >
+                          <Text style={styles.registryListDeleteButtonText}>
+                            {deletingRegistryOrgId === entry.orgId ? "Deleting..." : "Delete"}
+                          </Text>
+                        </Pressable>
                         </View>
                       </View>
                     </View>
@@ -808,6 +904,18 @@ export default function SystemScreen() {
                   <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Deny Expiry:</Text> {formatDateForDisplay(registryDetailEntry.license.denyExpiryDate || "") || "-"}</Text>
                   <Text style={styles.registryDetailLine}><Text style={styles.registryDetailLabel}>Chair:</Text> {registryDetailEntry.chair.name}</Text>
                   <View style={styles.registryDetailActions}>
+                    <Pressable
+                      style={[
+                        styles.registryDetailDeleteButton,
+                        deletingRegistryOrgId === registryDetailEntry.orgId && styles.registryListDeleteButtonDisabled,
+                      ]}
+                      onPress={() => void handleDeleteRegistry(registryDetailEntry)}
+                      disabled={Boolean(deletingRegistryOrgId)}
+                    >
+                      <Text style={styles.registryDetailDeleteButtonText}>
+                        {deletingRegistryOrgId === registryDetailEntry.orgId ? "Deleting..." : "Delete This Org"}
+                      </Text>
+                    </Pressable>
                     <Pressable
                       style={styles.registryDetailEditButton}
                       onPress={() => {
@@ -1332,7 +1440,7 @@ const styles = StyleSheet.create({
   registryListColPhone: { width: 120 },
   registryListColStatus: { width: 70 },
   registryListColExpiry: { width: 110 },
-  registryListColAction: { width: 190, alignItems: "flex-end" },
+  registryListColAction: { width: 260, alignItems: "flex-end" },
   registryListActionRow: {
     flexDirection: "row",
     gap: 6,
@@ -1373,6 +1481,22 @@ const styles = StyleSheet.create({
   registryListUseButtonText: {
     fontSize: 11,
     color: "#fff",
+    fontFamily: "Inter_700Bold",
+  },
+  registryListDeleteButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#FEE2E2",
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+  },
+  registryListDeleteButtonDisabled: {
+    opacity: 0.6,
+  },
+  registryListDeleteButtonText: {
+    fontSize: 11,
+    color: "#B91C1C",
     fontFamily: "Inter_700Bold",
   },
   registryListLoadingRow: {
@@ -1448,6 +1572,20 @@ const styles = StyleSheet.create({
     marginTop: 8,
     flexDirection: "row",
     justifyContent: "flex-end",
+    gap: 8,
+  },
+  registryDetailDeleteButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+    backgroundColor: "#FEE2E2",
+  },
+  registryDetailDeleteButtonText: {
+    fontSize: 12,
+    color: "#B91C1C",
+    fontFamily: "Inter_700Bold",
   },
   registryDetailEditButton: {
     paddingHorizontal: 14,

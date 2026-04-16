@@ -249,12 +249,14 @@ function RootLayoutNav() {
   const insets = useSafeAreaInsets();
   const segments = useSegments();
   const router = useRouter();
-  const inLogin = (segments[0] as string) === "sign-in";
-  const inAdminLogin = (segments[0] as string) === "admin-sign-in";
+  const rootSegment = String(segments[0] || "");
+  const childSegment = String(segments[1] || "");
+  const inLogin = rootSegment === "sign-in";
+  const inAdminLogin = rootSegment === "admin-sign-in";
   const inAnyLogin = inLogin || inAdminLogin;
-  const inOrgIdRoute = (segments[0] as string) === "[orgId]";
-  const inOrgConnect = (segments[0] as string) === "org-connect";
-  const inSystemRoute = (segments[0] as string) === "(tabs)" && (segments[1] as string) === "system";
+  const inOrgIdRoute = rootSegment === "[orgId]";
+  const inOrgConnect = rootSegment === "org-connect";
+  const inSystemRoute = (rootSegment === "(tabs)" && childSegment === "system") || rootSegment === "system";
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const isLocalhost =
     Platform.OS === "web" &&
@@ -396,7 +398,11 @@ function RootLayoutNav() {
     }
 
     if (!isAuthenticated && !inAnyLogin && !inOrgIdRoute && !(inOrgConnect && allowOrgConnect)) {
-      router.replace("/sign-in" as any);
+      if (inSystemRoute) {
+        router.replace("/admin-sign-in" as any);
+      } else {
+        router.replace("/sign-in" as any);
+      }
       return;
     }
     if (isAuthenticated && (inAnyLogin || inOrgIdRoute)) {
@@ -407,15 +413,13 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (loading || !isAuthenticated || !isSystemAdmin || inAnyLogin) return;
-    const rootSegment = String(segments[0] || "");
-    const childSegment = String(segments[1] || "");
     const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
     const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
     const isAdminAccountSettings = rootSegment === "account-settings";
     if (isAdminHome || isAdminSystem || isAdminAccountSettings) return;
     if (inOrgConnect && canViewOrgConnect) return;
     router.replace("/" as any);
-  }, [segments, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect]);
+  }, [rootSegment, childSegment, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect]);
 
   useEffect(() => {
     if (loading || Platform.OS === "web" || !isAuthenticated || inAnyLogin) return;
