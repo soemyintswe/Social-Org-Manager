@@ -14,15 +14,15 @@ import {
   Platform,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import orgStorage from "../../lib/org-storage";
+import orgStorage from "../lib/org-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
-import { useAuth } from "../../lib/AuthContext";
-import AccessDenied from "../../components/AccessDenied";
-import { CATEGORY_LABELS, TransactionCategory } from "../../lib/types";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
+import { useAuth } from "../lib/AuthContext";
+import AccessDenied from "../components/AccessDenied";
+import { CATEGORY_LABELS, TransactionCategory } from "../lib/types";
 
 const AsyncStorage = orgStorage;
 

@@ -22,17 +22,17 @@ import {
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import orgStorage, { persistOrgStorageContext, restoreOrgStorageContext } from "../../lib/org-storage";
-import { ErrorBoundary } from "../../components/ErrorBoundary";
-import FloatingTabMenu from "../../components/FloatingTabMenu";
-import { queryClient } from "../../lib/query-client";
-import { DataProvider } from "../../lib/DataContext";
-import { AuthProvider, useAuth } from "../../lib/AuthContext";
-import Colors from "../../constants/colors";
-import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "../../lib/app-update";
-import { initializeRemoteConfig, prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../../lib/remote-config";
-import { verifyDeviceAuthorization } from "../../lib/device-authorization";
-import { ensureOrgLicenseActive, hydrateRegistryManagedConfig } from "../../lib/org-registry";
+import orgStorage, { persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
+import { ErrorBoundary } from "../components/ErrorBoundary";
+import FloatingTabMenu from "../components/FloatingTabMenu";
+import { queryClient } from "../lib/query-client";
+import { DataProvider } from "../lib/DataContext";
+import { AuthProvider, useAuth } from "../lib/AuthContext";
+import Colors from "../constants/colors";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "../lib/app-update";
+import { initializeRemoteConfig, prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
+import { verifyDeviceAuthorization } from "../lib/device-authorization";
+import { ensureOrgLicenseActive, hydrateRegistryManagedConfig } from "../lib/org-registry";
 import {
   checkCloudSyncHealth,
   checkLanSyncHealth,
@@ -44,7 +44,7 @@ import {
   pushCloudSnapshotFromLocalDetailed,
   pushLanSnapshotFromLocalDetailed,
   saveAccountSettings,
-} from "../../lib/storage-service";
+} from "../lib/storage-service";
 import {
   useFonts,
   Inter_400Regular,

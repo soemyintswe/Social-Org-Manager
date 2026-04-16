@@ -12,11 +12,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import Colors from "../../constants/colors";
-import { ensureChairAccountFromRegistry, getAccountSettings, saveAccountSettings } from "../../lib/storage-service";
-import { persistOrgStorageContext } from "../../lib/org-storage";
-import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../../lib/remote-config";
-import { verifyOrgRegistryCredentials } from "../../lib/org-registry";
+import Colors from "../constants/colors";
+import { ensureChairAccountFromRegistry, getAccountSettings, saveAccountSettings } from "../lib/storage-service";
+import { persistOrgStorageContext } from "../lib/org-storage";
+import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
+import { verifyOrgRegistryCredentials } from "../lib/org-registry";
 
 export default function OrgConnectScreen() {
   const router = useRouter();

@@ -14,9 +14,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import Colors from "../../constants/colors";
-import { clearAllLocalDataKeepSystemConfig, exportData, restoreData } from "../../lib/storage-service";
-import { useData } from "../../lib/DataContext";
+import Colors from "../constants/colors";
+import { clearAllLocalDataKeepSystemConfig, exportData, restoreData } from "../lib/storage-service";
+import { useData } from "../lib/DataContext";
 
 export default function ImportMembersScreen() {
   const insets = useSafeAreaInsets();

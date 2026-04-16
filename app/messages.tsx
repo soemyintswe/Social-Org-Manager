@@ -17,10 +17,10 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "../../constants/colors";
-import { useAuth } from "../../lib/AuthContext";
-import { useData } from "../../lib/DataContext";
-import { useKeyboardInset } from "../../lib/use-keyboard-inset";
+import Colors from "../constants/colors";
+import { useAuth } from "../lib/AuthContext";
+import { useData } from "../lib/DataContext";
+import { useKeyboardInset } from "../lib/use-keyboard-inset";
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();

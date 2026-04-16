@@ -1,17 +1,17 @@
 
-import orgStorage from "../../lib/org-storage";
+import orgStorage from "../lib/org-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import AccessDenied from "../../components/AccessDenied";
-import Colors from "../../constants/colors";
-import { useAuth } from "../../lib/AuthContext";
-import { useData } from "../../lib/DataContext";
-import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "../../lib/relation-options";
-import { useKeyboardInset } from "../../lib/use-keyboard-inset";
-import { normalizeOrgPosition, type ExpenseClaim, type StandardAmountChangeRequest, type StandardAmountRule } from "../../lib/types";
+import AccessDenied from "../components/AccessDenied";
+import Colors from "../constants/colors";
+import { useAuth } from "../lib/AuthContext";
+import { useData } from "../lib/DataContext";
+import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "../lib/relation-options";
+import { useKeyboardInset } from "../lib/use-keyboard-inset";
+import { normalizeOrgPosition, type ExpenseClaim, type StandardAmountChangeRequest, type StandardAmountRule } from "../lib/types";
 
 const AsyncStorage = orgStorage;
 

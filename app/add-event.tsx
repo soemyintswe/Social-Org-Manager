@@ -14,8 +14,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
 
 export default function AddEventScreen() {
   const insets = useSafeAreaInsets();

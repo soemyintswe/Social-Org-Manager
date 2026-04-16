@@ -16,12 +16,12 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import Colors from "../../constants/colors";
-import AccessDenied from "../../components/AccessDenied";
-import { useData } from "../../lib/DataContext";
-import { useAuth } from "../../lib/AuthContext";
-import { normalizeOrgPosition, type AuditChangeRequestStatus, type AuditChangeWorkflowStage } from "../../lib/types";
-import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS } from "../../lib/finance-categories";
+import Colors from "../constants/colors";
+import AccessDenied from "../components/AccessDenied";
+import { useData } from "../lib/DataContext";
+import { useAuth } from "../lib/AuthContext";
+import { normalizeOrgPosition, type AuditChangeRequestStatus, type AuditChangeWorkflowStage } from "../lib/types";
+import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS } from "../lib/finance-categories";
 
 const STATUS_ORDER: AuditChangeRequestStatus[] = ["pending", "suspended", "approved", "rejected", "cancelled"];
 type DraftRoleKey = "treasurer" | "auditor" | "chairperson";

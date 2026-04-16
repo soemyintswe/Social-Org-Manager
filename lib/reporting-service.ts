@@ -1,6 +1,6 @@
-﻿import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "../../lib/transaction-display";
-import { toEnglishDigits } from "../../lib/member-utils";
-import { normalizeMemberStatus, normalizeOrgPosition, type OrgPosition, type MemberStatus } from "../../lib/types";
+import { getLocalizedTransactionCategoryLabel, stripTechnicalNoteText } from "./transaction-display";
+import { toEnglishDigits } from "./member-utils";
+import { normalizeMemberStatus, normalizeOrgPosition, type OrgPosition, type MemberStatus } from "./types";
 
 export const EXECUTIVE_POSITIONS = [
   "patron",

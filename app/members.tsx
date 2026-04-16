@@ -15,9 +15,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
-import { useAuth } from "../../lib/AuthContext";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
+import { useAuth } from "../lib/AuthContext";
 import {
   MEMBER_GENDER_LABELS,
   MEMBER_STATUS_LABELS,
@@ -27,10 +27,10 @@ import {
   ORG_POSITION_LABELS,
   type Member,
   type MemberStatus,
-} from "../../lib/types";
-import AccessDenied from "../../components/AccessDenied";
+} from "../lib/types";
+import AccessDenied from "../components/AccessDenied";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
-import { formatPhoneForDisplay, parseGregorianDate } from "../../lib/member-utils";
+import { formatPhoneForDisplay, parseGregorianDate } from "../lib/member-utils";
 
 type SortOption = "id" | "name" | "joinDate" | "dob" | "age";
 type MemberListItem = Member & { profileImage?: string };

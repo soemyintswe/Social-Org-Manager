@@ -3,11 +3,11 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
-import { useAuth } from "../../lib/AuthContext";
-import { normalizeOrgPosition } from "../../lib/types";
-import { isCommitteePosition } from "../../lib/access-control";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
+import { useAuth } from "../lib/AuthContext";
+import { normalizeOrgPosition } from "../lib/types";
+import { isCommitteePosition } from "../lib/access-control";
 
 const formatDateTime = (value?: string) => {
   if (!value) return "";

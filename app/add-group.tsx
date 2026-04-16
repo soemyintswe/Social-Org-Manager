@@ -14,8 +14,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
 
 const GROUP_COLORS = [
   "#0D9488", "#3B82F6", "#8B5CF6", "#F43F5E",

@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import * as Application from "expo-application";
-import { getAccountSettings } from "../../lib/storage-service";
-import { getAppUpdateJsonUrl } from "../../lib/remote-config";
+import { getAccountSettings } from "./storage-service";
+import { getAppUpdateJsonUrl } from "./remote-config";
 
 export type AppUpdateInfo = {
   ok: boolean;

@@ -1,4 +1,4 @@
-import orgStorage from "../../lib/org-storage";
+import orgStorage from "../lib/org-storage";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { router, useLocalSearchParams } from "expo-router";
@@ -21,12 +21,12 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import AccessDenied from "../../components/AccessDenied";
-import Colors from "../../constants/colors";
-import { useAuth } from "../../lib/AuthContext";
-import { useData } from "../../lib/DataContext";
-import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "../../lib/relation-options";
-import { useKeyboardInset } from "../../lib/use-keyboard-inset";
+import AccessDenied from "../components/AccessDenied";
+import Colors from "../constants/colors";
+import { useAuth } from "../lib/AuthContext";
+import { useData } from "../lib/DataContext";
+import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "../lib/relation-options";
+import { useKeyboardInset } from "../lib/use-keyboard-inset";
 
 const AsyncStorage = orgStorage;
 

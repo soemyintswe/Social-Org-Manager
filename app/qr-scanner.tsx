@@ -4,10 +4,10 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import orgStorage from "../../lib/org-storage";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
-import { MEMBER_STATUS_LABELS, normalizeMemberStatus } from "../../lib/types";
+import orgStorage from "../lib/org-storage";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
+import { MEMBER_STATUS_LABELS, normalizeMemberStatus } from "../lib/types";
 
 const AsyncStorage = orgStorage;
 

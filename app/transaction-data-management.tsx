@@ -20,10 +20,10 @@ import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import Colors from "../../constants/colors";
-import { useData } from "../../lib/DataContext";
-import { getTransactions, importTransactions, saveTransactions } from "../../lib/storage-service";
-import { secureRandomToken } from "../../lib/secure-random";
+import Colors from "../constants/colors";
+import { useData } from "../lib/DataContext";
+import { getTransactions, importTransactions, saveTransactions } from "../lib/storage-service";
+import { secureRandomToken } from "../lib/secure-random";
 
 const TXN_AUTO_BACKUP_FILE = "transactions_auto_backup.json";
 const LEGACY_AUTO_BACKUP_FILE = "auto_backup.json";

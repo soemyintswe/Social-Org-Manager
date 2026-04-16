@@ -18,9 +18,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import QRCode from "react-native-qrcode-svg";
-import Colors from "../../constants/colors";
-import { exportData, mergeData, restoreData, sanitizeExportForLanSync } from "../../lib/storage-service";
-import { useData } from "../../lib/DataContext";
+import Colors from "../constants/colors";
+import { exportData, mergeData, restoreData, sanitizeExportForLanSync } from "../lib/storage-service";
+import { useData } from "../lib/DataContext";
 
 const TRANSFER_TYPE = "org_hub_transfer_v1";
 const QR_PREFIX = "ORGHUBSYNC1";
