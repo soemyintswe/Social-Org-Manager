@@ -251,12 +251,27 @@ function RootLayoutNav() {
   const router = useRouter();
   const rootSegment = String(segments[0] || "");
   const childSegment = String(segments[1] || "");
+  const webPathname =
+    Platform.OS === "web" && typeof window !== "undefined"
+      ? String(window.location.pathname || "").trim().toLowerCase()
+      : "";
+  const webSystemPath =
+    !!webPathname &&
+    (webPathname === "/system" || webPathname === "/system/" || webPathname.endsWith("/system") || webPathname.endsWith("/system/"));
+  const webAdminLoginPath =
+    !!webPathname &&
+    (webPathname === "/admin-sign-in" ||
+      webPathname === "/admin-sign-in/" ||
+      webPathname.endsWith("/admin-sign-in") ||
+      webPathname.endsWith("/admin-sign-in/"));
+  const routeReady = Boolean(rootSegment) || webSystemPath || webAdminLoginPath;
   const inLogin = rootSegment === "sign-in";
   const inAdminLogin = rootSegment === "admin-sign-in";
   const inAnyLogin = inLogin || inAdminLogin;
   const inOrgIdRoute = rootSegment === "[orgId]";
   const inOrgConnect = rootSegment === "org-connect";
   const inSystemRoute = (rootSegment === "(tabs)" && childSegment === "system") || rootSegment === "system";
+  const isAdminEntryRoute = inAdminLogin || inSystemRoute || webSystemPath || webAdminLoginPath;
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const isLocalhost =
     Platform.OS === "web" &&
@@ -387,9 +402,10 @@ function RootLayoutNav() {
   useEffect(() => {
     if (loading) return;
     if (orgSetupRequired === null) return;
+    if (!routeReady) return;
 
     if (orgSetupRequired) {
-      if (!isSystemAdmin && !isLocalhost && !inSystemRoute && !inAdminLogin && !inOrgIdRoute) {
+      if (!isAdminEntryRoute && !isSystemAdmin && !isLocalhost && !inOrgIdRoute) {
         if (!inOrgConnect) {
           router.replace("/org-connect" as any);
         }
@@ -398,7 +414,7 @@ function RootLayoutNav() {
     }
 
     if (!isAuthenticated && !inAnyLogin && !inOrgIdRoute && !(inOrgConnect && allowOrgConnect)) {
-      if (inSystemRoute) {
+      if (isAdminEntryRoute) {
         router.replace("/admin-sign-in" as any);
       } else {
         router.replace("/sign-in" as any);
@@ -409,7 +425,7 @@ function RootLayoutNav() {
       if (allowOrgConnect) return;
       router.replace(isSystemAdmin ? ("/system" as any) : ("/" as any));
     }
-  }, [isAuthenticated, isLocalhost, isSystemAdmin, inSystemRoute, loading, inAnyLogin, inAdminLogin, inOrgIdRoute, inOrgConnect, orgSetupRequired, router, allowOrgConnect]);
+  }, [isAuthenticated, isLocalhost, isSystemAdmin, isAdminEntryRoute, loading, inAnyLogin, inOrgIdRoute, inOrgConnect, orgSetupRequired, router, allowOrgConnect, routeReady]);
 
   useEffect(() => {
     if (loading || !isAuthenticated || !isSystemAdmin || inAnyLogin) return;

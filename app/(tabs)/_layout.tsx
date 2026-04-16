@@ -1,7 +1,7 @@
 // import { useAuth } from "../../lib/AuthContext";
 import { Redirect, Tabs, useSegments } from "expo-router";
 import React from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Platform, View } from "react-native";
 // လမ်းကြောင်းကို Folder တစ်ဆင့်ပဲ ပြန်ထွက်ရန် ပြင်ဆင်ထားသည်
 import { useAuth } from "../../lib/AuthContext";
 
@@ -10,7 +10,14 @@ export default function TabLayout() {
   const segments = useSegments();
   const rootSegment = String(segments[0] || "");
   const childSegment = String(segments[1] || "");
-  const inSystemTab = (rootSegment === "(tabs)" && childSegment === "system") || rootSegment === "system";
+  const webPathname =
+    Platform.OS === "web" && typeof window !== "undefined"
+      ? String(window.location.pathname || "").trim().toLowerCase()
+      : "";
+  const webSystemPath =
+    !!webPathname &&
+    (webPathname === "/system" || webPathname === "/system/" || webPathname.endsWith("/system") || webPathname.endsWith("/system/"));
+  const inSystemTab = (rootSegment === "(tabs)" && childSegment === "system") || rootSegment === "system" || webSystemPath;
 
   if (loading) {
     return (
