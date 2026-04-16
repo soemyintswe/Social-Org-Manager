@@ -1,6 +1,8 @@
+// import { useAuth } from "../../lib/AuthContext";
 import { Redirect, Tabs } from "expo-router";
 import React from "react";
 import { ActivityIndicator, View } from "react-native";
+// လမ်းကြောင်းကို Folder တစ်ဆင့်ပဲ ပြန်ထွက်ရန် ပြင်ဆင်ထားသည်
 import { useAuth } from "../../lib/AuthContext";
 
 export default function TabLayout() {
@@ -29,4 +31,3 @@ export default function TabLayout() {
     </View>
   );
 }
-
