@@ -1,4 +1,5 @@
 import orgStorage, { systemStorage } from "./org-storage";
+import NativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
@@ -63,6 +64,7 @@ import { computeSnapshotHash, verifySnapshotHash } from "./sync-integrity";
 import { runWithRetry } from "./sync-queue";
 
 const AsyncStorage = orgStorage;
+const RawAsyncStorage = NativeAsyncStorage;
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -98,8 +100,11 @@ const EXTRA_SHARED_KEYS = [
 ] as const;
 
 const APP_STORAGE_PREFIX = "@orghub_";
+const ORG_STORAGE_PREFIX = "@orgdb:";
+const SYSTEM_STORAGE_PREFIX = "@sysdb:";
 const SHARED_EXTRA_KEY_PREFIXES = ["@org_notice_custom_"] as const;
 const SYSTEM_ADMIN_PASSWORD_KEY = "@orghub_system_admin_password";
+const SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY = "__orghub_system_admin_password_web_v1";
 const DEFAULT_SYSTEM_ADMIN_PASSWORD = "Admin";
 
 const BACKUP_EXCLUDED_KEYS = new Set<string>([
@@ -1221,26 +1226,54 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
 }
 
 export async function ensureSystemAdminPassword(): Promise<string> {
+  const readWebMirror = (): string => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return "";
+    try {
+      return String(window.localStorage?.getItem(SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY) || "").trim();
+    } catch {
+      return "";
+    }
+  };
+  const writeWebMirror = (password: string): void => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    try {
+      if (password) {
+        window.localStorage?.setItem(SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY, password);
+      } else {
+        window.localStorage?.removeItem(SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   try {
     const systemExisting = String((await systemStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
     const legacyExisting = String((await AsyncStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
-    if (systemExisting) {
+    const webMirrorExisting = readWebMirror();
+    const resolved = systemExisting || webMirrorExisting || legacyExisting;
+    if (resolved) {
       // Keep legacy key aligned so old builds/cached clients don't fall back to a stale password.
-      if (legacyExisting !== systemExisting) {
+      if (legacyExisting !== resolved) {
         try {
-          await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, systemExisting);
+          await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, resolved);
         } catch {}
       }
-      return systemExisting;
-    }
-    if (legacyExisting) {
-      await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, legacyExisting);
-      return legacyExisting;
+      if (systemExisting !== resolved) {
+        try {
+          await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, resolved);
+        } catch {}
+      }
+      if (webMirrorExisting !== resolved) {
+        writeWebMirror(resolved);
+      }
+      return resolved;
     }
     await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
     try {
       await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
     } catch {}
+    writeWebMirror(DEFAULT_SYSTEM_ADMIN_PASSWORD);
     return DEFAULT_SYSTEM_ADMIN_PASSWORD;
   } catch {
     return DEFAULT_SYSTEM_ADMIN_PASSWORD;
@@ -1259,6 +1292,13 @@ export async function setSystemAdminPassword(nextPassword: string): Promise<void
     systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
     AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
   ]);
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    try {
+      window.localStorage?.setItem(SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY, trimmed);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export async function changeUserPassword(userId: string, currentPassword: string, nextPassword: string): Promise<boolean> {
@@ -1780,6 +1820,140 @@ export async function setEmptyOrgState(enabled: boolean): Promise<void> {
     return;
   }
   await AsyncStorage.removeItem(EMPTY_ORG_STATE_KEY);
+}
+
+function parseMemberCountFromRaw(rawValue: string | null): number {
+  try {
+    const parsed = JSON.parse(String(rawValue || "[]"));
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeOrgIdForMigration(rawValue?: string | null): string {
+  return String(rawValue || "").trim().toUpperCase();
+}
+
+function isScopedOrSystemStorageKey(key: string): boolean {
+  return key.startsWith(ORG_STORAGE_PREFIX) || key.startsWith(SYSTEM_STORAGE_PREFIX);
+}
+
+export async function migrateLegacyOrgDataToScopedStorage(
+  targetOrgIdInput: string,
+  options?: {
+    allowLegacyOrg000ToOrg001?: boolean;
+    overwriteWhenScopedMembersAtMost?: number;
+  }
+): Promise<{
+  ok: boolean;
+  migrated: boolean;
+  reason?: string;
+  copiedKeys?: number;
+  legacyMembers?: number;
+  scopedMembers?: number;
+}> {
+  const targetOrgId = normalizeOrgIdForMigration(targetOrgIdInput);
+  if (!targetOrgId || targetOrgId === "ORG000") {
+    return { ok: true, migrated: false, reason: "skip_non_scoped_org" };
+  }
+
+  const overwriteThreshold = Number.isFinite(Number(options?.overwriteWhenScopedMembersAtMost))
+    ? Math.max(0, Number(options?.overwriteWhenScopedMembersAtMost))
+    : 1;
+  const allowOrg000Mapping = options?.allowLegacyOrg000ToOrg001 !== false;
+  const scopedPrefix = `${ORG_STORAGE_PREFIX}${targetOrgId}:`;
+  const scopedMembersKey = `${scopedPrefix}${KEYS.MEMBERS}`;
+
+  try {
+    const allKeys = await RawAsyncStorage.getAllKeys();
+    const legacyKeys = (allKeys || []).filter(
+      (key) => !isScopedOrSystemStorageKey(String(key || "")) && isSharedBackupKey(String(key || ""))
+    );
+    if (!legacyKeys.length) {
+      return { ok: true, migrated: false, reason: "legacy_data_not_found" };
+    }
+
+    const checkRows = await RawAsyncStorage.multiGet([KEYS.MEMBERS, scopedMembersKey, KEYS.ACCOUNT_SETTINGS]);
+    const legacyMembers = parseMemberCountFromRaw(checkRows?.[0]?.[1] || null);
+    const scopedMembers = parseMemberCountFromRaw(checkRows?.[1]?.[1] || null);
+    const legacySettingsRaw = checkRows?.[2]?.[1] || null;
+
+    if (legacyMembers <= 0) {
+      return { ok: true, migrated: false, reason: "legacy_members_empty", legacyMembers, scopedMembers };
+    }
+    if (scopedMembers > overwriteThreshold) {
+      return { ok: true, migrated: false, reason: "scoped_data_already_present", legacyMembers, scopedMembers };
+    }
+
+    let legacyOrgId = "";
+    try {
+      const parsed = JSON.parse(String(legacySettingsRaw || "{}")) as { orgId?: string };
+      legacyOrgId = normalizeOrgIdForMigration(parsed?.orgId);
+    } catch {
+      legacyOrgId = "";
+    }
+
+    const orgIdMatches =
+      legacyOrgId === targetOrgId ||
+      (allowOrg000Mapping && legacyOrgId === "ORG000" && targetOrgId === "ORG001");
+    if (!orgIdMatches) {
+      return { ok: true, migrated: false, reason: "legacy_org_mismatch", legacyMembers, scopedMembers };
+    }
+
+    const legacyPairs = await RawAsyncStorage.multiGet(legacyKeys);
+    const scopedPairs: [string, string][] = [];
+    for (const [key, value] of legacyPairs) {
+      if (typeof value !== "string") continue;
+      let nextValue = value;
+      if (key === KEYS.ACCOUNT_SETTINGS) {
+        try {
+          const parsed = JSON.parse(value) as Record<string, unknown>;
+          nextValue = JSON.stringify({
+            ...parsed,
+            orgId: targetOrgId,
+            orgSetupCompleted: true,
+            orgSetupAt: parsed?.orgSetupAt || new Date().toISOString(),
+          });
+        } catch {
+          // keep raw value
+        }
+      } else if (key === SYNC_SCOPE_META_KEY) {
+        try {
+          const parsed = JSON.parse(value) as Record<string, unknown>;
+          nextValue = JSON.stringify({
+            ...parsed,
+            orgId: targetOrgId,
+            version: Number(parsed?.version || 1) || 1,
+            generatedAt: String(parsed?.generatedAt || new Date().toISOString()),
+          });
+        } catch {
+          nextValue = JSON.stringify({
+            orgId: targetOrgId,
+            version: 1,
+            generatedAt: new Date().toISOString(),
+            source: "legacy_migration",
+          });
+        }
+      }
+      scopedPairs.push([`${scopedPrefix}${key}`, nextValue]);
+    }
+
+    if (!scopedPairs.length) {
+      return { ok: true, migrated: false, reason: "legacy_pairs_empty", legacyMembers, scopedMembers };
+    }
+
+    await RawAsyncStorage.multiSet(scopedPairs);
+    return {
+      ok: true,
+      migrated: true,
+      copiedKeys: scopedPairs.length,
+      legacyMembers,
+      scopedMembers,
+    };
+  } catch (error: any) {
+    return { ok: false, migrated: false, reason: String(error?.message || "legacy_migration_failed") };
+  }
 }
 
 function toYmd(date: Date): string {
@@ -5163,8 +5337,14 @@ function validateSnapshotOrgOnPull(snapshotData: Record<string, string>, expecte
   if (expected !== "ORG000") {
     return { ok: false, snapshotOrgId, reason: "snapshot_scope_missing_non_legacy" };
   }
-  // Legacy ORG000 kept permissive to avoid breaking old installations that
-  // had inconsistent account_settings.orgId in snapshots.
+  // For legacy snapshots without explicit scope metadata, require
+  // account_settings.orgId to be present and match the expected org.
+  if (snapshotOrgId && snapshotOrgId !== expected) {
+    return { ok: false, snapshotOrgId, reason: "org_mismatch_snapshot_legacy" };
+  }
+  if (!snapshotOrgId) {
+    return { ok: false, snapshotOrgId, reason: "snapshot_org_missing_legacy" };
+  }
   return { ok: true, snapshotOrgId };
 }
 

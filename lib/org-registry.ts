@@ -548,21 +548,49 @@ export async function upsertOrgRegistryEntry(
     const web = await getFirestoreWeb();
     if (!web.db) return { ok: false, reason: web.reason || "firestore_unavailable" };
     try {
-      const { doc, getDoc, setDoc, deleteDoc } = await import("firebase/firestore");
+      const { doc, getDoc, setDoc, runTransaction } = await import("firebase/firestore");
       const docRef = doc(web.db, REGISTRY_COLLECTION, orgId);
       const existing = await getDoc(docRef);
       let sourceCreatedAt = existing.exists() ? (existing.data() as any)?.createdAt : undefined;
-      let previousDocRef: any = null;
 
       if (isRename) {
         if (existing.exists()) {
           return { ok: false, reason: "target_org_id_exists" };
         }
-        previousDocRef = doc(web.db, REGISTRY_COLLECTION, previousOrgId);
-        const previousSnapshot = await getDoc(previousDocRef);
-        if (previousSnapshot.exists()) {
-          sourceCreatedAt = (previousSnapshot.data() as any)?.createdAt || sourceCreatedAt;
+        const previousDocRef = doc(web.db, REGISTRY_COLLECTION, previousOrgId);
+        let transactionPayload: OrgRegistryEntry | null = null;
+
+        await runTransaction(web.db, async (transaction: any) => {
+          const targetSnapshot = await transaction.get(docRef);
+          if (targetSnapshot.exists()) {
+            throw new Error("target_org_id_exists");
+          }
+
+          const previousSnapshot = await transaction.get(previousDocRef);
+          if (!previousSnapshot.exists()) {
+            throw new Error("previous_org_id_missing");
+          }
+
+          const now = new Date().toISOString();
+          const normalized = normalizeRegistryEntry(input, orgId);
+          const payload: OrgRegistryEntry = {
+            ...normalized,
+            orgId,
+            createdAt: String((previousSnapshot.data() as any)?.createdAt || normalized.createdAt || now),
+            updatedAt: now,
+          };
+          const cleanedPayload = stripUndefined(payload);
+          transaction.set(docRef, cleanedPayload, { merge: true });
+          transaction.delete(previousDocRef);
+          transactionPayload = payload;
+        });
+
+        if (!transactionPayload) {
+          return { ok: false, reason: "registry_upsert_failed" };
         }
+        await removeCachedOrgRegistryEntry(previousOrgId);
+        await cacheOrgRegistryEntry(transactionPayload);
+        return { ok: true, entry: transactionPayload };
       }
 
       const now = new Date().toISOString();
@@ -575,10 +603,6 @@ export async function upsertOrgRegistryEntry(
       };
       const cleanedPayload = stripUndefined(payload);
       await setDoc(docRef, cleanedPayload, { merge: true });
-      if (isRename && previousDocRef) {
-        await deleteDoc(previousDocRef);
-        await removeCachedOrgRegistryEntry(previousOrgId);
-      }
       await cacheOrgRegistryEntry(payload);
       return { ok: true, entry: payload };
     } catch (error: any) {
@@ -594,17 +618,45 @@ export async function upsertOrgRegistryEntry(
     const docRef = db.collection(REGISTRY_COLLECTION).doc(orgId);
     const existing = await docRef.get();
     let sourceCreatedAt = existing?.data?.()?.createdAt;
-    let previousDocRef: any = null;
 
     if (isRename) {
       if (existing?.exists) {
         return { ok: false, reason: "target_org_id_exists" };
       }
-      previousDocRef = db.collection(REGISTRY_COLLECTION).doc(previousOrgId);
-      const previousSnapshot = await previousDocRef.get();
-      if (previousSnapshot?.exists) {
-        sourceCreatedAt = previousSnapshot?.data?.()?.createdAt || sourceCreatedAt;
+      const previousDocRef = db.collection(REGISTRY_COLLECTION).doc(previousOrgId);
+      let transactionPayload: OrgRegistryEntry | null = null;
+
+      await db.runTransaction(async (transaction: any) => {
+        const targetSnapshot = await transaction.get(docRef);
+        if (targetSnapshot?.exists) {
+          throw new Error("target_org_id_exists");
+        }
+
+        const previousSnapshot = await transaction.get(previousDocRef);
+        if (!previousSnapshot?.exists) {
+          throw new Error("previous_org_id_missing");
+        }
+
+        const now = new Date().toISOString();
+        const normalized = normalizeRegistryEntry(input, orgId);
+        const payload: OrgRegistryEntry = {
+          ...normalized,
+          orgId,
+          createdAt: String(previousSnapshot?.data?.()?.createdAt || normalized.createdAt || now),
+          updatedAt: now,
+        };
+        const cleanedPayload = stripUndefined(payload);
+        transaction.set(docRef, cleanedPayload, { merge: true });
+        transaction.delete(previousDocRef);
+        transactionPayload = payload;
+      });
+
+      if (!transactionPayload) {
+        return { ok: false, reason: "registry_upsert_failed" };
       }
+      await removeCachedOrgRegistryEntry(previousOrgId);
+      await cacheOrgRegistryEntry(transactionPayload);
+      return { ok: true, entry: transactionPayload };
     }
 
     const now = new Date().toISOString();
@@ -617,10 +669,6 @@ export async function upsertOrgRegistryEntry(
     };
     const cleanedPayload = stripUndefined(payload);
     await docRef.set(cleanedPayload, { merge: true });
-    if (isRename && previousDocRef) {
-      await previousDocRef.delete();
-      await removeCachedOrgRegistryEntry(previousOrgId);
-    }
     await cacheOrgRegistryEntry(payload);
     return { ok: true, entry: payload };
   } catch (error: any) {

@@ -604,6 +604,8 @@ export default function SystemScreen() {
               ? "Firestore မချိတ်ဆက်နိုင်ပါ။ Web build ဖြစ်နိုင်ပါတယ်။"
               : result.reason === "target_org_id_exists"
                 ? `Target Org ID (${orgId}) ရှိပြီးသားဖြစ်နေပါသည်။ Org ID အသစ်တစ်ခု သုံးပါ။`
+                : result.reason === "previous_org_id_missing"
+                  ? `မူလ Org ID (${previousOrgId}) ကို မတွေ့ပါ။ Refresh List နှိပ်ပြီး ထပ်စမ်းပါ။`
               : `သိမ်းဆည်းရာတွင် အမှားဖြစ်နေပါသည်။ ${result.reason || ""}`;
         setRegistryStatus("error", msg);
         Alert.alert("Registry", msg);

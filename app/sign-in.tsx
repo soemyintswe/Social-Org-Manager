@@ -21,12 +21,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/AuthContext";
 import { getCurrentAppVersion } from "../lib/app-update";
 import { useData } from "../lib/DataContext";
-import { clearOrgScopedStorage, persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
+import { persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
 import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
 import { ensureChairAccountFromRegistry } from "../lib/storage-service";
-import { getAccountSettings, saveAccountSettings } from "../lib/storage-service";
+import { getAccountSettings, migrateLegacyOrgDataToScopedStorage, saveAccountSettings } from "../lib/storage-service";
 import { fetchOrgRegistryEntry } from "../lib/org-registry";
-import { setEmptyOrgState } from "../lib/storage-service";
 
 const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
   "နုတ်ထွက်": "နှုတ်ထွက်ထားပါသည်။",
@@ -158,8 +157,10 @@ export default function SignInScreen() {
         const orgEmail = String(restored?.orgEmail || settings.orgEmail || "").trim();
         if (orgId) {
           if (orgConnectMode) {
-            await clearOrgScopedStorage(orgId);
-            await setEmptyOrgState(true);
+            await migrateLegacyOrgDataToScopedStorage(orgId, {
+              allowLegacyOrg000ToOrg001: true,
+              overwriteWhenScopedMembersAtMost: 1,
+            });
           }
           await persistOrgStorageContext({ orgId, orgEmail });
           setActiveOrgId(orgId);

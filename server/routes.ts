@@ -10,6 +10,7 @@ type SyncSnapshot = {
   data: Record<string, string>;
 };
 const SYNC_SCOPE_META_KEY = "@orghub_sync_scope_meta";
+const LEGACY_ORG_ID = "ORG000";
 
 type AppUpdateConfig = {
   latestVersion: string;
@@ -82,12 +83,23 @@ function parseBuildNumber(value: unknown): number | null {
 
 function readSnapshot(orgId?: string | null): SyncSnapshot | null {
   try {
-    const filePath = getSnapshotFilePath(orgId);
-    if (!fs.existsSync(filePath)) return null;
+    const safeOrgId = normalizeOrgIdForFile(orgId);
+    let filePath = getSnapshotFilePath(safeOrgId);
+    if (!fs.existsSync(filePath)) {
+      if (safeOrgId === LEGACY_ORG_ID) {
+        const legacyFilePath = getSnapshotFilePath("");
+        if (fs.existsSync(legacyFilePath)) {
+          filePath = legacyFilePath;
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as SyncSnapshot;
     if (!parsed || typeof parsed !== "object" || !parsed.data) return null;
-    const safeOrgId = normalizeOrgIdForFile(orgId);
     if (safeOrgId && !parsed.data?.[SYNC_SCOPE_META_KEY]) {
       parsed.data = {
         ...(parsed.data || {}),
