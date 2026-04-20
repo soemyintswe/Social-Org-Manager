@@ -217,6 +217,178 @@ function serveLandingPage({
   res.status(200).send(html);
 }
 
+function escapeHtml(value: string): string {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildBootLoaderHtml(targetPath: string): string {
+  const safeTarget = escapeHtml(targetPath || "/");
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Social Org Manager</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background: radial-gradient(circle at 25% 15%, #dff7f0 0%, #eef8ff 45%, #f6fbff 100%);
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        color: #0f172a;
+      }
+      .card {
+        width: min(92vw, 520px);
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid #d8e6f5;
+        border-radius: 22px;
+        padding: 28px 24px;
+        box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+      }
+      .title { margin: 0 0 8px; font-size: 1.45rem; font-weight: 700; color: #0f766e; }
+      .subtitle { margin: 0 0 18px; font-size: 0.95rem; color: #475569; }
+      .cycle {
+        width: 86px;
+        height: 86px;
+        margin: 8px auto 18px;
+        border-radius: 999px;
+        border: 6px solid #cfe9e4;
+        border-top-color: #0f766e;
+        border-right-color: #14b8a6;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .progress-wrap {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: #e2ecf6;
+        overflow: hidden;
+        margin-bottom: 12px;
+      }
+      .progress {
+        width: 18%;
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #0f766e, #22c55e);
+        transition: width 260ms ease;
+      }
+      .status {
+        margin: 0;
+        min-height: 24px;
+        font-size: 0.95rem;
+        color: #334155;
+      }
+      .meta {
+        margin-top: 14px;
+        font-size: 0.8rem;
+        color: #64748b;
+        line-height: 1.45;
+      }
+      .retry {
+        margin-top: 14px;
+        padding: 10px 14px;
+        border: 1px solid #0f766e;
+        background: #fff;
+        color: #0f766e;
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 class="title">Social Org Manager</h1>
+      <p class="subtitle">Server ကို နှိုးနေပါသည်။ ကျေးဇူးပြု၍ ခဏစောင့်ပါ။</p>
+      <div class="cycle" aria-hidden="true"></div>
+      <div class="progress-wrap"><div id="progress" class="progress"></div></div>
+      <p id="status" class="status">Initializing service...</p>
+      <button id="retry" class="retry" type="button">Retry Now</button>
+      <div class="meta">Target: <span id="target">${safeTarget}</span></div>
+    </main>
+    <script>
+      (function () {
+        const targetRaw = document.getElementById("target")?.textContent || "/";
+        const statusEl = document.getElementById("status");
+        const progressEl = document.getElementById("progress");
+        const retryBtn = document.getElementById("retry");
+        const steps = [
+          "Starting server...",
+          "Connecting to sync API...",
+          "Preparing app shell...",
+          "Almost ready..."
+        ];
+        let progress = 12;
+        let stepIdx = 0;
+        let done = false;
+        let lastError = "";
+
+        function setStatus(text) {
+          if (statusEl) statusEl.textContent = text;
+        }
+        function setProgress(value) {
+          progress = Math.max(8, Math.min(96, value));
+          if (progressEl) progressEl.style.width = progress + "%";
+        }
+        function buildReadyTarget() {
+          const url = new URL(targetRaw, window.location.origin);
+          url.searchParams.set("__bootReady", "1");
+          return url.pathname + url.search + url.hash;
+        }
+        async function checkReady() {
+          if (done) return;
+          try {
+            const res = await fetch("/api/sync/health?warmup=1", { cache: "no-store" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            done = true;
+            setProgress(100);
+            setStatus("Ready. Opening app...");
+            window.location.replace(buildReadyTarget());
+          } catch (err) {
+            lastError = String((err && err.message) || err || "Server is still waking up");
+          }
+        }
+
+        const pulseTimer = setInterval(() => {
+          if (done) return clearInterval(pulseTimer);
+          stepIdx = (stepIdx + 1) % steps.length;
+          setStatus(steps[stepIdx]);
+          setProgress(progress + 7);
+        }, 900);
+
+        const pingTimer = setInterval(checkReady, 1500);
+        checkReady();
+
+        setTimeout(() => {
+          if (done) return;
+          if (retryBtn) {
+            retryBtn.style.display = "inline-block";
+            retryBtn.addEventListener("click", function () {
+              setStatus("Retrying...");
+              setProgress(25);
+              checkReady();
+            });
+          }
+          if (lastError) {
+            setStatus("Still waking up... " + lastError);
+          }
+        }, 25000);
+      })();
+    </script>
+  </body>
+</html>`;
+}
+
 function configureExpoAndLanding(app: express.Application) {
   const templatePath = resolveFromBase("server", "templates", "landing-page.html");
   let landingPageTemplate = "";
@@ -310,6 +482,35 @@ function configureExpoAndLanding(app: express.Application) {
     return res.sendFile(webIndexPath);
   };
 
+  const shouldServeBootLoader = (req: Request): boolean => {
+    if (!hasWebBuild) return false;
+    const accept = String(req.header("accept") || "");
+    if (!accept.includes("text/html")) return false;
+    if (req.path.startsWith("/api")) return false;
+    if (req.path.startsWith("/_expo") || req.path.startsWith("/assets") || req.path === "/favicon.ico") return false;
+    const alreadyReady = String(req.query?.__bootReady || "").trim() === "1";
+    if (alreadyReady) return false;
+    const host = String(req.header("x-forwarded-host") || req.get("host") || "").toLowerCase();
+    const forceEnabled = String(process.env.ORGHUB_BOOT_LOADER_ENABLED || "").trim() === "1";
+    const renderHost = host.includes(".onrender.com") || host.includes(".render.com");
+    return forceEnabled || renderHost;
+  };
+
+  const sendBootLoader = (req: Request, res: Response) => {
+    const rawTarget = String(req.originalUrl || req.url || "/").trim() || "/";
+    let target = rawTarget;
+    try {
+      const parsed = new URL(rawTarget, "https://placeholder.local");
+      parsed.searchParams.delete("__bootReady");
+      const nextPath = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+      target = nextPath || "/";
+    } catch {
+      target = "/";
+    }
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.status(200).send(buildBootLoaderHtml(target));
+  };
+
   log("Serving static Expo files with dynamic manifest routing");
 
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -328,6 +529,9 @@ function configureExpoAndLanding(app: express.Application) {
 
     if (req.path === "/") {
       if (hasWebBuild) {
+        if (shouldServeBootLoader(req)) {
+          return sendBootLoader(req, res);
+        }
         return sendWebIndex(res);
       }
       return serveLandingPage({
@@ -390,6 +594,9 @@ function configureExpoAndLanding(app: express.Application) {
       }
       const accept = String(req.header("accept") || "");
       if (!accept.includes("text/html")) return next();
+      if (shouldServeBootLoader(req)) {
+        return sendBootLoader(req, res);
+      }
       return sendWebIndex(res);
     });
     log("Web build route enabled at /web");
