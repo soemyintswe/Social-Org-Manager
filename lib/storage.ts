@@ -4641,9 +4641,21 @@ async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }
   const hasLocalUrl = !!normalizeSyncServerUrl(String(settings.syncServerUrl || ""));
   const hasManagedUrl = !!remoteUrl;
   const isLegacyOrg = String(orgId || "").trim().toUpperCase() === "ORG000";
-  // Non-legacy orgs should not use default/shared LAN sync to avoid cross-org mixing.
-  const allowDefaultLan = isLegacyOrg || hasManagedUrl;
-  const enabledFlag = allowDefaultLan ? (hasLocalUrl ? true : settings.syncEnabled !== false) : false;
+  const isWebSameOriginSyncUrl =
+    Platform.OS === "web" &&
+    typeof window !== "undefined" &&
+    (() => {
+      try {
+        const parsed = new URL(url);
+        return String(parsed.origin || "").toLowerCase() === String(window.location.origin || "").toLowerCase();
+      } catch {
+        return false;
+      }
+    })();
+  // Allow same-origin Render URL and explicit local URL for managed orgs.
+  // Cross-org mixing is still guarded by org-scoped snapshot validation.
+  const allowDefaultLan = isLegacyOrg || hasManagedUrl || hasLocalUrl || isWebSameOriginSyncUrl;
+  const enabledFlag = allowDefaultLan ? settings.syncEnabled !== false : false;
   const enabled = enabledFlag && !!url;
   return { url, enabled };
 }

@@ -381,13 +381,12 @@ function RootLayoutNav() {
             await orgStorage.removeItem("@orghub_login_guard");
           } catch {}
         }
-        const hasEmail = Boolean(String(settings.orgEmail || "").trim());
-        const hasPhone = Boolean(String(settings.orgPhone || "").trim());
         const orgId = resolvedOrgId;
         const hasOrgId = Boolean(orgId);
-        const hasContact = hasEmail || hasPhone || orgId === "ORG000";
+        // Org ID exists means setup is complete for current route gating.
+        // Contact fields can be completed later in Account Settings.
         if (!active) return;
-        setOrgSetupRequired(!(hasOrgId && hasContact));
+        setOrgSetupRequired(!hasOrgId);
       } catch {
         if (!active) return;
         setOrgSetupRequired(true);
