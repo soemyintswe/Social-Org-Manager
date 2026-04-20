@@ -5360,6 +5360,61 @@ function validateSnapshotOrgOnPull(snapshotData: Record<string, string>, expecte
   return { ok: true, snapshotOrgId };
 }
 
+function buildCloudFolderPullCandidates(folderName: string, expectedOrgId: string): string[] {
+  const primary = String(folderName || "").trim();
+  const expected = String(expectedOrgId || "").trim().toUpperCase();
+  if (!primary || !expected || expected === "ORG000") return primary ? [primary] : [];
+
+  const candidates = [primary];
+  const suffixPattern = new RegExp(`[-_\\s]?${expected}$`, "i");
+  const legacyBase = primary.replace(suffixPattern, "").replace(/[-_\s]+$/, "").trim();
+  if (legacyBase && legacyBase !== primary) {
+    candidates.push(legacyBase);
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function tryLegacyOrgSnapshotMigrationForPull(
+  snapshotData: Record<string, string>,
+  expectedOrgId: string
+): Promise<Record<string, string> | null> {
+  const expected = String(expectedOrgId || "").trim().toUpperCase();
+  if (expected !== "ORG001") return null;
+  const snapshotOrgId = extractOrgIdFromSnapshotData(snapshotData);
+  if (snapshotOrgId !== "ORG000") return null;
+
+  const localMembers = await getMembers();
+  if (Array.isArray(localMembers) && localMembers.length > 1) return null;
+
+  const snapshotMembersCount = parseMemberCountFromRaw(snapshotData[KEYS.MEMBERS] || null);
+  if (snapshotMembersCount < 10) return null;
+
+  const next: Record<string, string> = { ...snapshotData };
+  try {
+    const parsedSettings = JSON.parse(String(snapshotData[KEYS.ACCOUNT_SETTINGS] || "{}")) as Record<string, unknown>;
+    next[KEYS.ACCOUNT_SETTINGS] = JSON.stringify({
+      ...parsedSettings,
+      orgId: expected,
+      orgSetupCompleted: true,
+      orgSetupAt: parsedSettings?.orgSetupAt || new Date().toISOString(),
+    });
+  } catch {
+    next[KEYS.ACCOUNT_SETTINGS] = JSON.stringify({
+      orgId: expected,
+      orgSetupCompleted: true,
+      orgSetupAt: new Date().toISOString(),
+    });
+  }
+
+  next[SYNC_SCOPE_META_KEY] = JSON.stringify({
+    orgId: expected,
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    source: "legacy_org000_to_org001_pull_migration",
+  });
+  return next;
+}
+
   export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult> {
     try {
       const license = await ensureSyncLicense();
@@ -5463,7 +5518,15 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
         return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", url };
       }
 
-      const scopeCheck = validateSnapshotOrgOnPull(payload.data, expectedOrgId);
+      let payloadDataForApply = payload.data;
+      let scopeCheck = validateSnapshotOrgOnPull(payloadDataForApply, expectedOrgId);
+      if (!scopeCheck.ok) {
+        const migrated = await tryLegacyOrgSnapshotMigrationForPull(payloadDataForApply, expectedOrgId);
+        if (migrated) {
+          payloadDataForApply = migrated;
+          scopeCheck = validateSnapshotOrgOnPull(payloadDataForApply, expectedOrgId);
+        }
+      }
       if (!scopeCheck.ok) {
         return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", url };
       }
@@ -5474,7 +5537,7 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
       return { ok: true, changed: false, reason: "already_applied", url };
     }
 
-    const merged = await applySnapshotDataFromSync(payload.data);
+    const merged = await applySnapshotDataFromSync(payloadDataForApply);
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(SYNC_LAST_SERVER_UPDATED_AT_KEY, incomingUpdatedAt);
     }
@@ -5494,12 +5557,39 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
     }
     const { enabled, endpoint, apiKey, provider, accountEmail, folderName } = await resolveCloudSyncConfig();
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
-    const result = await postCloudSyncWithApiKeyFallback(endpoint, {
-      action: "pullSnapshot",
-      provider,
-      accountEmail,
-      folderName,
-    }, 30000, apiKey);
+    const folderCandidates = buildCloudFolderPullCandidates(folderName, expectedOrgId);
+    if (!folderCandidates.length) {
+      return { ok: false, reason: "cloud_folder_missing", endpoint };
+    }
+
+    let result = await postCloudSyncWithApiKeyFallback(
+      endpoint,
+      {
+        action: "pullSnapshot",
+        provider,
+        accountEmail,
+        folderName: folderCandidates[0],
+      },
+      30000,
+      apiKey
+    );
+    for (const candidateFolder of folderCandidates.slice(1)) {
+      const payload = (result.body || {}) as { reason?: string };
+      const reason = String(payload?.reason || "").trim();
+      const notFound = result.status === 404 || reason === "snapshot_not_found";
+      if (!notFound) break;
+      result = await postCloudSyncWithApiKeyFallback(
+        endpoint,
+        {
+          action: "pullSnapshot",
+          provider,
+          accountEmail,
+          folderName: candidateFolder,
+        },
+        30000,
+        apiKey
+      );
+    }
     if (result.status === 404) {
       return { ok: true, changed: false, reason: "cloud_snapshot_not_found", status: result.status, endpoint };
     }
@@ -5556,12 +5646,20 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
         return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
       }
 
-      const scopeCheck = validateSnapshotOrgOnPull(snapshot.data, expectedOrgId);
+      let snapshotDataForApply = snapshot.data;
+      let scopeCheck = validateSnapshotOrgOnPull(snapshotDataForApply, expectedOrgId);
+      if (!scopeCheck.ok) {
+        const migrated = await tryLegacyOrgSnapshotMigrationForPull(snapshotDataForApply, expectedOrgId);
+        if (migrated) {
+          snapshotDataForApply = migrated;
+          scopeCheck = validateSnapshotOrgOnPull(snapshotDataForApply, expectedOrgId);
+        }
+      }
       if (!scopeCheck.ok) {
         return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", endpoint };
       }
 
-      const merged = await applySnapshotDataFromSync(snapshot.data);
+      const merged = await applySnapshotDataFromSync(snapshotDataForApply);
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
     }
