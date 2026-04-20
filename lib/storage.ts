@@ -103,6 +103,7 @@ const SYSTEM_ADMIN_PASSWORD_KEY = "@orghub_system_admin_password";
 const DEFAULT_SYSTEM_ADMIN_PASSWORD = "Admin";
 
 const BACKUP_EXCLUDED_KEYS = new Set<string>([
+  SYSTEM_ADMIN_PASSWORD_KEY,
   "@orghub_auth_session",
   "@orghub_auth_background_marked",
   "@orghub_login_guard",
