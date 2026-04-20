@@ -293,8 +293,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const navType = Array.isArray(navEntries) && navEntries.length ? navEntries[0]?.type : "";
           const legacyType = (performance as any)?.navigation?.type;
           const isReload = navType === "reload" || legacyType === 1;
-          if (localStorage.getItem(AUTH_WEB_FORCE_LOGOUT_KEY) === "1" && !isReload) {
-            localStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
+          if (sessionStorage.getItem(AUTH_WEB_FORCE_LOGOUT_KEY) === "1" && !isReload) {
+            sessionStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
             await orgStorage.removeItem(AUTH_SESSION_KEY);
             if (!active) return;
             setSessionUserId(null);
@@ -302,7 +302,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           }
           if (isReload) {
-            localStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
+            sessionStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
           }
         } catch {}
       }
@@ -341,7 +341,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (Platform.OS !== "web") return;
     const handler = () => {
       try {
-        localStorage.setItem(AUTH_WEB_FORCE_LOGOUT_KEY, "1");
+        sessionStorage.setItem(AUTH_WEB_FORCE_LOGOUT_KEY, "1");
       } catch {}
     };
     window.addEventListener("beforeunload", handler);
