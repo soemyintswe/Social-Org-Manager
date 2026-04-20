@@ -441,6 +441,9 @@ export async function fetchOrgRegistryEntry(orgId: string): Promise<{ ok: boolea
       }
       const data = docSnap.data() || {};
       const entry = normalizeRegistryEntry({ ...data, orgId: id }, id);
+      try {
+        await cacheOrgRegistryEntry(entry);
+      } catch {}
       return { ok: true, entry };
     } catch (error: any) {
       const cache = await readRegistryCache();
@@ -469,6 +472,9 @@ export async function fetchOrgRegistryEntry(orgId: string): Promise<{ ok: boolea
     }
     const data = docSnap.data?.() || {};
     const entry = normalizeRegistryEntry({ ...data, orgId: id }, id);
+    try {
+      await cacheOrgRegistryEntry(entry);
+    } catch {}
     return { ok: true, entry };
   } catch (error: any) {
     const cache = await readRegistryCache();
