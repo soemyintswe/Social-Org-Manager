@@ -1,8 +1,24 @@
 # Project Handover & Maintenance Guide
 
-Last updated: 2026-03-07  
-Current app version: `1.1.47`  
-Android versionCode: `48`
+Last updated: 2026-04-22  
+Current app version: `1.1.70`  
+Android versionCode: `71`  
+Active maintenance branch: `deploy-fix`  
+Latest stable restore point tag: `restore-point-2026-04-21-part6-stable` (commit `80f3e52`)
+
+## Current Stable State (Part 6)
+
+- `/system` admin route is reachable and guarded correctly.
+- ORG data isolation is active (`ORG001` / `ORG002` scoped storage).
+- ORG001 recovery path validated (member count restored to `65` in verified run).
+- Data Management route (`/data-management`) is reachable for:
+  - System Admin
+  - Chairperson (org-scoped backup/restore only)
+- `System Reset` remains admin-only.
+- Backup export filename includes OrgID:
+  - `orghub_backup_<ORGID>_<timestamp>.json`
+- Render deploy health can be verified from:
+  - `/api/sync/health`
 
 ## Project Overview
 
@@ -16,6 +32,7 @@ Android versionCode: `48`
 - Role-based access control
 - Backup/Restore (JSON), LAN Sync, Google Apps Script Cloud Sync
 - In-app app update check + APK download/install flow
+- Org registry + Org Connect flow with scoped storage and managed sync behavior
 
 ## Tech Stack & Dependencies
 
@@ -50,7 +67,7 @@ Key libraries:
 | Path | Purpose |
 |---|---|
 | `app/` | Expo Router screens (all pages/forms/workflows) |
-| `app/(tabs)/` | Main tabs: dashboard, finance, reports, groups, system |
+| `app/(tabs)/` | Main tabs: dashboard, finance, reports, system |
 | `app/_layout.tsx` | Global app shell, auth routing, auto-update modal/check |
 | `components/` | Shared UI components (`FloatingTabMenu`, guards, keyboard helpers) |
 | `constants/colors.ts` | Theme colors |
@@ -65,13 +82,13 @@ Key libraries:
 | `server/config/app-update.json` | Auto-update metadata for latest APK |
 | `scripts/build-apk.js` | Android release APK build + update config auto-refresh |
 | `scripts/cleanup-releases.js` | Keeps only recent APK artifacts in `releases/` |
-| `releases/` | Built APK files (release artifacts) |
-| `docs/` | Cloud sync and desktop usage docs |
+| `releases/` | Local built APK files (release artifacts, do not commit on deploy branch) |
+| `docs/` | Session summaries, restore points, deploy notes, cloud sync docs |
 
 ## Release Cleanup Policy
 
-- Keep only one APK per app version in `releases/`
-- Keep only the latest `4` app versions in git
+- Keep only one APK per app version in local `releases/`
+- Do not commit large APK artifacts to `deploy-fix` (prevents Render/LFS deploy failures)
 - `scripts/build-apk.js` runs cleanup automatically after every successful build
 - If you need to keep more versions temporarily, set `RELEASES_KEEP_VERSIONS` before building
 
@@ -135,6 +152,11 @@ This script automatically:
 - builds release APK
 - copies APK to `releases/`
 - updates `server/config/app-update.json` (`latestVersion`, `latestBuildNumber`, `downloadUrl`, `publishedAt`)
+
+Important for deploy:
+
+- Deploy branch (`deploy-fix`) should exclude tracked APK binaries.
+- After deploy, verify live commit via `/api/sync/health`.
 
 ## Common Maintenance Tasks
 
@@ -204,17 +226,28 @@ Important:
    - `package.json` -> `version`
 2. Run:
    - `node scripts/build-apk.js`
-3. Verify generated artifact in `releases/`
+3. Verify generated artifact in local `releases/`
 4. Confirm `server/config/app-update.json` fields are correct
-5. Commit + push branch
-6. Test update flow from old APK to new APK on real device
+5. Commit + push branch (`deploy-fix`)
+6. Verify Render live commit by checking `/api/sync/health`
+7. Test update flow from old APK to new APK on real device
 
 ## Data/Security Guardrails
 
 - Do not commit real member private data, backup dumps, or local DB files with personal data.
+- Do not commit release APK binaries to deploy branch (`deploy-fix`).
 - Keep secrets/keys out of source code.
 - Validate role-based access when changing workflow logic.
 - When adding new stored fields in `types.ts`, always add normalization/migration in `storage.ts`.
+
+## Required Read Order For New Chat
+
+Before starting any new coding chat, read these first:
+
+1. `PROJECT_SELF_AUDIT.md`
+2. `docs/part6-session-summary.md`
+3. `docs/restore-points.md`
+4. `MAINTENANCE.md`
 
 ## Future AI Prompting Guide
 
@@ -271,12 +304,33 @@ Prioritize: data consistency, permission leaks, and report correctness.
 List findings with file + line references.
 ```
 
+### Prompt Example 6: Continue From Latest Stable State
+
+```text
+Please read:
+1) PROJECT_SELF_AUDIT.md
+2) docs/part6-session-summary.md
+3) docs/restore-points.md
+4) MAINTENANCE.md
+
+Work on branch: deploy-fix
+Priorities:
+- protect existing org data (no destructive resets)
+- keep admin route reachable at /system
+- keep strict org isolation (ORG001/ORG002)
+- verify Render deployed commit from /api/sync/health
+Then continue only from unresolved items.
+```
+
 ## Quick Troubleshooting
 
 - Update loop issue:
   - Check `app.json` version/versionCode incremented
   - Check `server/config/app-update.json` `latestBuildNumber` and `downloadUrl`
   - Confirm installed APK package id is same
+- `/data-management` page not opening:
+  - Verify deployed commit from `/api/sync/health`
+  - Ensure user role is System Admin or Chairperson (chairperson has org-scoped access only)
 - Web print empty:
   - Re-check print flow in `app/(tabs)/reports.tsx`
 - Member report wrong for historical executive roles:
