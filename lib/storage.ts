@@ -5951,50 +5951,123 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
       return { ok: false, reason: message, endpoint };
     }
 
-    const incomingUpdatedAt = String(snapshot.updatedAt || "");
-    const incomingHash = String(snapshot.snapshotHash || "");
+    const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
+    if (!verify.ok) {
+      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
+    }
+
+    let snapshotDataForApply = snapshot.data;
+    let scopeCheck = validateSnapshotOrgOnPull(snapshotDataForApply, expectedOrgId);
+    if (!scopeCheck.ok) {
+      const migrated = await tryLegacyOrgSnapshotMigrationForPull(snapshotDataForApply, expectedOrgId);
+      if (migrated) {
+        snapshotDataForApply = migrated;
+        scopeCheck = validateSnapshotOrgOnPull(snapshotDataForApply, expectedOrgId);
+      }
+    }
+    if (!scopeCheck.ok) {
+      return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", endpoint };
+    }
+
+    let selectedSnapshotData = snapshotDataForApply;
+    let selectedIncomingUpdatedAt = String(snapshot.updatedAt || "");
+    let selectedIncomingHash = String(snapshot.snapshotHash || "");
+    let selectedMemberCount = parseMemberCountFromRaw(selectedSnapshotData?.[KEYS.MEMBERS] || null);
+
+    // ORG000 -> ORG001 rename migration case တွင် ORG001 folder တွင် stale-small snapshot ရှိနိုင်သဖြင့်
+    // candidate folders အားလုံးအတွင်း member ပိုများသော valid snapshot ကိုရွေးသည်။
+    if (expectedOrgId === "ORG001" && folderCandidates.length > 1) {
+      for (const candidateFolder of folderCandidates) {
+        try {
+          const altResult = await postCloudSyncWithApiKeyFallback(
+            endpoint,
+            {
+              action: "pullSnapshot",
+              provider,
+              accountEmail,
+              folderName: candidateFolder,
+            },
+            30000,
+            apiKey
+          );
+          if (altResult.status === 404 || !altResult.httpOk) continue;
+          const altPayload = (altResult.body || {}) as {
+            ok?: boolean;
+            snapshot?: unknown;
+            updatedAt?: string;
+            data?: unknown;
+            reason?: string;
+          };
+          const altReason = String(altPayload?.reason || "").trim();
+          if (altReason === "snapshot_not_found" || altReason === "snapshot_read_failed" || altReason === "snapshot_empty") {
+            continue;
+          }
+          if (altPayload?.ok === false && altReason) continue;
+
+          const altSnapshot = extractCloudSnapshot(altPayload);
+          if (!altSnapshot || !altSnapshot.data) continue;
+          const altVerify = await verifySnapshotHash({
+            snapshotData: altSnapshot.data,
+            expectedHash: altSnapshot.snapshotHash,
+          });
+          if (!altVerify.ok) continue;
+
+          let altDataForApply = altSnapshot.data;
+          let altScopeCheck = validateSnapshotOrgOnPull(altDataForApply, expectedOrgId);
+          if (!altScopeCheck.ok) {
+            const altMigrated = await tryLegacyOrgSnapshotMigrationForPull(altDataForApply, expectedOrgId);
+            if (altMigrated) {
+              altDataForApply = altMigrated;
+              altScopeCheck = validateSnapshotOrgOnPull(altDataForApply, expectedOrgId);
+            }
+          }
+          if (!altScopeCheck.ok) continue;
+
+          const altMemberCount = parseMemberCountFromRaw(altDataForApply?.[KEYS.MEMBERS] || null);
+          if (altMemberCount > selectedMemberCount) {
+            selectedSnapshotData = altDataForApply;
+            selectedIncomingUpdatedAt = String(altSnapshot.updatedAt || "");
+            selectedIncomingHash = String(altSnapshot.snapshotHash || "");
+            selectedMemberCount = altMemberCount;
+          }
+        } catch {
+          // ignore candidate fetch failure and keep best-known snapshot
+        }
+      }
+    }
+
     const lastApplied = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY)) || "");
     const lastAppliedHash = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY)) || "");
-    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied && incomingHash && lastAppliedHash && incomingHash === lastAppliedHash) {
+    if (
+      selectedIncomingUpdatedAt &&
+      selectedIncomingUpdatedAt === lastApplied &&
+      selectedIncomingHash &&
+      lastAppliedHash &&
+      selectedIncomingHash === lastAppliedHash
+    ) {
       try {
         const localRaw = await exportData();
         const localData = await sanitizeExportForLanSync(JSON.parse(localRaw) as Record<string, string>);
         const localHash = await computeSnapshotHash(localData);
-        if (localHash === incomingHash) {
+        if (localHash === selectedIncomingHash) {
           return { ok: true, changed: false, reason: "already_applied", endpoint };
         }
       } catch {
         // If local hash can't be computed, fall through to merge.
       }
     }
-      const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
-      if (!verify.ok) {
-        return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
-      }
 
-      let snapshotDataForApply = snapshot.data;
-      let scopeCheck = validateSnapshotOrgOnPull(snapshotDataForApply, expectedOrgId);
-      if (!scopeCheck.ok) {
-        const migrated = await tryLegacyOrgSnapshotMigrationForPull(snapshotDataForApply, expectedOrgId);
-        if (migrated) {
-          snapshotDataForApply = migrated;
-          scopeCheck = validateSnapshotOrgOnPull(snapshotDataForApply, expectedOrgId);
-        }
-      }
-      if (!scopeCheck.ok) {
-        return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", endpoint };
-      }
-      const memberRegression = await validateSnapshotMemberCountRegressionOnPull(snapshotDataForApply, expectedOrgId);
-      if (!memberRegression.ok) {
-        return { ok: false, reason: memberRegression.reason || "snapshot_member_count_regression_guard", endpoint };
-      }
-
-      const merged = await applySnapshotDataFromSync(snapshotDataForApply);
-    if (incomingUpdatedAt) {
-      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
+    const memberRegression = await validateSnapshotMemberCountRegressionOnPull(selectedSnapshotData, expectedOrgId);
+    if (!memberRegression.ok) {
+      return { ok: false, reason: memberRegression.reason || "snapshot_member_count_regression_guard", endpoint };
     }
-    if (incomingHash) {
-      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY, incomingHash);
+
+    const merged = await applySnapshotDataFromSync(selectedSnapshotData);
+    if (selectedIncomingUpdatedAt) {
+      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, selectedIncomingUpdatedAt);
+    }
+    if (selectedIncomingHash) {
+      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY, selectedIncomingHash);
     }
     return { ok: true, changed: merged, reason: merged ? "cloud_pulled_applied" : "cloud_pulled_no_change", endpoint };
   } catch (e: any) {
