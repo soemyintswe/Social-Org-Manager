@@ -23,8 +23,12 @@ import { getCurrentAppVersion } from "../lib/app-update";
 import { useData } from "../lib/DataContext";
 import { persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
 import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
-import { ensureChairAccountFromRegistry } from "../lib/storage-service";
-import { getAccountSettings, migrateLegacyOrgDataToScopedStorage, saveAccountSettings } from "../lib/storage-service";
+import {
+  ensureChairAccountFromRegistry,
+  getAccountSettings,
+  migrateLegacyOrgDataToScopedStorage,
+  saveAccountSettings,
+} from "../lib/storage-service";
 import { fetchOrgRegistryEntry } from "../lib/org-registry";
 
 const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
@@ -217,7 +221,8 @@ export default function SignInScreen() {
             }
           }
         }
-        await refreshData({ skipPull: true, markLocalMutation: false });
+        const shouldPullAfterOrgConnect = orgConnectMode || !!hasParamOrgId;
+        await refreshData({ skipPull: !shouldPullAfterOrgConnect, markLocalMutation: false });
         if (Platform.OS === "web" && typeof window !== "undefined") {
           try {
             window.localStorage?.removeItem("@orghub_force_org_reload");
