@@ -81,8 +81,11 @@ const decodeLanShareId = (input: string): string => {
 export default function AccountSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { accountSettings, updateAccountSettings, refreshData, createDirectChatThread, sendChatMessage, members, users } = useData();
-  const { can, currentUser, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
+  const { can, currentUser, currentMember, verifyCurrentPassword, changePassword, resetPassword } = useAuth();
   const canManageSystem = can("system.manage");
+  const canManageOrgBackupRestore = normalizeOrgPosition(
+    currentUser?.orgPosition || currentMember?.orgPosition || ""
+  ) === "chairperson";
   const canEditReceivingAccounts = normalizeOrgPosition(currentUser?.orgPosition || "") === "treasurer";
   
   const [saving, setSaving] = useState(false);
@@ -1029,13 +1032,15 @@ export default function AccountSettingsScreen() {
           </View>
         )}
 
-        {canManageSystem && (
+        {(canManageSystem || canManageOrgBackupRestore) && (
           <Pressable
             style={styles.dataManagementBtn}
             onPress={() => router.push("/data-management")}
           >
             <Ionicons name="server-outline" size={20} color={Colors.light.text} />
-            <Text style={styles.dataManagementText}>System & Data Management (Backup/Restore)</Text>
+            <Text style={styles.dataManagementText}>
+              {canManageSystem ? "System & Data Management (Backup/Restore)" : "Org Data Backup/Restore"}
+            </Text>
             <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
           </Pressable>
         )}

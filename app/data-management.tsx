@@ -28,14 +28,20 @@ import { clearAllLocalDataKeepSystemConfig, exportData, mergeData, restoreData }
 import { useData } from "../lib/DataContext";
 import { useAuth } from "../lib/AuthContext";
 import AccessDenied from "../components/AccessDenied";
+import { normalizeOrgPosition } from "../lib/types";
 
 const AsyncStorage = orgStorage;
 
 export default function DataManagementScreen() {
   const insets = useSafeAreaInsets();
-  const { refreshData } = useData() as any;
-  const { can } = useAuth();
+  const { refreshData, accountSettings } = useData() as any;
+  const { can, currentUser, currentMember } = useAuth();
   const canManageSystem = can("system.manage");
+  const isChairperson = normalizeOrgPosition(
+    currentUser?.orgPosition || currentMember?.orgPosition || ""
+  ) === "chairperson";
+  const canManageOrgData = canManageSystem || isChairperson;
+  const activeOrgId = String(accountSettings?.orgId || "").trim().toUpperCase() || "ORG000";
   const [importing, setImporting] = useState(false);
   const [backupText, setBackupText] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -337,6 +343,10 @@ export default function DataManagementScreen() {
   };
 
   const handleClear = () => {
+    if (!canManageSystem) {
+      Alert.alert("Access Denied", "System Reset ကို System Admin အကောင့်မှသာ လုပ်နိုင်ပါသည်။");
+      return;
+    }
     const msg = "အချက်အလက်အားလုံးကို ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ သေချာပါသလား။";
     if (Platform.OS === 'web') {
       if (confirm(msg)) {
@@ -357,7 +367,7 @@ export default function DataManagementScreen() {
     }
   };
 
-  if (!canManageSystem) {
+  if (!canManageOrgData) {
     return <AccessDenied showBack={true} />;
   }
 
@@ -369,7 +379,11 @@ export default function DataManagementScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.instruction}>Data Backup & Restore System</Text>
+          <Text style={styles.instruction}>
+            {canManageSystem
+              ? "Data Backup & Restore System"
+              : `ORG ${activeOrgId} အတွက် Data Backup & Restore လုပ်နိုင်ပါသည်။`}
+          </Text>
           
           <View style={styles.autoBackupCard}>
              <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
@@ -458,10 +472,14 @@ export default function DataManagementScreen() {
             </View>
           </Pressable>
 
-          <View style={styles.divider} />
-          <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={handleClear}>
-            <Text style={styles.btnText}>System Reset (Delete All)</Text>
-          </Pressable>
+          {canManageSystem && (
+            <>
+              <View style={styles.divider} />
+              <Pressable style={[styles.actionBtn, { backgroundColor: "#EF4444" }]} onPress={handleClear}>
+                <Text style={styles.btnText}>System Reset (Delete All)</Text>
+              </Pressable>
+            </>
+          )}
 
           <Pressable 
             style={[styles.actionBtn, { backgroundColor: "#64748B", marginTop: 15 }]} 
