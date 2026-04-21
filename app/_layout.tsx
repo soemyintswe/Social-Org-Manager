@@ -431,7 +431,19 @@ function RootLayoutNav() {
     const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
     const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
     const isAdminAccountSettings = rootSegment === "account-settings";
-    if (isAdminHome || isAdminSystem || isAdminAccountSettings) return;
+    const isAdminDataManagement = rootSegment === "data-management";
+    const isAdminPhoneTransfer = rootSegment === "phone-transfer";
+    const isAdminMemberDataManagement = rootSegment === "member-data-management";
+    const isAdminImportMembers = rootSegment === "import-members";
+    if (
+      isAdminHome ||
+      isAdminSystem ||
+      isAdminAccountSettings ||
+      isAdminDataManagement ||
+      isAdminPhoneTransfer ||
+      isAdminMemberDataManagement ||
+      isAdminImportMembers
+    ) return;
     if (inOrgConnect && canViewOrgConnect) return;
     router.replace("/" as any);
   }, [rootSegment, childSegment, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect]);
