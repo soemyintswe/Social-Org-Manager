@@ -151,6 +151,13 @@ export default function OrgConnectScreen() {
       const entry = result.entry;
       const orgEmail = entry.org.email || email;
       const orgPhone = entry.org.phone || phone;
+      const managedCloudEnabledRaw = entry.technical.managed_cloud_sync_enabled;
+      const managedCloudEnabled =
+        typeof managedCloudEnabledRaw === "boolean"
+          ? managedCloudEnabledRaw
+          : ["1", "true", "yes", "allow", "enabled", "active"].includes(
+              String(managedCloudEnabledRaw || "").trim().toLowerCase()
+            );
 
       await persistOrgStorageContext({ orgId: entry.orgId, orgEmail });
       setActiveOrgId(entry.orgId);
@@ -179,12 +186,17 @@ export default function OrgConnectScreen() {
         orgName: entry.org.name || current.orgName,
         orgSetupAt: new Date().toISOString(),
         orgSetupCompleted: true,
+        cloudSyncEndpoint: entry.technical.managed_cloud_sync_endpoint || current.cloudSyncEndpoint,
+        cloudSyncEnabled:
+          entry.technical.managed_cloud_sync_enabled !== undefined
+            ? managedCloudEnabled
+            : (entry.technical.managed_cloud_sync_endpoint ? true : current.cloudSyncEnabled),
+        cloudSyncProvider: "google_drive_apps_script",
+        cloudSyncApiKey: entry.technical.managed_cloud_sync_api_key || current.cloudSyncApiKey,
+        cloudSyncGoogleAccountEmail:
+          entry.technical.managed_cloud_sync_account_email || current.cloudSyncGoogleAccountEmail,
+        cloudSyncFolderName: entry.technical.managed_cloud_sync_folder_name || current.cloudSyncFolderName,
       };
-      if (entry.technical.managed_cloud_sync_endpoint) {
-        nextSettings.cloudSyncEndpoint = entry.technical.managed_cloud_sync_endpoint;
-        nextSettings.cloudSyncEnabled = true;
-        nextSettings.cloudSyncProvider = "google_drive_apps_script";
-      }
       await saveAccountSettings(nextSettings);
       Alert.alert("အောင်မြင်ပါသည်", "Org Registry မှအချက်အလက်များကိုရယူပြီးပါပြီ။");
       if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -199,7 +211,7 @@ export default function OrgConnectScreen() {
       } else {
         router.replace("/sign-in" as any);
       }
-    } catch (error) {
+    } catch {
       const msg = "Org setup လုပ်ရာတွင် ပြဿနာရှိနေပါသည်။ နောက်ထပ်ကြိုးစားပါ။";
       setErrorMessage(msg);
       Alert.alert("အမှား", msg);

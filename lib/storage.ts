@@ -5615,6 +5615,12 @@ function validateSnapshotOrgOnPull(snapshotData: Record<string, string>, expecte
     return { ok: true, snapshotOrgId: scopeOrgId };
   }
 
+  // Transitional fallback for ORG001 rename migrations:
+  // some historical snapshots may still miss scope meta and carry ORG000/ORG001 only in account_settings.
+  if (expected === "ORG001" && (snapshotOrgId === "ORG001" || snapshotOrgId === "ORG000")) {
+    return { ok: true, snapshotOrgId, reason: "org001_legacy_scope_missing_fallback" };
+  }
+
   // Legacy fallback: only ORG000 can accept old snapshots without scope meta.
   if (expected !== "ORG000") {
     return { ok: false, snapshotOrgId, reason: "snapshot_scope_missing_non_legacy" };
