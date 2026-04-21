@@ -33,6 +33,7 @@ Backup/
 
 # Local build/runtime artifacts
 /release-lan-sync*.apk
+/releases/*.apk
 /server/data/*
 !/server/data/.gitkeep
 *.db
