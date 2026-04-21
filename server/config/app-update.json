@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.70",
-  "latestBuildNumber": "71",
+  "latestVersion": "1.1.71",
+  "latestBuildNumber": "72",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://media.githubusercontent.com/media/soemyintswe/Social-Org-Manager/feature/expense-management-system/releases/release-lan-sync-v1.1.70-202603231035.apk",
-  "notes": "Version 1.1.70: Audit Change Requests UX fixes (no auto-open on filter, decision fields locked after finalization, close button).",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.71-202604220140.apk",
+  "notes": "Version 1.1.71: Org reconnect hardening (ORG format validation, sign-in org binding guard), reconnect smoke docs/scripts updates.",
   "force": false,
-  "publishedAt": "2026-03-23T04:05:09.598Z"
+  "publishedAt": "2026-04-21T19:19:31.437Z"
 }

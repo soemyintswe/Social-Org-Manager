@@ -55,6 +55,24 @@ function getAppUpdateConfigPath(): string {
   return resolveFromBase("server", "config", "app-update.json");
 }
 
+function getDesktopUpdateConfigPath(): string {
+  return resolveFromBase("server", "config", "desktop-update.json");
+}
+
+function normalizeUpdatePlatform(raw: unknown): "android" | "desktop" {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "desktop" || value === "win" || value === "windows" || value === "electron") {
+    return "desktop";
+  }
+  return "android";
+}
+
+function getUpdateConfigPathForPlatform(platformRaw: unknown): string {
+  const platform = normalizeUpdatePlatform(platformRaw);
+  if (platform === "desktop") return getDesktopUpdateConfigPath();
+  return getAppUpdateConfigPath();
+}
+
 function parseVersion(version: string): number[] {
   return String(version || "")
     .split(".")
@@ -346,9 +364,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/app-update", (req, res) => {
+  const handleUpdateCheck = (platformRaw: unknown, req: any, res: any) => {
     try {
-      const configPath = getAppUpdateConfigPath();
+      const configPath = getUpdateConfigPathForPlatform(platformRaw);
       if (!fs.existsSync(configPath)) {
         return res.status(404).json({ message: "update_config_not_found" });
       }
@@ -390,6 +408,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch {
       return res.status(500).json({ message: "app_update_check_failed" });
     }
+  };
+
+  app.get("/api/app-update", (req, res) => {
+    return handleUpdateCheck(req.query.platform, req, res);
+  });
+
+  app.get("/api/desktop-update", (req, res) => {
+    return handleUpdateCheck("desktop", req, res);
   });
 
   const httpServer = createServer(app);

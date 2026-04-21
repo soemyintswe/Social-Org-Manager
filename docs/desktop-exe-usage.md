@@ -39,3 +39,6 @@ npm run desktop:dist
 - If computer is off:
   - LAN sync is unavailable.
   - Cloud sync still works on devices that have cloud endpoint configured.
+- Desktop update check:
+  - App checks `GET /api/desktop-update` after startup and shows update prompt when newer version exists.
+  - Update metadata source: `server/config/desktop-update.json`

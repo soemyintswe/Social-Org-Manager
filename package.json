@@ -1,7 +1,7 @@
 {
   "name": "expo-app",
   "main": "expo-router/entry",
-  "version": "1.1.70",
+  "version": "1.1.71",
   "scripts": {
     "postinstall": "npx patch-package",
     "expo:dev": "EXPO_PACKAGER_PROXY_URL=https://$REPLIT_DEV_DOMAIN REACT_NATIVE_PACKAGER_HOSTNAME=$REPLIT_DEV_DOMAIN EXPO_PUBLIC_DOMAIN=$REPLIT_DEV_DOMAIN:5000 npx expo start --localhost",
@@ -18,6 +18,8 @@
     "desktop:start": "npm run desktop:prep && npx electron desktop/main.cjs",
     "desktop:dist": "npm run desktop:prep && npx electron-builder --win portable -c.extraMetadata.main=desktop/main.cjs",
     "desktop:dist:setup": "npm run desktop:prep && npx electron-builder --win nsis -c.extraMetadata.main=desktop/main.cjs",
+    "desktop:update-config": "node scripts/update-desktop-update-config.js",
+    "desktop:release": "npm run desktop:dist:setup && npm run desktop:update-config",
     "db:push": "drizzle-kit push",
     "start": "npx expo start",
     "lint": "npx expo lint",

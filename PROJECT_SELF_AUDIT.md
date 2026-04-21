@@ -1,6 +1,6 @@
 # PROJECT_SELF_AUDIT
 
-_Last updated: 2026-04-21 (Asia/Rangoon)_
+_Last updated: 2026-04-22 (Asia/Rangoon)_
 
 ## 1) Completed / Implemented
 
@@ -22,11 +22,24 @@ _Last updated: 2026-04-21 (Asia/Rangoon)_
 - System Reset remains admin-only.
 - Backup export filename now includes OrgID for easier separation:
   - `orghub_backup_<ORGID>_<timestamp>.json`
+- Pre-existing JSX parse blocker in `app/audit-change-requests.tsx` has been resolved.
+- First-run/reconnect guard was hardened:
+  - sign-in is blocked when valid org binding is missing
+  - invalid org deep-link route now redirects to `/org-connect`
+  - org-connect validates OrgID format (`ORG001` pattern).
+- Added platform QA checklist for reconnect validation:
+  - `docs/org-reconnect-smoke-test-matrix.md`
+- Added automation helper for quick reconnect baseline checks:
+  - `scripts/sync/run-org-reconnect-smoke-lite.ps1`
+- Desktop update check path added (version-controlled metadata):
+  - `server/config/desktop-update.json`
+  - `/api/desktop-update`
+  - startup prompt in `desktop/main.cjs`
+- Release prep updated to version `1.1.71` / Android build `72`; APK + EXE builds completed locally.
 
 ## 2) In Progress / Watch Items
 
 - Full automated regression suite is still missing; verification remains manual checklist based.
-- Existing unrelated TypeScript compile issue still exists in `app/audit-change-requests.tsx` (pre-existing; not introduced by this session block).
 - Ops hygiene still recommended:
   - avoid committing large release binaries into app deploy branch
   - keep Render deployed commit aligned with latest `deploy-fix`.

@@ -25,6 +25,17 @@ import { persistOrgStorageContext } from "../lib/org-storage";
 import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
 import { verifyOrgRegistryCredentials } from "../lib/org-registry";
 
+function normalizeOrgIdInput(raw?: string | null): string {
+  return String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function isValidOrgId(orgId?: string | null): boolean {
+  return /^ORG\d{3,}$/.test(normalizeOrgIdInput(orgId));
+}
+
 export default function OrgConnectScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -35,13 +46,13 @@ export default function OrgConnectScreen() {
   const [errorMessage, setErrorMessage] = useState("");
 
   const canSubmit = useMemo(() => {
-    const hasId = orgId.trim().length > 0;
+    const hasId = isValidOrgId(orgId);
     const hasContact = orgEmail.trim().length > 0 || orgPhone.trim().length > 0;
     return hasId && hasContact;
   }, [orgEmail, orgId, orgPhone]);
 
   useEffect(() => {
-    const paramOrgId = String(params?.orgId || "").trim();
+    const paramOrgId = normalizeOrgIdInput(String(params?.orgId || "").trim());
     const paramEmail = String(params?.orgEmail || "").trim();
     const paramPhone = String(params?.orgPhone || "").trim();
     if (paramOrgId && !orgId.trim()) setOrgId(paramOrgId);
@@ -86,12 +97,18 @@ export default function OrgConnectScreen() {
     setErrorMessage("");
     const email = orgEmail.trim();
     const phone = orgPhone.trim();
-    const id = orgId.trim();
+    const id = normalizeOrgIdInput(orgId);
 
     if (!id) {
       const msg = "Org ID ကိုဖြည့်ပါ။";
       setErrorMessage(msg);
       Alert.alert("လိုအပ်ချက်", msg);
+      return;
+    }
+    if (!isValidOrgId(id)) {
+      const msg = "Org ID format မှန်ကန်ရန် ORG001 ပုံစံဖြင့်ဖြည့်ပါ။";
+      setErrorMessage(msg);
+      Alert.alert("Org ID Format", msg);
       return;
     }
     if (!email && !phone) {
@@ -265,8 +282,8 @@ export default function OrgConnectScreen() {
             <Text style={styles.label}>Organization ID (OrgID)</Text>
             <TextInput
               value={orgId}
-              onChangeText={setOrgId}
-              placeholder="ဥပမာ - ORG-001"
+              onChangeText={(value) => setOrgId(normalizeOrgIdInput(value))}
+              placeholder="ဥပမာ - ORG001"
               autoCapitalize="characters"
               autoCorrect={false}
               style={styles.input}

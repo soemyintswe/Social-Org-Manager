@@ -40,6 +40,17 @@ const INACTIVE_STATUS_SENTENCE: Record<string, string> = {
 };
 const LOGIN_DENIED_SUFFIX = "Login ဝင်ခွင့်မရှိပါ။";
 
+function normalizeOrgIdInput(raw?: string | null): string {
+  return String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function isValidOrgId(orgId?: string | null): boolean {
+  return /^ORG\d{3,}$/.test(normalizeOrgIdInput(orgId));
+}
+
 export default function SignInScreen() {
   const { attemptLogin, checkUsernameStatus, getLoginLockInfo, loading, resetPassword } = useAuth();
   const { refreshData } = useData();
@@ -62,6 +73,8 @@ export default function SignInScreen() {
   const [lockRemainingMs, setLockRemainingMs] = useState(0);
   const [showFullGuide, setShowFullGuide] = useState(false);
   const [orgHydrating, setOrgHydrating] = useState(false);
+  const [orgBindingRequired, setOrgBindingRequired] = useState(false);
+  const [boundOrgId, setBoundOrgId] = useState("");
   const passwordInputRef = useRef<TextInput>(null);
 
   const canSubmit = useMemo(() => {
@@ -69,11 +82,12 @@ export default function SignInScreen() {
       !loading &&
       !isSigningIn &&
       !orgHydrating &&
+      !orgBindingRequired &&
       lockRemainingMs <= 0 &&
       username.trim().length > 0 &&
       password.trim().length > 0
     );
-  }, [loading, isSigningIn, orgHydrating, lockRemainingMs, username, password]);
+  }, [loading, isSigningIn, orgHydrating, orgBindingRequired, lockRemainingMs, username, password]);
 
   const lockMessage = useMemo(() => {
     if (lockRemainingMs <= 0) return "";
@@ -135,6 +149,39 @@ export default function SignInScreen() {
       clearInterval(timer);
     };
   }, [getLoginLockInfo]);
+
+  useEffect(() => {
+    let active = true;
+    const resolveOrgBinding = async () => {
+      try {
+        const restored = await restoreOrgStorageContext();
+        const settings = await getAccountSettings();
+        const paramOrgId = normalizeOrgIdInput(String(params?.orgId || ""));
+        let fallbackOrgId = "";
+        if (!paramOrgId && Platform.OS === "web") {
+          try {
+            fallbackOrgId = normalizeOrgIdInput(
+              window.sessionStorage?.getItem("@orghub_last_connected_org_id") ||
+                window.localStorage?.getItem("@orghub_last_connected_org_id") ||
+                ""
+            );
+          } catch {}
+        }
+        const resolved = normalizeOrgIdInput(paramOrgId || fallbackOrgId || restored?.orgId || settings.orgId || "");
+        if (!active) return;
+        setBoundOrgId(resolved);
+        setOrgBindingRequired(!isValidOrgId(resolved));
+      } catch {
+        if (!active) return;
+        setBoundOrgId("");
+        setOrgBindingRequired(true);
+      }
+    };
+    void resolveOrgBinding();
+    return () => {
+      active = false;
+    };
+  }, [params?.orgId]);
 
   useEffect(() => {
     const orgConnectMode = String(params?.orgConnect || "").trim() === "1";
@@ -242,6 +289,11 @@ export default function SignInScreen() {
 
   const handleSignIn = async () => {
     if (!canSubmit) return;
+    if (orgBindingRequired) {
+      Alert.alert("Org Connect လိုအပ်ပါသည်", "အရင်ဆုံး ORG ID ဖြင့်ချိတ်ဆက်ပြီးမှ Login ဝင်နိုင်ပါသည်။");
+      router.replace("/org-connect" as any);
+      return;
+    }
     const usernameCheck = await validateUsername();
     if (!usernameCheck.ok) {
       setPasswordTouched(false);
@@ -423,6 +475,22 @@ export default function SignInScreen() {
             {orgHydrating ? (
               <View style={styles.orgHydrateBanner}>
                 <Text style={styles.orgHydrateText}>ORG ချိတ်ဆက်မှုကို ပြန်စစ်ဆေးနေပါသည်… ခဏစောင့်ပါ။</Text>
+              </View>
+            ) : null}
+            {!orgHydrating && orgBindingRequired ? (
+              <View style={styles.orgBindingBanner}>
+                <Text style={styles.orgBindingTitle}>Org Connect လိုအပ်ပါသည်</Text>
+                <Text style={styles.orgBindingText}>
+                  ဒီစက်ပေါ်တွင် ORG binding မတွေ့ပါ။ ORG ID ဖြင့်ချိတ်ဆက်ပြီးမှ user login ဝင်နိုင်ပါသည်။
+                </Text>
+                <TouchableOpacity style={styles.orgBindingBtn} onPress={() => router.replace("/org-connect" as any)}>
+                  <Text style={styles.orgBindingBtnText}>Org Connect သို့သွားမည်</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {!orgHydrating && !orgBindingRequired && boundOrgId ? (
+              <View style={styles.boundOrgBadge}>
+                <Text style={styles.boundOrgBadgeText}>Connected Org: {boundOrgId}</Text>
               </View>
             ) : null}
             <Text style={styles.label}>Username</Text>
@@ -653,6 +721,46 @@ const styles = StyleSheet.create({
   },
   submitDisabled: { opacity: 0.5 },
   submitText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  orgHydrateBanner: {
+    backgroundColor: "#ECFEFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#A5F3FC",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  orgHydrateText: { color: "#0F766E", fontSize: 12, fontWeight: "600" },
+  orgBindingBanner: {
+    backgroundColor: "#FFF7ED",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FDBA74",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  orgBindingTitle: { color: "#9A3412", fontSize: 13, fontWeight: "700", marginBottom: 4 },
+  orgBindingText: { color: "#7C2D12", fontSize: 12, lineHeight: 18 },
+  orgBindingBtn: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    borderRadius: 10,
+    backgroundColor: "#0F766E",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  orgBindingBtnText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
+  boundOrgBadge: {
+    backgroundColor: "#EFF6FF",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  boundOrgBadgeText: { color: "#1D4ED8", fontSize: 12, fontWeight: "700" },
   forgotBtn: { marginTop: 10, alignItems: "center" },
   forgotBtnText: { color: "#0F766E", fontSize: 13, fontWeight: "600" },
   adminLoginBtn: { marginTop: 8, alignItems: "center" },

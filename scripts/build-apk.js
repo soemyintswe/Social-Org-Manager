@@ -72,9 +72,8 @@ function getDownloadBaseUrl() {
   const envBase = String(process.env.APP_UPDATE_DOWNLOAD_BASE_URL || '').trim().replace(/\/+$/, '');
   if (envBase) return envBase;
   const meta = getGitRemoteMeta();
-  const branch = getCurrentBranchName();
-  if (!meta || !branch) return '';
-  return `https://media.githubusercontent.com/media/${meta.owner}/${meta.repo}/${branch}/releases`;
+  if (!meta) return '';
+  return `https://github.com/${meta.owner}/${meta.repo}/releases/latest/download`;
 }
 
 function syncAndroidNativeVersion({ version, buildNumber }) {

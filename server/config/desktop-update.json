@@ -1,0 +1,9 @@
+{
+  "latestVersion": "1.1.71",
+  "latestBuildNumber": "71",
+  "minimumVersion": "1.0.0",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Social-Org-Manager-Setup-v1.1.71.exe",
+  "notes": "Version 1.1.71: Desktop startup update checker + org reconnect hardening.",
+  "force": false,
+  "publishedAt": "2026-04-21T19:14:47.908Z"
+}

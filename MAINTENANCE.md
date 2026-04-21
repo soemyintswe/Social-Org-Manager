@@ -1,8 +1,8 @@
 # Project Handover & Maintenance Guide
 
 Last updated: 2026-04-22  
-Current app version: `1.1.70`  
-Android versionCode: `71`  
+Current app version: `1.1.71`  
+Android versionCode: `72`  
 Active maintenance branch: `deploy-fix`  
 Latest stable restore point tag: `restore-point-2026-04-21-part6-stable` (commit `80f3e52`)
 
@@ -205,6 +205,10 @@ Important:
 - Update check source selection + version compare: `lib/app-update.ts`
 - Server response endpoint: `server/routes.ts` (`/api/app-update`)
 - Published latest metadata: `server/config/app-update.json`
+- Desktop update metadata + endpoint:
+  - `server/config/desktop-update.json`
+  - `server/routes.ts` (`/api/desktop-update`)
+  - Electron update check prompt: `desktop/main.cjs`
 
 ### G) Startup performance tuning
 
@@ -231,6 +235,14 @@ Important:
 5. Commit + push branch (`deploy-fix`)
 6. Verify Render live commit by checking `/api/sync/health`
 7. Test update flow from old APK to new APK on real device
+8. Desktop release metadata refresh:
+   - `npm run desktop:update-config`
+9. Upload release assets to GitHub Releases (`latest`):
+   - Android APK from `releases/`
+   - Desktop setup EXE from `releases-desktop/`
+10. Verify download URLs in:
+   - `server/config/app-update.json`
+   - `server/config/desktop-update.json`
 
 ## Data/Security Guardrails
 
@@ -248,6 +260,8 @@ Before starting any new coding chat, read these first:
 2. `docs/part6-session-summary.md`
 3. `docs/restore-points.md`
 4. `MAINTENANCE.md`
+5. `docs/first-run-reconnect-spec.md`
+6. `docs/org-reconnect-smoke-test-matrix.md`
 
 ## Future AI Prompting Guide
 
@@ -331,6 +345,11 @@ Then continue only from unresolved items.
 - `/data-management` page not opening:
   - Verify deployed commit from `/api/sync/health`
   - Ensure user role is System Admin or Chairperson (chairperson has org-scoped access only)
+- OS data clear / cache clean ပြီး login မဝင်နိုင်:
+  - App ကို `Org Connect` ပြန်လုပ်ပြီး ORG ID ဖြင့်ပြန်ချိတ်ပါ
+  - Org ချိတ်ပြီးနောက် သက်ဆိုင်ရာ username/password ဖြင့် login ဝင်ပါ
+  - Cloud sync endpoint အချက်အလက်များ (`cloudSyncEndpoint`, `cloudSyncFolderName`) ပြန်တင်ထားမှုစစ်ပါ
+  - Full platform QA checklist: `docs/org-reconnect-smoke-test-matrix.md`
 - Web print empty:
   - Re-check print flow in `app/(tabs)/reports.tsx`
 - Member report wrong for historical executive roles:

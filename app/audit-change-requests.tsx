@@ -2027,8 +2027,6 @@ export default function AuditChangeRequestsScreen() {
                     </Pressable>
                   ) : null}
                 </View>
-            )}
-
             <Text style={styles.sectionLabel}>ပြောင်းလဲမှုမှတ်တမ်း</Text>
             {Array.isArray(selectedRequest?.messages) && selectedRequest.messages.length > 0 ? (
               selectedRequest.messages.map((msg: any) => (

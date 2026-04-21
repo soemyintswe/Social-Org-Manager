@@ -18,7 +18,7 @@ export default function OrgIdEntryRedirectScreen() {
     const rawOrgId = String(params?.orgId || "");
     const orgId = normalizeOrgId(rawOrgId);
     if (!isValidOrgId(orgId)) {
-      router.replace("/sign-in" as any);
+      router.replace("/org-connect" as any);
       return;
     }
     router.replace({ pathname: "/sign-in", params: { orgId } } as any);
@@ -48,4 +48,3 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 });
-

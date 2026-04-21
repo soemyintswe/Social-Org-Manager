@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const net = require("net");
 const fs = require("fs");
@@ -18,6 +18,7 @@ let serverBootstrapped = false;
 let activePort = 5000;
 let blankCheckAttempts = 0;
 let fallbackShown = false;
+const DESKTOP_UPDATE_SKIP_FILE = "desktop-update-skip.json";
 
 function getDesktopLogFile() {
   try {
@@ -36,6 +37,139 @@ function logDesktop(message) {
     if (file) fs.appendFileSync(file, line, "utf8");
   } catch {
     // no-op
+  }
+}
+
+function parseVersion(version) {
+  return String(version || "")
+    .split(".")
+    .map((part) => Number(String(part).replace(/[^\d]/g, "")))
+    .filter((n) => Number.isFinite(n));
+}
+
+function compareVersion(left, right) {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  const max = Math.max(a.length, b.length);
+  for (let i = 0; i < max; i += 1) {
+    const av = a[i] || 0;
+    const bv = b[i] || 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
+function getDesktopUpdateSkipFilePath() {
+  try {
+    return path.join(app.getPath("userData"), DESKTOP_UPDATE_SKIP_FILE);
+  } catch {
+    return "";
+  }
+}
+
+function readDesktopUpdateSkipToken() {
+  try {
+    const file = getDesktopUpdateSkipFilePath();
+    if (!file || !fs.existsSync(file)) return "";
+    const raw = fs.readFileSync(file, "utf8");
+    const parsed = JSON.parse(raw);
+    return String(parsed?.token || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeDesktopUpdateSkipToken(token) {
+  try {
+    const file = getDesktopUpdateSkipFilePath();
+    if (!file) return;
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        {
+          token: String(token || ""),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function getDesktopUpdateToken(payload) {
+  const version = String(payload?.latestVersion || "").trim();
+  const build = String(payload?.latestBuildNumber || "").trim();
+  const publishedAt = String(payload?.publishedAt || "").trim();
+  return `${version}|${build}|${publishedAt}`;
+}
+
+async function checkDesktopUpdate(baseUrl) {
+  try {
+    const currentVersion = String(app.getVersion() || "0.0.0").trim();
+    const url = `${baseUrl}/api/desktop-update?platform=desktop&version=${encodeURIComponent(currentVersion)}`;
+    logDesktop(`desktop update check: ${url}`);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+    });
+    if (!res.ok) {
+      logDesktop(`desktop update check http_${res.status}`);
+      return;
+    }
+    const payload = await res.json();
+    const latestVersion = String(payload?.latestVersion || "").trim();
+    const downloadUrl = String(payload?.downloadUrl || "").trim();
+    const hasUpdateByPayload = Boolean(payload?.hasUpdate);
+    const hasUpdateByVersion = latestVersion ? compareVersion(latestVersion, currentVersion) > 0 : false;
+    const hasUpdate = hasUpdateByPayload || hasUpdateByVersion;
+    if (!latestVersion || !downloadUrl || !hasUpdate) return;
+
+    const forceUpdate = Boolean(payload?.force);
+    const token = getDesktopUpdateToken(payload);
+    const skipped = readDesktopUpdateSkipToken();
+    if (!forceUpdate && token && skipped && token === skipped) {
+      logDesktop(`desktop update skipped token matched: ${token}`);
+      return;
+    }
+
+    const latestBuild = String(payload?.latestBuildNumber || "").trim();
+    const notes = String(payload?.notes || "").trim();
+    const lines = [
+      `Current: ${currentVersion}`,
+      `Latest: ${latestVersion}${latestBuild ? ` (${latestBuild})` : ""}`,
+      "",
+      notes || "Desktop update is available.",
+    ];
+    const buttons = forceUpdate
+      ? ["Download Update", "Later"]
+      : ["Download Update", "Skip This Version", "Later"];
+    const defaultId = 0;
+    const cancelId = forceUpdate ? 1 : 2;
+    const result = await dialog.showMessageBox({
+      type: "info",
+      title: "Desktop Update Available",
+      message: "New desktop version is available.",
+      detail: lines.join("\n"),
+      buttons,
+      defaultId,
+      cancelId,
+      noLink: true,
+    });
+
+    if (result.response === 0) {
+      await shell.openExternal(downloadUrl);
+      return;
+    }
+    if (!forceUpdate && result.response === 1) {
+      writeDesktopUpdateSkipToken(token);
+    }
+  } catch (error) {
+    logDesktop(`desktop update check failed: ${String(error?.message || error)}`);
   }
 }
 
@@ -261,6 +395,9 @@ async function createWindow() {
   mainWindow.webContents.on("did-finish-load", () => {
     logDesktop("did-finish-load");
     setTimeout(evaluateBlankScreen, 6000);
+    setTimeout(() => {
+      void checkDesktopUpdate(baseUrl);
+    }, 4500);
     mainWindow.webContents
       .executeJavaScript(
         `(() => {
