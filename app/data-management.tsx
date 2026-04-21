@@ -42,6 +42,7 @@ export default function DataManagementScreen() {
   ) === "chairperson";
   const canManageOrgData = canManageSystem || isChairperson;
   const activeOrgId = String(accountSettings?.orgId || "").trim().toUpperCase() || "ORG000";
+  const backupOrgIdToken = activeOrgId.replace(/[^A-Z0-9_-]/g, "") || "ORG000";
   const [importing, setImporting] = useState(false);
   const [backupText, setBackupText] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -134,7 +135,7 @@ export default function DataManagementScreen() {
           const a = document.createElement('a');
           a.href = url;
           const timestamp = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').slice(0, 19);
-          a.download = `orghub_backup_${timestamp}.json`;
+          a.download = `orghub_backup_${backupOrgIdToken}_${timestamp}.json`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
@@ -166,7 +167,7 @@ export default function DataManagementScreen() {
       const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
       if (directory) {
         const timestamp = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').slice(0, 19);
-        const fileName = `orghub_backup_${timestamp}.json`;
+        const fileName = `orghub_backup_${backupOrgIdToken}_${timestamp}.json`;
         const fileUri = directory + fileName;
         // @ts-ignore
         await FileSystem.writeAsStringAsync(fileUri, dataString, { encoding: FileSystem.EncodingType.UTF8 });
