@@ -6,7 +6,7 @@ _Last updated: 2026-04-21 (Asia/Rangoon)_
 
 | Label | Date | Branch | Commit | Tag | Notes |
 |---|---|---|---|---|---|
-| Part6 Stable | 2026-04-21 | `deploy-fix` | `TO_BE_FILLED_AFTER_COMMIT` | `restore-point-2026-04-21-part6-stable` | Includes Render LFS deploy fix, ORG001 recovery flow, chairperson backup/restore access, OrgID backup filename. |
+| Part6 Stable | 2026-04-21 | `deploy-fix` | `80f3e52` | `restore-point-2026-04-21-part6-stable` | Includes Render LFS deploy fix, ORG001 recovery flow, chairperson backup/restore access, OrgID backup filename. |
 
 ## How To Roll Back To A Restore Point
 
@@ -26,4 +26,3 @@ _Last updated: 2026-04-21 (Asia/Rangoon)_
 3. Confirm by opening:
    - `/api/sync/health`
    - verify `commitHash` matches the restore-point commit.
-
