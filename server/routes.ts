@@ -81,6 +81,95 @@ function parseBuildNumber(value: unknown): number | null {
   return n;
 }
 
+function normalizeCommitHash(raw: unknown): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (!/^[0-9a-f]{7,40}$/i.test(value)) return "";
+  return value.toLowerCase();
+}
+
+function resolveGitDir(repoRoot: string): string {
+  const defaultGitDir = path.resolve(repoRoot, ".git");
+  try {
+    if (fs.existsSync(defaultGitDir) && fs.statSync(defaultGitDir).isDirectory()) {
+      return defaultGitDir;
+    }
+    if (fs.existsSync(defaultGitDir) && fs.statSync(defaultGitDir).isFile()) {
+      const raw = fs.readFileSync(defaultGitDir, "utf-8");
+      const match = raw.match(/gitdir:\s*(.+)/i);
+      if (match?.[1]) {
+        return path.resolve(repoRoot, match[1].trim());
+      }
+    }
+  } catch {
+    // ignore git-dir lookup failures
+  }
+  return defaultGitDir;
+}
+
+function readPackedRefCommit(gitDir: string, refName: string): string {
+  const packedRefsPath = path.join(gitDir, "packed-refs");
+  try {
+    if (!fs.existsSync(packedRefsPath)) return "";
+    const lines = fs.readFileSync(packedRefsPath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) continue;
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 2) continue;
+      if (parts[1] !== refName) continue;
+      const commit = normalizeCommitHash(parts[0]);
+      if (commit) return commit;
+    }
+  } catch {
+    // ignore packed refs failures
+  }
+  return "";
+}
+
+function readGitHeadCommit(repoRoot: string): string {
+  try {
+    const gitDir = resolveGitDir(repoRoot);
+    const headPath = path.join(gitDir, "HEAD");
+    if (!fs.existsSync(headPath)) return "";
+    const headRaw = fs.readFileSync(headPath, "utf-8").trim();
+    if (!headRaw) return "";
+
+    if (headRaw.startsWith("ref:")) {
+      const refName = headRaw.replace(/^ref:\s*/i, "").trim();
+      if (!refName) return "";
+      const refPath = path.join(gitDir, ...refName.split("/"));
+      if (fs.existsSync(refPath)) {
+        const fromRef = normalizeCommitHash(fs.readFileSync(refPath, "utf-8"));
+        if (fromRef) return fromRef;
+      }
+      return readPackedRefCommit(gitDir, refName);
+    }
+
+    return normalizeCommitHash(headRaw);
+  } catch {
+    return "";
+  }
+}
+
+function resolveDeployCommitInfo(): { commitHash: string; commitSource: string } {
+  const envCandidates: Array<{ key: string; value: string }> = [
+    { key: "RENDER_GIT_COMMIT", value: String(process.env.RENDER_GIT_COMMIT || "") },
+    { key: "RENDER_GIT_SHA", value: String(process.env.RENDER_GIT_SHA || "") },
+    { key: "GIT_COMMIT", value: String(process.env.GIT_COMMIT || "") },
+    { key: "SOURCE_VERSION", value: String(process.env.SOURCE_VERSION || "") },
+  ];
+  for (const candidate of envCandidates) {
+    const commit = normalizeCommitHash(candidate.value);
+    if (commit) return { commitHash: commit, commitSource: `env:${candidate.key}` };
+  }
+
+  const repoCommit = readGitHeadCommit(getBaseDir());
+  if (repoCommit) {
+    return { commitHash: repoCommit, commitSource: "git_head" };
+  }
+  return { commitHash: "", commitSource: "unknown" };
+}
+
 function readSnapshot(orgId?: string | null): SyncSnapshot | null {
   try {
     const safeOrgId = normalizeOrgIdForFile(orgId);
@@ -160,8 +249,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     message: { ok: false, reason: "rate_limited" },
   });
 
+  const deployCommit = resolveDeployCommitInfo();
+
   app.get("/api/sync/health", (_req, res) => {
-    res.json({ ok: true, ts: new Date().toISOString() });
+    const commitHash = deployCommit.commitHash || "";
+    res.json({
+      ok: true,
+      ts: new Date().toISOString(),
+      commitHash,
+      commitShort: commitHash ? commitHash.slice(0, 8) : "",
+      commitSource: deployCommit.commitSource,
+    });
   });
 
   app.get("/api/sync/snapshot", (req, res) => {

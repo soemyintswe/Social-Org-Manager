@@ -65,6 +65,12 @@ const REGISTRY_CACHE_KEY = "@orghub_org_registry_cache_v1";
 const REGISTRY_COLLECTION = String(
   (process.env as any).EXPO_PUBLIC_ORG_REGISTRY_COLLECTION || "orgRegistry"
 ).trim();
+const SYSTEM_CONFIG_COLLECTION = String(
+  (process.env as any).EXPO_PUBLIC_SYSTEM_CONFIG_COLLECTION || "systemConfig"
+).trim();
+const SYSTEM_ADMIN_AUTH_DOC_ID = String(
+  (process.env as any).EXPO_PUBLIC_SYSTEM_ADMIN_AUTH_DOC_ID || "adminAuth"
+).trim();
 
 type FirebaseWebConfig = {
   apiKey: string;
@@ -900,4 +906,103 @@ export function buildOrgRegistryEntry(input: {
 
 export function generateOrgChairPassword(): string {
   return buildGeneratedPassword();
+}
+
+function normalizeSystemAdminPassword(raw?: string | null): string {
+  return String(raw || "").trim();
+}
+
+export async function fetchSystemAdminPasswordRemote(): Promise<{
+  ok: boolean;
+  password?: string;
+  updatedAt?: string;
+  reason?: string;
+}> {
+  if (Platform.OS === "web") {
+    const web = await getFirestoreWeb();
+    if (!web.db) return { ok: false, reason: web.reason || "firestore_unavailable" };
+    try {
+      const { doc, getDoc } = await import("firebase/firestore");
+      const docRef = doc(web.db, SYSTEM_CONFIG_COLLECTION, SYSTEM_ADMIN_AUTH_DOC_ID);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { ok: false, reason: "admin_password_not_found" };
+      const data = (docSnap.data() || {}) as Record<string, unknown>;
+      const password = normalizeSystemAdminPassword(String(data.password || ""));
+      if (!password) return { ok: false, reason: "admin_password_empty" };
+      return {
+        ok: true,
+        password,
+        updatedAt: String(data.updatedAt || "").trim() || undefined,
+      };
+    } catch (error: any) {
+      return { ok: false, reason: String(error?.message || "admin_password_fetch_failed") };
+    }
+  }
+
+  const firestoreFactory = getFirestoreFactory();
+  if (!firestoreFactory) return { ok: false, reason: "firestore_unavailable" };
+  try {
+    const db = firestoreFactory();
+    const docSnap = await db.collection(SYSTEM_CONFIG_COLLECTION).doc(SYSTEM_ADMIN_AUTH_DOC_ID).get();
+    if (!docSnap?.exists) return { ok: false, reason: "admin_password_not_found" };
+    const data = (docSnap.data?.() || {}) as Record<string, unknown>;
+    const password = normalizeSystemAdminPassword(String(data.password || ""));
+    if (!password) return { ok: false, reason: "admin_password_empty" };
+    return {
+      ok: true,
+      password,
+      updatedAt: String(data.updatedAt || "").trim() || undefined,
+    };
+  } catch (error: any) {
+    return { ok: false, reason: String(error?.message || "admin_password_fetch_failed") };
+  }
+}
+
+export async function saveSystemAdminPasswordRemote(passwordInput: string): Promise<{
+  ok: boolean;
+  updatedAt?: string;
+  reason?: string;
+}> {
+  const password = normalizeSystemAdminPassword(passwordInput);
+  if (!password) return { ok: false, reason: "password_empty" };
+  const updatedAt = new Date().toISOString();
+
+  if (Platform.OS === "web") {
+    const web = await getFirestoreWeb();
+    if (!web.db) return { ok: false, reason: web.reason || "firestore_unavailable" };
+    try {
+      const { doc, setDoc } = await import("firebase/firestore");
+      const docRef = doc(web.db, SYSTEM_CONFIG_COLLECTION, SYSTEM_ADMIN_AUTH_DOC_ID);
+      await setDoc(
+        docRef,
+        {
+          password,
+          updatedAt,
+        },
+        { merge: true }
+      );
+      return { ok: true, updatedAt };
+    } catch (error: any) {
+      return { ok: false, reason: String(error?.message || "admin_password_save_failed") };
+    }
+  }
+
+  const firestoreFactory = getFirestoreFactory();
+  if (!firestoreFactory) return { ok: false, reason: "firestore_unavailable" };
+  try {
+    const db = firestoreFactory();
+    await db
+      .collection(SYSTEM_CONFIG_COLLECTION)
+      .doc(SYSTEM_ADMIN_AUTH_DOC_ID)
+      .set(
+        {
+          password,
+          updatedAt,
+        },
+        { merge: true }
+      );
+    return { ok: true, updatedAt };
+  } catch (error: any) {
+    return { ok: false, reason: String(error?.message || "admin_password_save_failed") };
+  }
 }

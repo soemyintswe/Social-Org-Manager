@@ -156,10 +156,11 @@ export default function SignInScreen() {
         const orgId = String(paramOrgId || fallbackOrgId || restored?.orgId || settings.orgId || "").trim();
         const orgEmail = String(restored?.orgEmail || settings.orgEmail || "").trim();
         if (orgId) {
-          if (orgConnectMode) {
+          if (orgConnectMode || !!hasParamOrgId) {
             await migrateLegacyOrgDataToScopedStorage(orgId, {
               allowLegacyOrg000ToOrg001: true,
               overwriteWhenScopedMembersAtMost: 1,
+              mergeWhenLegacyHasMoreMembersByAtLeast: 20,
             });
           }
           await persistOrgStorageContext({ orgId, orgEmail });

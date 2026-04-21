@@ -59,7 +59,7 @@ import {
   getSyncRetryBaseDelayMs,
   getSyncRetryMaxAttempts,
 } from "./remote-config";
-import { ensureOrgLicenseActive } from "./org-registry";
+import { ensureOrgLicenseActive, fetchSystemAdminPasswordRemote, saveSystemAdminPasswordRemote } from "./org-registry";
 import { computeSnapshotHash, verifySnapshotHash } from "./sync-integrity";
 import { runWithRetry } from "./sync-queue";
 
@@ -105,10 +105,17 @@ const SYSTEM_STORAGE_PREFIX = "@sysdb:";
 const SHARED_EXTRA_KEY_PREFIXES = ["@org_notice_custom_"] as const;
 const SYSTEM_ADMIN_PASSWORD_KEY = "@orghub_system_admin_password";
 const SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY = "__orghub_system_admin_password_web_v1";
+const SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY = "@orghub_system_admin_password_updated_at";
+const SYSTEM_ADMIN_PASSWORD_UPDATED_AT_WEB_MIRROR_KEY = "__orghub_system_admin_password_updated_at_web_v1";
 const DEFAULT_SYSTEM_ADMIN_PASSWORD = "Admin";
+const MEMBER_PASSWORD_CLOUD_SYNC_DEBOUNCE_MS = 1500;
+
+let memberPasswordCloudSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let memberPasswordCloudSyncInFlight = false;
 
 const BACKUP_EXCLUDED_KEYS = new Set<string>([
   SYSTEM_ADMIN_PASSWORD_KEY,
+  SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY,
   "@orghub_auth_session",
   "@orghub_auth_background_marked",
   "@orghub_login_guard",
@@ -1155,10 +1162,37 @@ export async function withdrawMemberChangeRequest(requestId: string, requesterUs
   await saveMemberChangeRequests(requests);
 }
 
+function scheduleMemberPasswordCloudSync(trigger: string): void {
+  if (memberPasswordCloudSyncTimer) {
+    clearTimeout(memberPasswordCloudSyncTimer);
+  }
+  memberPasswordCloudSyncTimer = setTimeout(() => {
+    memberPasswordCloudSyncTimer = null;
+    if (memberPasswordCloudSyncInFlight) return;
+    memberPasswordCloudSyncInFlight = true;
+    void (async () => {
+      try {
+        const result = await pushCloudSnapshotFromLocalDetailed();
+        if (!result.ok) {
+          const reason = String(result.reason || "");
+          if (reason !== "cloud_disabled_or_empty_endpoint" && reason !== "license_denied") {
+            console.warn(`[member_password_cloud_sync:${trigger}] ${reason || "unknown"}`);
+          }
+        }
+      } catch (error: any) {
+        console.warn(`[member_password_cloud_sync:${trigger}] ${String(error?.message || error || "failed")}`);
+      } finally {
+        memberPasswordCloudSyncInFlight = false;
+      }
+    })();
+  }, MEMBER_PASSWORD_CLOUD_SYNC_DEBOUNCE_MS);
+}
+
 export async function setUserPassword(userId: string, passwordPlaintext: string): Promise<void> {
     const passwords = await getUserPasswords();
     const updatedPasswords = { ...passwords, [userId]: passwordPlaintext };
     await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(updatedPasswords));
+    scheduleMemberPasswordCloudSync("set_user_password");
 }
 
 export async function verifyPassword(userId: string, passwordPlaintext: string): Promise<boolean> {
@@ -1222,10 +1256,15 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
 
   if (changed) {
     await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(passwords));
+    scheduleMemberPasswordCloudSync("ensure_default_passwords");
   }
 }
 
 export async function ensureSystemAdminPassword(): Promise<string> {
+  const parseTimestampMs = (raw: string): number => {
+    const ms = Date.parse(String(raw || "").trim());
+    return Number.isFinite(ms) ? ms : 0;
+  };
   const readWebMirror = (): string => {
     if (Platform.OS !== "web" || typeof window === "undefined") return "";
     try {
@@ -1246,12 +1285,73 @@ export async function ensureSystemAdminPassword(): Promise<string> {
       // ignore
     }
   };
+  const readWebMirrorUpdatedAt = (): string => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return "";
+    try {
+      return String(window.localStorage?.getItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_WEB_MIRROR_KEY) || "").trim();
+    } catch {
+      return "";
+    }
+  };
+  const writeWebMirrorUpdatedAt = (updatedAtIso: string): void => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    try {
+      if (updatedAtIso) {
+        window.localStorage?.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_WEB_MIRROR_KEY, updatedAtIso);
+      } else {
+        window.localStorage?.removeItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_WEB_MIRROR_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   try {
+    const remote = await fetchSystemAdminPasswordRemote();
+    const remotePassword = remote.ok ? String(remote.password || "").trim() : "";
+    const remoteUpdatedAt = String(remote.updatedAt || "").trim();
+    const remoteUpdatedAtMs = parseTimestampMs(remoteUpdatedAt);
     const systemExisting = String((await systemStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
+    const systemUpdatedAt = String((await systemStorage.getItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY)) || "").trim();
     const legacyExisting = String((await AsyncStorage.getItem(SYSTEM_ADMIN_PASSWORD_KEY)) || "").trim();
+    const legacyUpdatedAt = String((await AsyncStorage.getItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY)) || "").trim();
     const webMirrorExisting = readWebMirror();
-    const resolved = systemExisting || webMirrorExisting || legacyExisting;
+    const webMirrorUpdatedAt = readWebMirrorUpdatedAt();
+    const candidates = [systemExisting, legacyExisting, webMirrorExisting].filter(Boolean);
+    const countByValue = new Map<string, number>();
+    for (const candidate of candidates) {
+      countByValue.set(candidate, (countByValue.get(candidate) || 0) + 1);
+    }
+    let majorityValue = "";
+    let majorityCount = 0;
+    for (const [value, count] of countByValue.entries()) {
+      if (count > majorityCount) {
+        majorityValue = value;
+        majorityCount = count;
+      }
+    }
+    // Source priority fallback:
+    // 1) newer value between local and remote timestamps
+    // 2) majority value across system/legacy/web mirror
+    // 3) system-scoped storage
+    // 4) legacy global key (backward compatibility)
+    // 5) web mirror (last fallback only)
+    const localResolved = (majorityCount >= 2 ? majorityValue : "") || systemExisting || legacyExisting || webMirrorExisting;
+    const localUpdatedAtMs = Math.max(
+      parseTimestampMs(systemUpdatedAt),
+      parseTimestampMs(legacyUpdatedAt),
+      parseTimestampMs(webMirrorUpdatedAt)
+    );
+    const shouldUseRemote =
+      !!remotePassword &&
+      (
+        !localResolved ||
+        (remoteUpdatedAtMs > 0 && remoteUpdatedAtMs >= localUpdatedAtMs)
+      );
+    const resolved = shouldUseRemote ? remotePassword : (localResolved || remotePassword);
+    const resolvedUpdatedAtIso =
+      (shouldUseRemote ? remoteUpdatedAt : "") ||
+      (localUpdatedAtMs > 0 ? new Date(localUpdatedAtMs).toISOString() : new Date().toISOString());
     if (resolved) {
       // Keep legacy key aligned so old builds/cached clients don't fall back to a stale password.
       if (legacyExisting !== resolved) {
@@ -1259,21 +1359,46 @@ export async function ensureSystemAdminPassword(): Promise<string> {
           await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, resolved);
         } catch {}
       }
+      if (legacyUpdatedAt !== resolvedUpdatedAtIso) {
+        try {
+          await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, resolvedUpdatedAtIso);
+        } catch {}
+      }
       if (systemExisting !== resolved) {
         try {
           await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, resolved);
         } catch {}
       }
+      if (systemUpdatedAt !== resolvedUpdatedAtIso) {
+        try {
+          await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, resolvedUpdatedAtIso);
+        } catch {}
+      }
       if (webMirrorExisting !== resolved) {
         writeWebMirror(resolved);
       }
+      if (webMirrorUpdatedAt !== resolvedUpdatedAtIso) {
+        writeWebMirrorUpdatedAt(resolvedUpdatedAtIso);
+      }
+      if (!remotePassword || remotePassword !== resolved || (!remoteUpdatedAtMs && resolvedUpdatedAtIso)) {
+        try {
+          await saveSystemAdminPasswordRemote(resolved);
+        } catch {}
+      }
       return resolved;
     }
+    const seededUpdatedAt = new Date().toISOString();
     await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
+    await systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, seededUpdatedAt);
     try {
       await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, DEFAULT_SYSTEM_ADMIN_PASSWORD);
+      await AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, seededUpdatedAt);
     } catch {}
     writeWebMirror(DEFAULT_SYSTEM_ADMIN_PASSWORD);
+    writeWebMirrorUpdatedAt(seededUpdatedAt);
+    try {
+      await saveSystemAdminPasswordRemote(DEFAULT_SYSTEM_ADMIN_PASSWORD);
+    } catch {}
     return DEFAULT_SYSTEM_ADMIN_PASSWORD;
   } catch {
     return DEFAULT_SYSTEM_ADMIN_PASSWORD;
@@ -1288,17 +1413,26 @@ export async function verifySystemAdminPassword(passwordPlaintext: string): Prom
 export async function setSystemAdminPassword(nextPassword: string): Promise<void> {
   const trimmed = String(nextPassword || "").trim();
   if (!trimmed) return;
+  const updatedAt = new Date().toISOString();
   await Promise.all([
     systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
+    systemStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, updatedAt),
     AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
+    AsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, updatedAt),
+    RawAsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_KEY, trimmed),
+    RawAsyncStorage.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_KEY, updatedAt),
   ]);
   if (Platform.OS === "web" && typeof window !== "undefined") {
     try {
       window.localStorage?.setItem(SYSTEM_ADMIN_PASSWORD_WEB_MIRROR_KEY, trimmed);
+      window.localStorage?.setItem(SYSTEM_ADMIN_PASSWORD_UPDATED_AT_WEB_MIRROR_KEY, updatedAt);
     } catch {
       // ignore
     }
   }
+  try {
+    await saveSystemAdminPasswordRemote(trimmed);
+  } catch {}
 }
 
 export async function changeUserPassword(userId: string, currentPassword: string, nextPassword: string): Promise<boolean> {
@@ -1844,6 +1978,7 @@ export async function migrateLegacyOrgDataToScopedStorage(
   options?: {
     allowLegacyOrg000ToOrg001?: boolean;
     overwriteWhenScopedMembersAtMost?: number;
+    mergeWhenLegacyHasMoreMembersByAtLeast?: number;
   }
 ): Promise<{
   ok: boolean;
@@ -1861,6 +1996,9 @@ export async function migrateLegacyOrgDataToScopedStorage(
   const overwriteThreshold = Number.isFinite(Number(options?.overwriteWhenScopedMembersAtMost))
     ? Math.max(0, Number(options?.overwriteWhenScopedMembersAtMost))
     : 1;
+  const mergeWhenLegacyHasMoreMembersByAtLeast = Number.isFinite(Number(options?.mergeWhenLegacyHasMoreMembersByAtLeast))
+    ? Math.max(0, Number(options?.mergeWhenLegacyHasMoreMembersByAtLeast))
+    : 0;
   const allowOrg000Mapping = options?.allowLegacyOrg000ToOrg001 !== false;
   const scopedPrefix = `${ORG_STORAGE_PREFIX}${targetOrgId}:`;
   const scopedMembersKey = `${scopedPrefix}${KEYS.MEMBERS}`;
@@ -1882,8 +2020,14 @@ export async function migrateLegacyOrgDataToScopedStorage(
     if (legacyMembers <= 0) {
       return { ok: true, migrated: false, reason: "legacy_members_empty", legacyMembers, scopedMembers };
     }
+    let mergeMode = false;
     if (scopedMembers > overwriteThreshold) {
-      return { ok: true, migrated: false, reason: "scoped_data_already_present", legacyMembers, scopedMembers };
+      const memberGap = legacyMembers - scopedMembers;
+      if (mergeWhenLegacyHasMoreMembersByAtLeast > 0 && memberGap >= mergeWhenLegacyHasMoreMembersByAtLeast) {
+        mergeMode = true;
+      } else {
+        return { ok: true, migrated: false, reason: "scoped_data_already_present", legacyMembers, scopedMembers };
+      }
     }
 
     let legacyOrgId = "";
@@ -1902,18 +2046,115 @@ export async function migrateLegacyOrgDataToScopedStorage(
     }
 
     const legacyPairs = await RawAsyncStorage.multiGet(legacyKeys);
+    const existingScopedPairs = mergeMode
+      ? await RawAsyncStorage.multiGet(legacyKeys.map((key) => `${scopedPrefix}${key}`))
+      : [];
+    const existingScopedMap = new Map<string, string | null>(existingScopedPairs);
+
+    const parseJsonValue = (raw: string): { ok: boolean; value: unknown } => {
+      try {
+        return { ok: true, value: JSON.parse(raw) };
+      } catch {
+        return { ok: false, value: raw };
+      }
+    };
+
+    const isObjectWithIdArray = (rows: unknown[]): boolean => {
+      if (!Array.isArray(rows) || rows.length === 0) return false;
+      return rows.every((row) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+        return String((row as any).id || "").trim().length > 0;
+      });
+    };
+
+    const normalizeArrayKey = (value: unknown): string => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const id = String((value as any).id || "").trim();
+        if (id) return `id:${id}`;
+      }
+      try {
+        return `json:${JSON.stringify(value)}`;
+      } catch {
+        return `str:${String(value)}`;
+      }
+    };
+
+    const mergePreferExisting = (existingRaw: string | null, incomingRaw: string): string => {
+      if (!mergeMode || typeof existingRaw !== "string" || !existingRaw.trim()) {
+        return incomingRaw;
+      }
+
+      const existingParsed = parseJsonValue(existingRaw);
+      const incomingParsed = parseJsonValue(incomingRaw);
+      if (!existingParsed.ok || !incomingParsed.ok) {
+        return existingRaw;
+      }
+
+      const existingValue = existingParsed.value;
+      const incomingValue = incomingParsed.value;
+
+      if (Array.isArray(existingValue) && Array.isArray(incomingValue)) {
+        let mergedArray: unknown[] = [];
+        if (isObjectWithIdArray(existingValue) && isObjectWithIdArray(incomingValue)) {
+          const seen = new Set<string>();
+          mergedArray = [...existingValue];
+          existingValue.forEach((row) => seen.add(String((row as any).id || "").trim()));
+          incomingValue.forEach((row) => {
+            const id = String((row as any).id || "").trim();
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            mergedArray.push(row);
+          });
+        } else {
+          const seen = new Set<string>();
+          mergedArray = [];
+          for (const row of [...existingValue, ...incomingValue]) {
+            const key = normalizeArrayKey(row);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            mergedArray.push(row);
+          }
+        }
+        return JSON.stringify(mergedArray);
+      }
+
+      const isExistingObject =
+        !!existingValue && typeof existingValue === "object" && !Array.isArray(existingValue);
+      const isIncomingObject =
+        !!incomingValue && typeof incomingValue === "object" && !Array.isArray(incomingValue);
+      if (isExistingObject && isIncomingObject) {
+        return JSON.stringify({ ...(incomingValue as Record<string, unknown>), ...(existingValue as Record<string, unknown>) });
+      }
+
+      return existingRaw;
+    };
+
     const scopedPairs: [string, string][] = [];
     for (const [key, value] of legacyPairs) {
       if (typeof value !== "string") continue;
       let nextValue = value;
+      const scopedKey = `${scopedPrefix}${key}`;
+      if (mergeMode) {
+        nextValue = mergePreferExisting(existingScopedMap.get(scopedKey) ?? null, nextValue);
+      }
       if (key === KEYS.ACCOUNT_SETTINGS) {
         try {
           const parsed = JSON.parse(value) as Record<string, unknown>;
+          const mergedFromMode =
+            mergeMode &&
+            (() => {
+              try {
+                return JSON.parse(nextValue) as Record<string, unknown>;
+              } catch {
+                return null;
+              }
+            })();
           nextValue = JSON.stringify({
             ...parsed,
+            ...(mergedFromMode || {}),
             orgId: targetOrgId,
             orgSetupCompleted: true,
-            orgSetupAt: parsed?.orgSetupAt || new Date().toISOString(),
+            orgSetupAt: parsed?.orgSetupAt || (mergedFromMode as any)?.orgSetupAt || new Date().toISOString(),
           });
         } catch {
           // keep raw value
@@ -1932,11 +2173,11 @@ export async function migrateLegacyOrgDataToScopedStorage(
             orgId: targetOrgId,
             version: 1,
             generatedAt: new Date().toISOString(),
-            source: "legacy_migration",
+            source: mergeMode ? "legacy_migration_merge" : "legacy_migration",
           });
         }
       }
-      scopedPairs.push([`${scopedPrefix}${key}`, nextValue]);
+      scopedPairs.push([scopedKey, nextValue]);
     }
 
     if (!scopedPairs.length) {
@@ -4522,64 +4763,73 @@ async function resolveCloudSyncConfig(): Promise<{
     key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ENDPOINT,
     orgId,
   });
+  const managedEndpoint = normalizeCloudSyncEndpoint(resolvedManagedEndpoint.value || "");
   const resolvedStandardEndpoint = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_ENDPOINT,
     orgId,
   });
-  const resolvedEndpoint = normalizeCloudSyncEndpoint(
-    resolvedManagedEndpoint.value || resolvedStandardEndpoint.value || ""
-  );
-  const managedCloudOverrideActive = managedLockdownEnabled && !!resolvedManagedEndpoint.value;
-  const endpoint = manualEndpoint || resolvedEndpoint;
+  const standardEndpoint = normalizeCloudSyncEndpoint(resolvedStandardEndpoint.value || "");
   const managedEnabled = getManagedCloudSyncEnabled();
   const manualApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
   const resolvedManagedApiKey = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY,
     orgId,
   });
+  const managedApiKey = sanitizeCloudApiKey(resolvedManagedApiKey.value || "");
   const resolvedStandardApiKey = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_API_KEY,
     orgId,
   });
-  const resolvedApiKey = sanitizeCloudApiKey(
-    resolvedManagedApiKey.value || resolvedStandardApiKey.value || ""
-  );
-  const apiKey = manualApiKey || resolvedApiKey;
+  const standardApiKey = sanitizeCloudApiKey(resolvedStandardApiKey.value || "");
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
   const manualAccountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
   const resolvedManagedAccountEmail = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL,
     orgId,
   });
+  const managedAccountEmail = String(resolvedManagedAccountEmail.value || "").trim();
   const resolvedStandardAccountEmail = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_ACCOUNT_EMAIL,
     orgId,
   });
-  const accountEmail =
-    manualAccountEmail ||
-    String(resolvedManagedAccountEmail.value || "").trim() ||
-    String(resolvedStandardAccountEmail.value || "").trim();
+  const standardAccountEmail = String(resolvedStandardAccountEmail.value || "").trim();
   const manualFolderName = String(settings.cloudSyncFolderName || "").trim();
   const resolvedManagedFolderName = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME,
     orgId,
   });
+  const managedFolderName = String(resolvedManagedFolderName.value || "").trim();
   const resolvedStandardFolderName = resolveConfigValueWithPriorityForOrg({
     key: REMOTE_CONFIG_KEYS.CLOUD_SYNC_FOLDER_NAME,
     orgId,
   });
-  const folderName =
-    manualFolderName ||
-    String(resolvedManagedFolderName.value || "").trim() ||
-    String(resolvedStandardFolderName.value || "").trim() ||
-    DEFAULT_CLOUD_SYNC_FOLDER_NAME;
+  const standardFolderName = String(resolvedStandardFolderName.value || "").trim();
+  const hasManagedCloudMapping = Boolean(
+    managedEndpoint || managedApiKey || managedAccountEmail || managedFolderName
+  );
+  // In managed lockdown mode, enforce org-scoped managed mapping to prevent
+  // local manual settings from accidentally pointing to another org's cloud target.
+  const enforceManagedCloudMapping = managedLockdownEnabled && hasManagedCloudMapping;
+  const endpoint = enforceManagedCloudMapping
+    ? managedEndpoint || standardEndpoint || manualEndpoint
+    : manualEndpoint || managedEndpoint || standardEndpoint;
+  const apiKey = enforceManagedCloudMapping
+    ? managedApiKey || standardApiKey || manualApiKey
+    : manualApiKey || managedApiKey || standardApiKey;
+  const accountEmail = enforceManagedCloudMapping
+    ? managedAccountEmail || standardAccountEmail || manualAccountEmail
+    : manualAccountEmail || managedAccountEmail || standardAccountEmail;
+  const folderName = enforceManagedCloudMapping
+    ? managedFolderName || standardFolderName || manualFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME
+    : manualFolderName || managedFolderName || standardFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
   const scopedFolderName = resolveOrgScopedCloudFolderName(folderName, orgId);
+  const managedCloudOverrideActive = enforceManagedCloudMapping && !!managedEndpoint;
   const enabledFlag =
     managedEnabled !== null
       ? managedEnabled
       : managedCloudOverrideActive
         ? true
-        : settings.cloudSyncEnabled === true || !!manualEndpoint || !!resolvedEndpoint;
+        : settings.cloudSyncEnabled === true || !!manualEndpoint || !!managedEndpoint || !!standardEndpoint;
   const enabled = enabledFlag && !!endpoint;
   return { enabled, endpoint, apiKey, provider, accountEmail, folderName: scopedFolderName };
 }
@@ -4691,7 +4941,27 @@ export async function getEffectiveSyncRuntimeConfig(): Promise<{
         orgId,
       }).value || ""
     );
-    const managedCloudOverrideActive = managedLockdownEnabled && !!managedCloudEndpoint;
+    const managedCloudApiKey = sanitizeCloudApiKey(
+      resolveConfigValueWithPriorityForOrg({
+        key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_API_KEY,
+        orgId,
+      }).value || ""
+    );
+    const managedCloudAccountEmail = String(
+      resolveConfigValueWithPriorityForOrg({
+        key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_ACCOUNT_EMAIL,
+        orgId,
+      }).value || ""
+    ).trim();
+    const managedCloudFolderName = String(
+      resolveConfigValueWithPriorityForOrg({
+        key: REMOTE_CONFIG_KEYS.MANAGED_CLOUD_SYNC_FOLDER_NAME,
+        orgId,
+      }).value || ""
+    ).trim();
+    const managedCloudOverrideActive =
+      managedLockdownEnabled &&
+      !!(managedCloudEndpoint || managedCloudApiKey || managedCloudAccountEmail || managedCloudFolderName);
     const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
     const cloud = await resolveCloudSyncConfig();
     const hasLocalCloudSetting = !!localCloudEndpoint;
@@ -5360,6 +5630,37 @@ function validateSnapshotOrgOnPull(snapshotData: Record<string, string>, expecte
   return { ok: true, snapshotOrgId };
 }
 
+async function validateSnapshotMemberCountRegressionOnPull(
+  snapshotData: Record<string, string>,
+  expectedOrgId: string
+): Promise<{ ok: boolean; reason?: string; localMembers: number; incomingMembers: number }> {
+  const expected = String(expectedOrgId || "").trim().toUpperCase();
+  const incomingMembers = parseMemberCountFromRaw(snapshotData?.[KEYS.MEMBERS] || null);
+  const localRows = await getMembers();
+  const localMembers = Array.isArray(localRows) ? localRows.length : 0;
+
+  if (!expected || expected === "ORG000") {
+    return { ok: true, localMembers, incomingMembers };
+  }
+  if (localMembers <= 0) {
+    return { ok: true, localMembers, incomingMembers };
+  }
+
+  const delta = localMembers - incomingMembers;
+  const ratio = localMembers > 0 ? incomingMembers / localMembers : 1;
+  const isSuspiciousDrop =
+    delta > 0 &&
+    (
+      incomingMembers === 0 ||
+      (localMembers >= 20 && delta >= 20) ||
+      (localMembers >= 30 && ratio < 0.5)
+    );
+  if (isSuspiciousDrop) {
+    return { ok: false, reason: "snapshot_member_count_regression_guard", localMembers, incomingMembers };
+  }
+  return { ok: true, localMembers, incomingMembers };
+}
+
 function buildCloudFolderPullCandidates(folderName: string, expectedOrgId: string): string[] {
   const primary = String(folderName || "").trim();
   const expected = String(expectedOrgId || "").trim().toUpperCase();
@@ -5370,6 +5671,15 @@ function buildCloudFolderPullCandidates(folderName: string, expectedOrgId: strin
   const legacyBase = primary.replace(suffixPattern, "").replace(/[-_\s]+$/, "").trim();
   if (legacyBase && legacyBase !== primary) {
     candidates.push(legacyBase);
+  }
+  if (expected === "ORG001") {
+    const org000Variant = primary.replace(/ORG001$/i, "ORG000").trim();
+    if (org000Variant && org000Variant !== primary) {
+      candidates.push(org000Variant);
+    }
+    if (legacyBase) {
+      candidates.push(`${legacyBase}-ORG000`);
+    }
   }
   return Array.from(new Set(candidates.filter(Boolean)));
 }
@@ -5383,11 +5693,13 @@ async function tryLegacyOrgSnapshotMigrationForPull(
   const snapshotOrgId = extractOrgIdFromSnapshotData(snapshotData);
   if (snapshotOrgId !== "ORG000") return null;
 
-  const localMembers = await getMembers();
-  if (Array.isArray(localMembers) && localMembers.length > 1) return null;
-
   const snapshotMembersCount = parseMemberCountFromRaw(snapshotData[KEYS.MEMBERS] || null);
   if (snapshotMembersCount < 10) return null;
+
+  const localMembers = await getMembers();
+  const localCount = Array.isArray(localMembers) ? localMembers.length : 0;
+  // Allow ORG000 -> ORG001 legacy migration when legacy snapshot is clearly richer.
+  if (localCount > 1 && snapshotMembersCount < localCount + 20) return null;
 
   const next: Record<string, string> = { ...snapshotData };
   try {
@@ -5530,6 +5842,10 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
       if (!scopeCheck.ok) {
         return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", url };
       }
+      const memberRegression = await validateSnapshotMemberCountRegressionOnPull(payloadDataForApply, expectedOrgId);
+      if (!memberRegression.ok) {
+        return { ok: false, reason: memberRegression.reason || "snapshot_member_count_regression_guard", url };
+      }
 
     const incomingUpdatedAt = String(payload.updatedAt || "");
     const lastApplied = String((await AsyncStorage.getItem(SYNC_LAST_SERVER_UPDATED_AT_KEY)) || "");
@@ -5657,6 +5973,10 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
       }
       if (!scopeCheck.ok) {
         return { ok: false, reason: scopeCheck.reason || "org_mismatch_snapshot", endpoint };
+      }
+      const memberRegression = await validateSnapshotMemberCountRegressionOnPull(snapshotDataForApply, expectedOrgId);
+      if (!memberRegression.ok) {
+        return { ok: false, reason: memberRegression.reason || "snapshot_member_count_regression_guard", endpoint };
       }
 
       const merged = await applySnapshotDataFromSync(snapshotDataForApply);

@@ -1,5 +1,5 @@
 import { AppState, Platform, type AppStateStatus } from "react-native";
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
@@ -16,7 +16,8 @@ const RESTORE_SESSION_ON_LAUNCH = true;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 3 * 60 * 60 * 1000;
-const AUTO_LOGOUT_MS = 5 * 60 * 1000; // 5 minutes inactivity
+const AUTO_LOGOUT_MS = 12 * 60 * 60 * 1000; // 12 hours inactivity
+const SESSION_USER_RECHECK_GRACE_MS = 2 * 60 * 1000;
 const ADMIN_SESSION_ID = "admin";
 
 type PersistedSession = {
@@ -264,6 +265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [sessionMemberId, setSessionMemberId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(true);
   const [lastActivityAt, setLastActivityAt] = useState<number>(Date.now());
+  const sessionEstablishedAtRef = useRef<number>(0);
 
   useEffect(() => {
     let active = true;
@@ -275,7 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setRestoring(false);
         return;
       }
-      const shouldInvalidateOnBackground = Platform.OS !== "web";
+      const shouldInvalidateOnBackground = false;
       const backgroundMarked = shouldInvalidateOnBackground
         ? await orgStorage.getItem(AUTH_BACKGROUND_MARK_KEY)
         : null;
@@ -330,6 +332,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!active) return;
       setSessionUserId(restored?.userId ?? null);
       setSessionMemberId(restored?.memberId ?? null);
+      sessionEstablishedAtRef.current = restored?.userId ? Date.now() : 0;
       setRestoring(false);
     })();
     return () => {
@@ -351,6 +354,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearSession = useCallback(async () => {
     setSessionUserId(null);
     setSessionMemberId(null);
+    sessionEstablishedAtRef.current = 0;
     await orgStorage.multiRemove([AUTH_SESSION_KEY, AUTH_BACKGROUND_MARK_KEY]);
     await systemStorage.multiRemove([AUTH_SESSION_KEY, AUTH_BACKGROUND_MARK_KEY]);
   }, []);
@@ -358,10 +362,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (restoring || dataLoading || !sessionUserId) return;
     if (sessionUserId === ADMIN_SESSION_ID) return;
-    const user = sessionMemberId
-      ? users.find((item) => item.id === sessionUserId && item.memberId === sessionMemberId)
-      : users.find((item) => item.id === sessionUserId);
-    if (!user || !user.isActive) {
+    const activeExact = sessionMemberId
+      ? users.find((item) => item.id === sessionUserId && item.memberId === sessionMemberId && item.isActive)
+      : undefined;
+    const activeById = users.filter((item) => item.id === sessionUserId && item.isActive);
+    const resolvedActiveUser = activeExact || activeById[0];
+    if (resolvedActiveUser) {
+      const nextMemberId = String(resolvedActiveUser.memberId || "").trim();
+      if (nextMemberId && nextMemberId !== String(sessionMemberId || "").trim()) {
+        setSessionMemberId(nextMemberId);
+      }
+      return;
+    }
+
+    if (!Array.isArray(users) || users.length === 0) return;
+    const allById = users.filter((item) => item.id === sessionUserId);
+    if (allById.length === 0) {
+      // Data can be temporarily rehydrating/migrating after org connect; do not force sign out on missing row.
+      return;
+    }
+    if (Date.now() - sessionEstablishedAtRef.current < SESSION_USER_RECHECK_GRACE_MS) return;
+    const hasAnyActive = allById.some((item) => item.isActive);
+    if (!hasAnyActive) {
       void clearSession();
     }
   }, [restoring, dataLoading, sessionUserId, sessionMemberId, users, clearSession]);
@@ -438,6 +460,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         await systemStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
         await clearLoginGuardState(systemStorage);
+        sessionEstablishedAtRef.current = Date.now();
         setLastActivityAt(Date.now());
         return true;
       }
@@ -455,6 +478,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       await orgStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
       await clearLoginGuardState();
+      sessionEstablishedAtRef.current = Date.now();
       setLastActivityAt(Date.now());
       try {
         const settings = await getAccountSettings();

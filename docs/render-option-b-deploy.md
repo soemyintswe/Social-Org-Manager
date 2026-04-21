@@ -66,7 +66,10 @@
    ကို final domain နဲ့ပြန်စစ်ပြီး redeploy တစ်ခါလုပ်ပါ။
 6. Health check စစ်ပါ:
    - `https://<your-service>.onrender.com/api/sync/health`
-   - `{ ok: true }` ပြန်ရရမယ်။
+   - `{ ok: true, commitHash: "...", commitShort: "...", commitSource: "..." }` ပြန်ရရမယ်။
+   - Deploy commit verification (local `deploy-fix` HEAD နဲ့ တိုက်စစ်ရန်):
+     - `powershell -ExecutionPolicy Bypass -File scripts/deploy/verify-render-deploy-commit.ps1 -RenderBaseUrl https://<your-service>.onrender.com`
+     - `ok: true` ဖြစ်ရမယ်။
 7. Web app စမ်းသပ်ပါ:
    - `https://<your-service>.onrender.com/admin-sign-in`
    - `https://<your-service>.onrender.com/ORG001`
