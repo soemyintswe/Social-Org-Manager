@@ -414,10 +414,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
     try {
       return await syncQueue.enqueue(async () => {
         const runtimeConfig = await store.getEffectiveSyncRuntimeConfig();
-        const isRenderWebHost =
-          Platform.OS === "web" &&
-          typeof window !== "undefined" &&
-          /\.onrender\.com$/i.test(String(window.location.hostname || "").trim());
         const cloudPull =
           runtimeConfig.cloud.enabled
             ? await store.pullCloudSnapshotToLocalDetailed()
@@ -425,7 +421,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const shouldUseLanFallback =
           runtimeConfig.lan.enabled &&
           (
-            isRenderWebHost ||
             !runtimeConfig.cloud.enabled ||
             !cloudPull.ok ||
             [

@@ -11,7 +11,6 @@ import { ensureOrgLicenseActive } from "./org-registry";
 
 const AUTH_SESSION_KEY = "@orghub_auth_session";
 const AUTH_BACKGROUND_MARK_KEY = "@orghub_auth_background_marked";
-const AUTH_WEB_FORCE_LOGOUT_KEY = "@orghub_auth_web_force_logout";
 const RESTORE_SESSION_ON_LAUNCH = true;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
@@ -289,31 +288,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setRestoring(false);
         return;
       }
-      if (Platform.OS === "web") {
-        try {
-          const navEntries = performance.getEntriesByType?.("navigation") as any;
-          const navType = Array.isArray(navEntries) && navEntries.length ? navEntries[0]?.type : "";
-          const legacyType = (performance as any)?.navigation?.type;
-          const isReload = navType === "reload" || legacyType === 1;
-          if (sessionStorage.getItem(AUTH_WEB_FORCE_LOGOUT_KEY) === "1" && !isReload) {
-            sessionStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
-            await orgStorage.removeItem(AUTH_SESSION_KEY);
-            if (!active) return;
-            setSessionUserId(null);
-            setRestoring(false);
-            return;
-          }
-          if (isReload) {
-            sessionStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
-          }
-        } catch {}
-      }
 
       let restored: PersistedSession | null = null;
-      try {
-        const systemRaw = await systemStorage.getItem(AUTH_SESSION_KEY);
-        restored = parsePersistedSession(systemRaw);
-      } catch {}
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        try {
+          const webRaw = window.sessionStorage?.getItem(AUTH_SESSION_KEY);
+          restored = parsePersistedSession(webRaw);
+        } catch {}
+        if (!restored) {
+          // Web session should not survive full tab/browser close.
+          try {
+            await orgStorage.removeItem(AUTH_SESSION_KEY);
+          } catch {}
+          try {
+            await systemStorage.removeItem(AUTH_SESSION_KEY);
+          } catch {}
+        }
+      } else {
+        try {
+          const systemRaw = await systemStorage.getItem(AUTH_SESSION_KEY);
+          restored = parsePersistedSession(systemRaw);
+        } catch {}
+      }
 
       try {
         const settings = await getAccountSettings();
@@ -325,7 +321,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Ignore org context/prewarm failures; allow session restore.
       }
 
-      if (!restored) {
+      if (!restored && Platform.OS !== "web") {
         const raw = await orgStorage.getItem(AUTH_SESSION_KEY);
         restored = parsePersistedSession(raw);
       }
@@ -340,21 +336,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    const handler = () => {
-      try {
-        sessionStorage.setItem(AUTH_WEB_FORCE_LOGOUT_KEY, "1");
-      } catch {}
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, []);
-
   const clearSession = useCallback(async () => {
     setSessionUserId(null);
     setSessionMemberId(null);
     sessionEstablishedAtRef.current = 0;
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      try {
+        window.sessionStorage?.removeItem(AUTH_SESSION_KEY);
+      } catch {}
+    }
     await orgStorage.multiRemove([AUTH_SESSION_KEY, AUTH_BACKGROUND_MARK_KEY]);
     await systemStorage.multiRemove([AUTH_SESSION_KEY, AUTH_BACKGROUND_MARK_KEY]);
   }, []);
@@ -458,7 +448,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           userId: ADMIN_SESSION_ID,
           signedInAt: new Date().toISOString(),
         };
-        await systemStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          try {
+            window.sessionStorage?.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+          } catch {}
+        } else {
+          await systemStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+        }
         await clearLoginGuardState(systemStorage);
         sessionEstablishedAtRef.current = Date.now();
         setLastActivityAt(Date.now());
@@ -476,7 +472,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         memberId: user.memberId || memberId,
         signedInAt: new Date().toISOString(),
       };
-      await orgStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        try {
+          window.sessionStorage?.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+        } catch {}
+      } else {
+        await orgStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
+      }
       await clearLoginGuardState();
       sessionEstablishedAtRef.current = Date.now();
       setLastActivityAt(Date.now());
