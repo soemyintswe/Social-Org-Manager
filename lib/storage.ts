@@ -5697,7 +5697,11 @@ async function tryLegacyOrgSnapshotMigrationForPull(
   const expected = String(expectedOrgId || "").trim().toUpperCase();
   if (expected !== "ORG001") return null;
   const snapshotOrgId = extractOrgIdFromSnapshotData(snapshotData);
-  if (snapshotOrgId !== "ORG000") return null;
+  const allowLegacySnapshotSource =
+    snapshotOrgId === "ORG000" ||
+    snapshotOrgId === "ORG001" ||
+    !snapshotOrgId;
+  if (!allowLegacySnapshotSource) return null;
 
   const snapshotMembersCount = parseMemberCountFromRaw(snapshotData[KEYS.MEMBERS] || null);
   if (snapshotMembersCount < 10) return null;
