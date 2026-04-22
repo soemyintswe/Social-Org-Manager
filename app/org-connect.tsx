@@ -16,9 +16,6 @@ import Colors from "../constants/colors";
 import {
   ensureChairAccountFromRegistry,
   getAccountSettings,
-  getMembers,
-  pullCloudSnapshotToLocalDetailed,
-  pullLanSnapshotToLocalDetailed,
   saveAccountSettings,
 } from "../lib/storage-service";
 import { persistOrgStorageContext } from "../lib/org-storage";
@@ -222,30 +219,6 @@ export default function OrgConnectScreen() {
         cloudSyncFolderName: entry.technical.managed_cloud_sync_folder_name || current.cloudSyncFolderName,
       };
       await saveAccountSettings(nextSettings);
-      // Connect ပြီးချက်ချင်း org-scoped snapshot ကို warm-up pull လုပ်ရန်
-      // (legacy ORG000 -> ORG001 migration data အပါအဝင်)။
-      try {
-        const beforeCount = (await getMembers()).length;
-        const cloudPull = await pullCloudSnapshotToLocalDetailed();
-        const cloudReason = String(cloudPull.reason || "").trim();
-        const lanFallbackReasons = new Set<string>([
-          "cloud_snapshot_not_found",
-          "snapshot_not_found",
-          "snapshot_read_failed",
-          "snapshot_empty",
-        ]);
-        if (!cloudPull.ok || lanFallbackReasons.has(cloudReason)) {
-          await pullLanSnapshotToLocalDetailed();
-        }
-        const afterCount = (await getMembers()).length;
-        if (afterCount <= 1 && beforeCount <= 1) {
-          console.warn(
-            `[org_connect_warmup] members still low after pull: before=${beforeCount} after=${afterCount} cloud=${cloudPull.ok ? "ok" : cloudReason || "failed"}`
-          );
-        }
-      } catch (warmupError: any) {
-        console.warn(`[org_connect_warmup] ${String(warmupError?.message || warmupError || "failed")}`);
-      }
 
       Alert.alert("အောင်မြင်ပါသည်", "Org Registry မှအချက်အလက်များကိုရယူပြီး Sync ကိုစမ်းသပ်ပြီးပါပြီ။");
       if (Platform.OS === "web" && typeof window !== "undefined") {

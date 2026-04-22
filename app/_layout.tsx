@@ -312,8 +312,10 @@ function RootLayoutNav() {
   const [licenseExpiry, setLicenseExpiry] = useState("");
   const [licenseStatus, setLicenseStatus] = useState("");
   const shouldShowLicenseModal =
+    isAuthenticated &&
     licenseChecked &&
     !licenseAllowed &&
+    !inAnyLogin &&
     !inAdminLogin &&
     !isSystemAdmin;
   const [orgSetupRequired, setOrgSetupRequired] = useState<boolean | null>(null);
@@ -637,7 +639,11 @@ function RootLayoutNav() {
 
   useEffect(() => {
     let disposed = false;
-    if (orgSetupRequired !== false) {
+    const shouldRunLicenseCheck =
+      orgSetupRequired === false &&
+      isAuthenticated &&
+      !isSystemAdmin;
+    if (!shouldRunLicenseCheck) {
       setLicenseChecked(false);
       setLicenseAllowed(true);
       setLicenseReason("");
@@ -646,7 +652,7 @@ function RootLayoutNav() {
     }
     const runLicenseCheck = async (force = false) => {
       try {
-        if (orgSetupRequired !== false) return;
+        if (!shouldRunLicenseCheck) return;
         const settings = await getAccountSettings();
         const orgId = String(settings?.orgId || "").trim();
         if (!orgId) {
@@ -682,7 +688,7 @@ function RootLayoutNav() {
       cleanup();
       sub.remove();
     };
-  }, [orgSetupRequired]);
+  }, [orgSetupRequired, isAuthenticated, isSystemAdmin]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
