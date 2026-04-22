@@ -35,6 +35,11 @@ _Last updated: 2026-04-22 (Asia/Rangoon)_
   - `server/config/desktop-update.json`
   - `/api/desktop-update`
   - startup prompt in `desktop/main.cjs`
+- GitHub release asset automation added for APK + Desktop EXE:
+  - `scripts/release/upload-release-assets.js`
+  - npm scripts:
+    - `release:upload-assets`
+    - `release:upload-assets:verify-render`
 - Release prep updated to version `1.1.71` / Android build `72`; APK + EXE builds completed locally.
 
 ## 2) In Progress / Watch Items

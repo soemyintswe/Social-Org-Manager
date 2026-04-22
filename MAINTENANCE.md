@@ -1,6 +1,6 @@
 # Project Handover & Maintenance Guide
 
-Last updated: 2026-04-22  
+Last updated: 2026-04-23  
 Current app version: `1.1.71`  
 Android versionCode: `72`  
 Active maintenance branch: `deploy-fix`  
@@ -82,6 +82,7 @@ Key libraries:
 | `server/config/app-update.json` | Auto-update metadata for latest APK |
 | `scripts/build-apk.js` | Android release APK build + update config auto-refresh |
 | `scripts/cleanup-releases.js` | Keeps only recent APK artifacts in `releases/` |
+| `scripts/release/upload-release-assets.js` | Upload APK + Desktop EXE assets to GitHub Release tag (`--clobber`) |
 | `releases/` | Local built APK files (release artifacts, do not commit on deploy branch) |
 | `docs/` | Session summaries, restore points, deploy notes, cloud sync docs |
 
@@ -237,10 +238,12 @@ Important:
 7. Test update flow from old APK to new APK on real device
 8. Desktop release metadata refresh:
    - `npm run desktop:update-config`
-9. Upload release assets to GitHub Releases (`latest`):
-   - Android APK from `releases/`
-   - Desktop setup EXE from `releases-desktop/`
-10. Verify download URLs in:
+9. Upload APK + EXE to GitHub Release tag:
+   - `npm run release:upload-assets`
+10. Verify Render deployed commit hash (optional in same flow):
+   - `npm run release:upload-assets:verify-render`
+   - or `npm run deploy:verify-render`
+11. Verify download URLs in:
    - `server/config/app-update.json`
    - `server/config/desktop-update.json`
 
