@@ -1,8 +1,8 @@
 # Project Handover & Maintenance Guide
 
 Last updated: 2026-04-23  
-Current app version: `1.1.71`  
-Android versionCode: `72`  
+Current app version: `1.1.72`  
+Android versionCode: `73`  
 Active maintenance branch: `deploy-fix`  
 Latest stable restore point tag: `restore-point-2026-04-21-part6-stable` (commit `80f3e52`)
 

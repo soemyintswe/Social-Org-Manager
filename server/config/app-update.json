@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.71",
-  "latestBuildNumber": "72",
+  "latestVersion": "1.1.72",
+  "latestBuildNumber": "73",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.71-202604220140.apk",
-  "notes": "Version 1.1.71: Org reconnect hardening (ORG format validation, sign-in org binding guard), reconnect smoke docs/scripts updates.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.72-202604230241.apk",
+  "notes": "Version 1.1.72: Org Connect screen flicker/redirect stabilization + pre-login auto update check.",
   "force": false,
-  "publishedAt": "2026-04-21T19:19:31.437Z"
+  "publishedAt": "2026-04-22T20:11:27.105Z"
 }

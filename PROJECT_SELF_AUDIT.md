@@ -1,6 +1,6 @@
 # PROJECT_SELF_AUDIT
 
-_Last updated: 2026-04-22 (Asia/Rangoon)_
+_Last updated: 2026-04-23 (Asia/Rangoon)_
 
 ## 1) Completed / Implemented
 
@@ -27,6 +27,10 @@ _Last updated: 2026-04-22 (Asia/Rangoon)_
   - sign-in is blocked when valid org binding is missing
   - invalid org deep-link route now redirects to `/org-connect`
   - org-connect validates OrgID format (`ORG001` pattern).
+- Org Connect startup flicker risk reduced:
+  - removed duplicate auto-redirect in `app/org-connect.tsx`
+  - unauthenticated route guard now allows staying on `/org-connect` without bounce loops
+- Android auto-update check now runs before login as well (not only after authentication).
 - Added platform QA checklist for reconnect validation:
   - `docs/org-reconnect-smoke-test-matrix.md`
 - Added automation helper for quick reconnect baseline checks:
