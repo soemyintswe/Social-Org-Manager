@@ -44,7 +44,9 @@ _Last updated: 2026-04-23 (Asia/Rangoon)_
   - npm scripts:
     - `release:upload-assets`
     - `release:upload-assets:verify-render`
-- Release prep updated to version `1.1.71` / Android build `72`; APK + EXE builds completed locally.
+- Release prep updated to version `1.1.72` / Android build `73`; mobile APK metadata is live.
+- Render deployed commit was re-verified after latest deploy-fix updates:
+  - local `HEAD` and `/api/sync/health` commit hash matched (`3884dc4...`) in latest check.
 
 ## 2) In Progress / Watch Items
 
@@ -52,15 +54,17 @@ _Last updated: 2026-04-23 (Asia/Rangoon)_
 - Ops hygiene still recommended:
   - avoid committing large release binaries into app deploy branch
   - keep Render deployed commit aligned with latest `deploy-fix`.
+- Version alignment still recommended:
+  - desktop release stream is still on `1.1.71` while Android stream is `1.1.72`.
 
 ## 3) Restore Point Policy
 
 - Use `docs/restore-points.md` as the source of truth for stable checkpoints.
-- Latest stable checkpoint is recorded for Part 6 work and includes:
-  - Render deploy fixes
-  - ORG001 recovery path
-  - chairperson backup/restore enablement
-  - OrgID backup filename enhancement.
+- Latest stable checkpoint is recorded for Part 7 work and includes:
+  - org-connect startup flicker stabilization
+  - pre-login mobile update check behavior
+  - release metadata sync to `1.1.72/73`
+  - render commit verification alignment on `deploy-fix`.
 
 ## Recommended Next Sequence
 

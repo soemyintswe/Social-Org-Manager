@@ -4,9 +4,9 @@ Last updated: 2026-04-23
 Current app version: `1.1.72`  
 Android versionCode: `73`  
 Active maintenance branch: `deploy-fix`  
-Latest stable restore point tag: `restore-point-2026-04-21-part6-stable` (commit `80f3e52`)
+Latest stable restore point tag: `restore-point-2026-04-23-part7-mobile-stable` (commit `3884dc4`)
 
-## Current Stable State (Part 6)
+## Current Stable State (Part 7)
 
 - `/system` admin route is reachable and guarded correctly.
 - ORG data isolation is active (`ORG001` / `ORG002` scoped storage).
@@ -19,6 +19,8 @@ Latest stable restore point tag: `restore-point-2026-04-21-part6-stable` (commit
   - `orghub_backup_<ORGID>_<timestamp>.json`
 - Render deploy health can be verified from:
   - `/api/sync/health`
+- Org Connect startup flicker/route bounce mitigation is applied in startup routing.
+- Android auto-update check now runs pre-login (app can prompt update before sign-in).
 
 ## Project Overview
 
@@ -260,11 +262,13 @@ Important:
 Before starting any new coding chat, read these first:
 
 1. `PROJECT_SELF_AUDIT.md`
-2. `docs/part6-session-summary.md`
-3. `docs/restore-points.md`
-4. `MAINTENANCE.md`
-5. `docs/first-run-reconnect-spec.md`
-6. `docs/org-reconnect-smoke-test-matrix.md`
+2. `docs/part7-session-summary.md`
+3. `docs/part6-session-summary.md`
+4. `docs/restore-points.md`
+5. `MAINTENANCE.md`
+6. `docs/new-chat-starter.md`
+7. `docs/first-run-reconnect-spec.md`
+8. `docs/org-reconnect-smoke-test-matrix.md`
 
 ## Future AI Prompting Guide
 
@@ -326,9 +330,10 @@ List findings with file + line references.
 ```text
 Please read:
 1) PROJECT_SELF_AUDIT.md
-2) docs/part6-session-summary.md
-3) docs/restore-points.md
-4) MAINTENANCE.md
+2) docs/part7-session-summary.md
+3) docs/part6-session-summary.md
+4) docs/restore-points.md
+5) MAINTENANCE.md
 
 Work on branch: deploy-fix
 Priorities:
