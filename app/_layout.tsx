@@ -414,7 +414,7 @@ function RootLayoutNav() {
       }
     }
 
-    if (!isAuthenticated && !inAnyLogin && !inOrgIdRoute && !(inOrgConnect && allowOrgConnect)) {
+    if (!isAuthenticated && !inAnyLogin && !inOrgIdRoute && !inOrgConnect) {
       if (isAdminEntryRoute) {
         router.replace("/admin-sign-in" as any);
       } else {
@@ -451,7 +451,7 @@ function RootLayoutNav() {
   }, [rootSegment, childSegment, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect]);
 
   useEffect(() => {
-    if (loading || Platform.OS === "web" || !isAuthenticated || inAnyLogin) return;
+    if (loading || Platform.OS === "web") return;
     let disposed = false;
     let intervalTimer: ReturnType<typeof setInterval> | null = null;
     let initialTimer: ReturnType<typeof setTimeout> | null = null;
@@ -512,7 +512,7 @@ function RootLayoutNav() {
       if (interactionTask?.cancel) interactionTask.cancel();
       sub.remove();
     };
-  }, [loading, isAuthenticated, inAnyLogin]);
+  }, [loading]);
 
   const runAutoSync = async () => {
     if (Platform.OS === "web") return;

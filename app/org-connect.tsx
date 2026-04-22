@@ -57,38 +57,6 @@ export default function OrgConnectScreen() {
     if (paramPhone && !orgPhone.trim()) setOrgPhone(paramPhone);
   }, [params?.orgEmail, params?.orgId, params?.orgPhone, orgEmail, orgId, orgPhone]);
 
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      const settings = await getAccountSettings();
-      const hasEmail = Boolean(String(settings.orgEmail || "").trim());
-      const hasPhone = Boolean(String(settings.orgPhone || "").trim());
-      const hasOrg = Boolean(String(settings.orgId || "").trim());
-      const allowOverride =
-        String(params?.orgConnect || "").trim() === "1" ||
-        (Platform.OS === "web" &&
-          (() => {
-            try {
-              const query = window.location?.search || "";
-              if (query && new URLSearchParams(query).get("orgConnect") === "1") return true;
-              return (
-                window.sessionStorage?.getItem("@orghub_org_connect_override") === "1" ||
-                window.localStorage?.getItem("@orghub_org_connect_override") === "1"
-              );
-            } catch {
-              return false;
-            }
-          })());
-      if (active && hasOrg && (hasEmail || hasPhone) && !allowOverride) {
-        router.replace("/sign-in" as any);
-      }
-    };
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [router, params]);
-
   const handleSubmit = async () => {
     if (!canSubmit || saving) return;
     setErrorMessage("");
