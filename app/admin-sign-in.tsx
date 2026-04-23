@@ -18,11 +18,14 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/AuthContext";
 import { getCurrentAppVersion } from "../lib/app-update";
+import { getAppVariantLabel, isOrgClientVariant } from "../lib/app-variant";
 
 export default function AdminSignInScreen() {
   const { attemptAdminLogin, loading } = useAuth();
   const router = useRouter();
   const appVersion = getCurrentAppVersion();
+  const orgClientVariant = isOrgClientVariant();
+  const variantLabel = getAppVariantLabel();
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
@@ -30,8 +33,13 @@ export default function AdminSignInScreen() {
   const [passwordValid, setPasswordValid] = useState<boolean | null>(null);
 
   const canSubmit = useMemo(() => {
-    return !loading && !signingIn && password.trim().length > 0;
-  }, [loading, signingIn, password]);
+    return !orgClientVariant && !loading && !signingIn && password.trim().length > 0;
+  }, [orgClientVariant, loading, signingIn, password]);
+
+  React.useEffect(() => {
+    if (!orgClientVariant) return;
+    router.replace("/sign-in" as any);
+  }, [orgClientVariant, router]);
 
   const handleAdminSignIn = async () => {
     if (!canSubmit) return;
@@ -66,13 +74,16 @@ export default function AdminSignInScreen() {
             <View style={styles.logoContainer}>
               <Image source={require("../assets/images/icon.png")} style={styles.logoImage} />
             </View>
-            <Text style={styles.appName}>Social Org Manager</Text>
+            <Text style={styles.appName}>Social Org Manager ({variantLabel})</Text>
             <Text style={styles.title}>System Admin Login</Text>
             <Text style={styles.subtitle}>Admin account ဖြင့် system management အတွက်သာ ဝင်ရောက်ပါ။</Text>
             <Text style={styles.versionText}>Version {appVersion}</Text>
           </LinearGradient>
 
           <View style={styles.formCard}>
+            {orgClientVariant ? (
+              <Text style={styles.errorText}>Org Client build တွင် System Admin Login ကိုပိတ်ထားပါသည်။</Text>
+            ) : null}
             <Text style={styles.label}>Username</Text>
             <TextInput value="admin" editable={false} style={[styles.input, styles.readonlyInput]} />
 

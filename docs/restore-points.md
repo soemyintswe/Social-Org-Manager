@@ -1,11 +1,12 @@
 # Restore Points
 
-_Last updated: 2026-04-23 (Asia/Rangoon)_
+_Last updated: 2026-04-24 (Asia/Rangoon)_
 
 ## Stable Checkpoints
 
 | Label | Date | Branch | Commit | Tag | Notes |
 |---|---|---|---|---|---|
+| Pre Variant Split Prep | 2026-04-24 | `deploy-fix` | `28d9e0b` | `restore-point-2026-04-24-pre-variant-split` | Captures the current release-aligned state before introducing org-client / central-admin build separation scaffolding. |
 | Part7 Mobile Stable | 2026-04-23 | `deploy-fix` | `3884dc4` | `restore-point-2026-04-23-part7-mobile-stable` | Includes org-connect flicker stabilization, pre-login update check, release metadata `1.1.72/73`, and render commit verification. |
 | Part6 Stable | 2026-04-21 | `deploy-fix` | `80f3e52` | `restore-point-2026-04-21-part6-stable` | Includes Render LFS deploy fix, ORG001 recovery flow, chairperson backup/restore access, OrgID backup filename. |
 

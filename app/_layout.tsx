@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import orgStorage, { persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import FloatingTabMenu from "../components/FloatingTabMenu";
+import { getAppVariant, isCentralAdminVariant, isOrgClientVariant } from "../lib/app-variant";
 import { queryClient } from "../lib/query-client";
 import { DataProvider } from "../lib/DataContext";
 import { AuthProvider, useAuth } from "../lib/AuthContext";
@@ -246,6 +247,9 @@ async function tryOpenInstaller(contentUri: string, fileUri: string): Promise<{ 
 
 function RootLayoutNav() {
   const { isAuthenticated, loading, recordActivity, currentUser, currentMember } = useAuth();
+  const appVariant = getAppVariant();
+  const orgClientVariant = isOrgClientVariant();
+  const centralAdminVariant = isCentralAdminVariant();
   const insets = useSafeAreaInsets();
   const segments = useSegments();
   const router = useRouter();
@@ -404,6 +408,18 @@ function RootLayoutNav() {
     if (loading) return;
     if (orgSetupRequired === null) return;
     if (!routeReady) return;
+    if (orgClientVariant && isAdminEntryRoute) {
+      if (isAuthenticated && !inAnyLogin) {
+        router.replace("/" as any);
+      } else if (!inLogin) {
+        router.replace("/sign-in" as any);
+      }
+      return;
+    }
+    if (centralAdminVariant && !isAdminEntryRoute) {
+      router.replace(isAuthenticated && isSystemAdmin ? ("/system" as any) : ("/admin-sign-in" as any));
+      return;
+    }
 
     if (orgSetupRequired) {
       if (!isAdminEntryRoute && !isSystemAdmin && !isLocalhost && !inOrgIdRoute) {
@@ -426,10 +442,11 @@ function RootLayoutNav() {
       if (allowOrgConnect) return;
       router.replace(isSystemAdmin ? ("/system" as any) : ("/" as any));
     }
-  }, [isAuthenticated, isLocalhost, isSystemAdmin, isAdminEntryRoute, loading, inAnyLogin, inOrgIdRoute, inOrgConnect, orgSetupRequired, router, allowOrgConnect, routeReady]);
+  }, [isAuthenticated, isLocalhost, isSystemAdmin, isAdminEntryRoute, loading, inAnyLogin, inOrgIdRoute, inOrgConnect, orgSetupRequired, router, allowOrgConnect, routeReady, orgClientVariant, centralAdminVariant, inLogin]);
 
   useEffect(() => {
     if (loading || !isAuthenticated || !isSystemAdmin || inAnyLogin) return;
+    if (centralAdminVariant) return;
     const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
     const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
     const isAdminAccountSettings = rootSegment === "account-settings";
@@ -448,7 +465,7 @@ function RootLayoutNav() {
     ) return;
     if (inOrgConnect && canViewOrgConnect) return;
     router.replace("/" as any);
-  }, [rootSegment, childSegment, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect]);
+  }, [rootSegment, childSegment, loading, isAuthenticated, isSystemAdmin, inAnyLogin, router, inOrgConnect, canViewOrgConnect, centralAdminVariant]);
 
   useEffect(() => {
     if (loading || Platform.OS === "web") return;
@@ -979,6 +996,7 @@ function RootLayoutNav() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Update Available</Text>
+            <Text style={styles.modalText}>Variant: {appVariant}</Text>
             <Text style={styles.modalText}>Current: {getCurrentAppVersion()} ({getCurrentBuildNumber() || "-"})</Text>
             <Text style={styles.modalText}>Latest: {updateInfo?.latestVersion || "-"} ({updateInfo?.latestBuildNumber || "-"})</Text>
             {updateInfo?.notes ? <Text style={styles.modalNotes}>{updateInfo.notes}</Text> : null}

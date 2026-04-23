@@ -20,6 +20,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../lib/AuthContext";
 import { getCurrentAppVersion } from "../lib/app-update";
+import { isCentralAdminVariant, isOrgClientVariant } from "../lib/app-variant";
 import { useData } from "../lib/DataContext";
 import { persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
 import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
@@ -57,6 +58,8 @@ export default function SignInScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const appVersion = getCurrentAppVersion();
+  const orgClientVariant = isOrgClientVariant();
+  const centralAdminVariant = isCentralAdminVariant();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -130,6 +133,11 @@ export default function SignInScreen() {
       setCheckingUsername(false);
     }
   };
+
+  useEffect(() => {
+    if (!centralAdminVariant) return;
+    router.replace("/admin-sign-in" as any);
+  }, [centralAdminVariant, router]);
 
   useEffect(() => {
     let active = true;
@@ -559,9 +567,11 @@ export default function SignInScreen() {
             <Pressable style={styles.forgotBtn} onPress={() => setShowForgotModal(true)}>
               <Text style={styles.forgotBtnText}>Password မေ့နေပါသလား?</Text>
             </Pressable>
-            <Pressable style={styles.adminLoginBtn} onPress={() => router.push("/admin-sign-in" as any)}>
-              <Text style={styles.adminLoginBtnText}>System Admin Login</Text>
-            </Pressable>
+            {!orgClientVariant && !centralAdminVariant ? (
+              <Pressable style={styles.adminLoginBtn} onPress={() => router.push("/admin-sign-in" as any)}>
+                <Text style={styles.adminLoginBtnText}>System Admin Login</Text>
+              </Pressable>
+            ) : null}
             {lockRemainingMs > 0 ? (
               <Text style={styles.lockText}>ယာယီပိတ်ထားပါသည်။ ထပ်မံကြိုးစားရန် ကျန်ချိန်: {lockMessage}</Text>
             ) : null}
