@@ -4,9 +4,12 @@ import React from "react";
 import { ActivityIndicator, Platform, View } from "react-native";
 // လမ်းကြောင်းကို Folder တစ်ဆင့်ပဲ ပြန်ထွက်ရန် ပြင်ဆင်ထားသည်
 import { useAuth } from "../../lib/AuthContext";
+import { isCentralAdminVariant, isOrgClientVariant } from "../../lib/app-variant";
 
 export default function TabLayout() {
   const { loading, isAuthenticated } = useAuth();
+  const orgClientVariant = isOrgClientVariant();
+  const centralAdminVariant = isCentralAdminVariant();
   const segments = useSegments();
   const rootSegment = String(segments[0] || "");
   const childSegment = String(segments[1] || "");
@@ -28,15 +31,23 @@ export default function TabLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Redirect href={inSystemTab ? "/admin-sign-in" : "/sign-in"} />;
+    return <Redirect href={inSystemTab || centralAdminVariant ? "/admin-sign-in" : "/sign-in"} />;
+  }
+
+  if (orgClientVariant && inSystemTab) {
+    return <Redirect href="/" />;
+  }
+
+  if (centralAdminVariant && !inSystemTab) {
+    return <Redirect href="/system" />;
   }
 
   return (
     <View style={{ flex: 1 }}>
       <Tabs screenOptions={{ headerShown: false, tabBarStyle: { display: 'none' } }}>
-        <Tabs.Screen name="index" />
-        <Tabs.Screen name="finance" />
-        <Tabs.Screen name="reports" />
+        {!centralAdminVariant && <Tabs.Screen name="index" />}
+        {!centralAdminVariant && <Tabs.Screen name="finance" />}
+        {!centralAdminVariant && <Tabs.Screen name="reports" />}
         <Tabs.Screen name="system" />
       </Tabs>
     </View>

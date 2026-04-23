@@ -21,6 +21,7 @@ import {
   upsertOrgRegistryEntry,
   type OrgRegistryEntry,
 } from "../../lib/org-registry";
+import { getAppVariantLabel, isCentralAdminVariant, isOrgClientVariant } from "../../lib/app-variant";
 
 const RegistryRow = ({
   label,
@@ -49,6 +50,9 @@ export default function SystemScreen() {
   const insets = useSafeAreaInsets();
   const { refreshData } = useData() as any;
   const { can } = useAuth();
+  const orgClientVariant = isOrgClientVariant();
+  const centralAdminVariant = isCentralAdminVariant();
+  const appVariantLabel = getAppVariantLabel();
   const canManageSystem = can("system.manage");
   const currentVersion = getCurrentAppVersion();
   const currentBuild = getCurrentBuildNumber();
@@ -96,9 +100,14 @@ export default function SystemScreen() {
   const systemInfo = {
     releaseDate: "2026-02-21",
     developer: "MR. SOE MYINT SWE",
-    packageId: "com.soemyintswe.orghub",
+    packageId: centralAdminVariant ? "com.soemyintswe.orghub.centraladmin" : "com.soemyintswe.orghub",
     copyright: "Copyright (c) 2026 Social Org Manager. All rights reserved.",
   };
+
+  React.useEffect(() => {
+    if (!orgClientVariant) return;
+    router.replace("/" as any);
+  }, [orgClientVariant]);
 
   const formatDateDdMmYyyy = (date: Date): string => {
     const dd = String(date.getDate()).padStart(2, "0");
@@ -732,8 +741,20 @@ export default function SystemScreen() {
       style={[styles.container, { paddingTop: insets.top + 20 }]}
       contentContainerStyle={styles.content}
     >
-      <Text style={styles.title}>System Management</Text>
-      <Text style={styles.subtitle}>Manage your data and settings</Text>
+      {orgClientVariant ? (
+        <View style={{ minHeight: 320, justifyContent: "center", alignItems: "center", paddingHorizontal: 24 }}>
+          <ActivityIndicator size="large" color={Colors.light.tint} />
+          <Text style={[styles.title, { marginTop: 16, textAlign: "center" }]}>Org Client Build</Text>
+          <Text style={[styles.subtitle, { textAlign: "center", marginBottom: 0 }]}>
+            System Management ကို org-client build တွင်ပိတ်ထားပါသည်။
+          </Text>
+        </View>
+      ) : (
+        <>
+      <Text style={styles.title}>{centralAdminVariant ? "Central Admin Management" : "System Management"}</Text>
+      <Text style={styles.subtitle}>
+        {centralAdminVariant ? `Manage central registry and system settings (${appVariantLabel})` : "Manage your data and settings"}
+      </Text>
 
       {canManageSystem ? (
         <View style={styles.menuContainer}>
@@ -1346,6 +1367,8 @@ export default function SystemScreen() {
         <Text style={styles.footerText}>© 2024 OrgHub Manager</Text>
         <Text style={styles.footerSubText}>Created by MR. SOE MYINT SWE</Text>
       </View>
+        </>
+      )}
     </ScrollView>
   );
 }

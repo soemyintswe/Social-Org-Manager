@@ -1,10 +1,10 @@
 # Project Handover & Maintenance Guide
 
-Last updated: 2026-04-23  
-Current app version: `1.1.72`  
-Android versionCode: `73`  
+Last updated: 2026-04-24  
+Current app version: `1.1.73`  
+Android versionCode: `74`  
 Active maintenance branch: `deploy-fix`  
-Latest stable restore point tag: `restore-point-2026-04-23-part7-mobile-stable` (commit `3884dc4`)
+Latest stable restore point tag: `restore-point-2026-04-24-pre-variant-split` (commit `28d9e0bb4208292d1e43a790d730d1fc7132f6ec`)
 
 ## Current Stable State (Part 7)
 
@@ -21,6 +21,10 @@ Latest stable restore point tag: `restore-point-2026-04-23-part7-mobile-stable` 
   - `/api/sync/health`
 - Org Connect startup flicker/route bounce mitigation is applied in startup routing.
 - Android auto-update check now runs pre-login (app can prompt update before sign-in).
+- Build variants scaffolding is in place:
+  - `unified` = current live behavior
+  - `org-client` = hides admin entry/system management
+  - `central-admin` = dedicated central registry/admin flow
 
 ## Project Overview
 
@@ -160,6 +164,37 @@ Important for deploy:
 
 - Deploy branch (`deploy-fix`) should exclude tracked APK binaries.
 - After deploy, verify live commit via `/api/sync/health`.
+
+## Build Variants
+
+Current safe default:
+
+- If `APP_VARIANT` is not set, app runs as `unified`
+- `unified` is the current production-compatible mode and keeps existing behavior
+
+Available variants:
+
+- `APP_VARIANT=unified`
+- `APP_VARIANT=org-client`
+- `APP_VARIANT=central-admin`
+
+Variant build commands:
+
+```bash
+npm run variant:org-client:web
+npm run variant:central-admin:web
+npm run variant:org-client:apk
+npm run variant:central-admin:apk
+npm run variant:org-client:desktop:release
+npm run variant:central-admin:desktop:release
+```
+
+Current separation status:
+
+- `org-client` hides `System Admin Login`
+- `org-client` blocks `/system`
+- `central-admin` uses dedicated app identity from `app.config.js`
+- Default `unified` build remains unchanged until dedicated release channels are finalized
 
 ## Common Maintenance Tasks
 

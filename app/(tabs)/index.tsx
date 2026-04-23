@@ -38,6 +38,7 @@ import {
 import { parseGregorianDate, splitPhoneNumbers } from "../../lib/member-utils";
 import { DEFAULT_LAN_SYNC_URL } from "../../lib/sync-defaults";
 import { resolveNotificationRoute } from "../../lib/notification-routing";
+import { isOrgClientVariant } from "../../lib/app-variant";
 
 const AsyncStorage = orgStorage;
 
@@ -194,6 +195,7 @@ export default function DashboardScreen() {
   const { members, events, transactions, loans, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
   const safeMembers = Array.isArray(members) ? members : [];
   const { currentUser, currentMember, can } = useAuth();
+  const orgClientVariant = isOrgClientVariant();
   useEffect(() => {
     if (!loading && !currentUser) {
       router.replace("/sign-in");
@@ -1231,7 +1233,7 @@ export default function DashboardScreen() {
                   spinning={syncingNow}
                 />
                 <QuickAction icon="options-outline" label="Account Settings" onPress={() => router.push("/account-settings" as any)} />
-                <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />
+                {!orgClientVariant && <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />}
               </View>
           </View>
         </ScrollView>
