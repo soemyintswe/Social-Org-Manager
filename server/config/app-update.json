@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.72",
-  "latestBuildNumber": "73",
+  "latestVersion": "1.1.73",
+  "latestBuildNumber": "74",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.72-202604230241.apk",
-  "notes": "Version 1.1.72: Org Connect screen flicker/redirect stabilization + pre-login auto update check.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.73-202604231112.apk",
+  "notes": "Version 1.1.73: Large web backup import reads full selected file and restored data auto-pushes to sync targets.",
   "force": false,
-  "publishedAt": "2026-04-22T20:11:27.105Z"
+  "publishedAt": "2026-04-23T04:42:56.721Z"
 }
