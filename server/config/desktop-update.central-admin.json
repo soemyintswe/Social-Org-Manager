@@ -1,0 +1,10 @@
+{
+  "variant": "central-admin",
+  "latestVersion": "1.1.73",
+  "latestBuildNumber": "73",
+  "minimumVersion": "1.0.0",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Org-Registry-Central-Admin-Setup-v1.1.73.exe",
+  "notes": "Central Admin desktop channel placeholder. Replace with dedicated admin EXE once that build line is produced.",
+  "force": false,
+  "publishedAt": "2026-04-24T00:00:00.000Z"
+}

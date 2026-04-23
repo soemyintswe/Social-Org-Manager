@@ -3,8 +3,55 @@ const path = require("path");
 const net = require("net");
 const fs = require("fs");
 
-app.setName("Social Org Manager");
-app.setAppUserModelId("com.soemyintswe.orghub.desktop");
+function normalizeVariant(raw) {
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-");
+  if (value === "org-client" || value === "client" || value === "org") return "org-client";
+  if (value === "central-admin" || value === "admin" || value === "central") return "central-admin";
+  return "unified";
+}
+
+function inferDesktopVariant() {
+  const fromEnv = normalizeVariant(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || "");
+  if (fromEnv !== "unified") return fromEnv;
+  try {
+    const name = String(app.getName() || "").trim().toLowerCase();
+    if (name.includes("central admin")) return "central-admin";
+    if (name.includes("social org manager")) return "org-client";
+  } catch {
+    // ignore
+  }
+  return "unified";
+}
+
+function getDesktopAppIdentity() {
+  const variant = inferDesktopVariant();
+  if (variant === "central-admin") {
+    return {
+      variant,
+      appName: "Org Registry Central Admin",
+      appUserModelId: "com.soemyintswe.orghub.centraladmin.desktop",
+    };
+  }
+  if (variant === "org-client") {
+    return {
+      variant,
+      appName: "Social Org Manager",
+      appUserModelId: "com.soemyintswe.orghub.desktop",
+    };
+  }
+  return {
+    variant,
+    appName: "Social Org Manager",
+    appUserModelId: "com.soemyintswe.orghub.desktop",
+  };
+}
+
+const desktopIdentity = getDesktopAppIdentity();
+app.setName(desktopIdentity.appName);
+app.setAppUserModelId(desktopIdentity.appUserModelId);
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.disableHardwareAcceleration();
@@ -111,7 +158,7 @@ function getDesktopUpdateToken(payload) {
 async function checkDesktopUpdate(baseUrl) {
   try {
     const currentVersion = String(app.getVersion() || "0.0.0").trim();
-    const url = `${baseUrl}/api/desktop-update?platform=desktop&version=${encodeURIComponent(currentVersion)}`;
+    const url = `${baseUrl}/api/desktop-update?platform=desktop&variant=${encodeURIComponent(desktopIdentity.variant)}&version=${encodeURIComponent(currentVersion)}`;
     logDesktop(`desktop update check: ${url}`);
     const res = await fetch(url, {
       method: "GET",
@@ -371,10 +418,10 @@ async function createWindow() {
       const webUrl = `${baseUrl}/web/`;
       const fallbackHtml = `
         <!doctype html>
-        <html lang="en">
-          <head><meta charset="utf-8"><title>Social Org Manager</title></head>
-          <body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f6f8fb;color:#0f172a">
-            <h2 style="margin-top:0">Social Org Manager</h2>
+      <html lang="en">
+          <head><meta charset="utf-8"><title>${desktopIdentity.appName}</title></head>
+        <body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f6f8fb;color:#0f172a">
+            <h2 style="margin-top:0">${desktopIdentity.appName}</h2>
             <p>Desktop UI ကိုဖွင့်မရသေးပါ။ အောက်က လင့်ခ်ကနေ browser mode နဲ့ဖွင့်နိုင်ပါတယ်။</p>
             <p><a href="${webUrl}" style="font-size:16px">Open App In Browser</a></p>
             <p><button id="retry" style="margin-top:8px;padding:8px 12px;border-radius:6px;border:1px solid #cbd5f5;background:#fff;cursor:pointer">Retry Desktop UI</button></p>
@@ -421,9 +468,9 @@ async function createWindow() {
     const fallbackHtml = `
       <!doctype html>
       <html lang="en">
-        <head><meta charset="utf-8"><title>Social Org Manager</title></head>
+        <head><meta charset="utf-8"><title>${desktopIdentity.appName}</title></head>
         <body style="font-family:Segoe UI,Arial,sans-serif;padding:24px;background:#f6f8fb;color:#0f172a">
-          <h2 style="margin-top:0">Social Org Manager</h2>
+          <h2 style="margin-top:0">${desktopIdentity.appName}</h2>
           <p>Desktop UI ကိုဖွင့်မရပါ။</p>
           <pre style="white-space:pre-wrap;background:#fff;padding:12px;border-radius:8px;border:1px solid #e2e8f0;">
 Code: ${errorCode}

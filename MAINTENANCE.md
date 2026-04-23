@@ -197,6 +197,8 @@ Current separation status:
 - update metadata can now resolve by variant with fallback:
   - `app-update.org-client.json`
   - `desktop-update.org-client.json`
+  - `app-update.central-admin.json`
+  - `desktop-update.central-admin.json`
   - if variant file is missing, current default update JSON is still used
 - Default `unified` build remains unchanged until dedicated release channels are finalized
 

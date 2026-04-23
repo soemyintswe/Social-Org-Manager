@@ -16,8 +16,8 @@
     "web:build": "npx expo export --platform web --output-dir web-build",
     "desktop:prep": "npm run web:build && npm run server:build",
     "desktop:start": "npm run desktop:prep && npx electron desktop/main.cjs",
-    "desktop:dist": "npm run desktop:prep && npx electron-builder --win portable -c.extraMetadata.main=desktop/main.cjs",
-    "desktop:dist:setup": "npm run desktop:prep && npx electron-builder --win nsis -c.extraMetadata.main=desktop/main.cjs",
+    "desktop:dist": "npm run desktop:prep && npx electron-builder --win portable --config desktop/electron-builder-config.cjs",
+    "desktop:dist:setup": "npm run desktop:prep && npx electron-builder --win nsis --config desktop/electron-builder-config.cjs",
     "desktop:update-config": "node scripts/update-desktop-update-config.js",
     "desktop:release": "npm run desktop:dist:setup && npm run desktop:update-config",
     "variant:org-client:web": "set APP_VARIANT=org-client&& set EXPO_PUBLIC_APP_VARIANT=org-client&& npm run web:build",
@@ -123,49 +123,6 @@
     "patch-package": "^8.0.0",
     "png-to-ico": "^3.0.1",
     "typescript": "~5.9.2"
-  },
-  "build": {
-    "appId": "com.soemyintswe.orghub.desktop",
-    "productName": "Social Org Manager",
-    "extraMetadata": {
-      "main": "desktop/main.cjs"
-    },
-    "directories": {
-      "output": "desktop-dist"
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        "portable",
-        "nsis"
-      ],
-      "signAndEditExecutable": false
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false
-    },
-    "files": [
-      "desktop/**/*",
-      "server_dist/**/*",
-      "web-build/**/*",
-      "server/templates/**/*",
-      "server/config/**/*",
-      "assets/**/*",
-      "package.json",
-      "!**/node_modules/**/android/**",
-      "!**/node_modules/**/ios/**",
-      "!**/node_modules/**/build/**",
-      "!**/node_modules/**/example/**",
-      "!**/node_modules/**/examples/**",
-      "!**/node_modules/**/sample/**",
-      "!**/node_modules/**/samples/**",
-      "!**/node_modules/**/docs/**",
-      "!**/node_modules/**/test/**",
-      "!**/node_modules/**/tests/**",
-      "web-build/assets/node_modules/**"
-    ]
   },
   "overrides": {
     "tar": "^7.5.11",
