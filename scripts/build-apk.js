@@ -5,6 +5,17 @@ const path = require('path');
 const { execSync } = require('child_process');
 const cleanupReleases = path.resolve(__dirname, './cleanup-releases.js');
 
+function normalizeVariant(raw) {
+  const value = String(raw || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (value === 'org-client' || value === 'client' || value === 'org') return 'org-client';
+  if (value === 'central-admin' || value === 'admin' || value === 'central') return 'central-admin';
+  return 'unified';
+}
+
+function getAppVariant() {
+  return normalizeVariant(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || 'unified');
+}
+
 function readAppVersion() {
   try {
     const appJsonRaw = fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8');
@@ -76,6 +87,12 @@ function getDownloadBaseUrl() {
   return `https://github.com/${meta.owner}/${meta.repo}/releases/latest/download`;
 }
 
+function getAppUpdateConfigPath() {
+  const variant = getAppVariant();
+  const filename = variant === 'unified' ? 'app-update.json' : `app-update.${variant}.json`;
+  return path.resolve(__dirname, '../server/config', filename);
+}
+
 function syncAndroidNativeVersion({ version, buildNumber }) {
   const gradlePath = path.resolve(__dirname, '../android/app/build.gradle');
   if (!fs.existsSync(gradlePath)) {
@@ -102,7 +119,7 @@ function syncAndroidNativeVersion({ version, buildNumber }) {
 }
 
 function updateAppUpdateConfig({ version, buildNumber, filename }) {
-  const configPath = path.resolve(__dirname, '../server/config/app-update.json');
+  const configPath = getAppUpdateConfigPath();
   if (!fs.existsSync(configPath)) return;
 
   let config;
@@ -116,6 +133,7 @@ function updateAppUpdateConfig({ version, buildNumber, filename }) {
   config.latestVersion = version;
   if (buildNumber) config.latestBuildNumber = String(buildNumber);
   config.publishedAt = new Date().toISOString();
+  config.variant = getAppVariant();
 
   const baseUrl = getDownloadBaseUrl();
   if (baseUrl) {

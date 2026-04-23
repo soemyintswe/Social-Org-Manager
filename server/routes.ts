@@ -59,6 +59,16 @@ function getDesktopUpdateConfigPath(): string {
   return resolveFromBase("server", "config", "desktop-update.json");
 }
 
+function normalizeUpdateVariant(raw: unknown): "unified" | "org-client" | "central-admin" {
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-");
+  if (value === "org-client" || value === "client" || value === "org") return "org-client";
+  if (value === "central-admin" || value === "admin" || value === "central") return "central-admin";
+  return "unified";
+}
+
 function normalizeUpdatePlatform(raw: unknown): "android" | "desktop" {
   const value = String(raw || "").trim().toLowerCase();
   if (value === "desktop" || value === "win" || value === "windows" || value === "electron") {
@@ -67,7 +77,19 @@ function normalizeUpdatePlatform(raw: unknown): "android" | "desktop" {
   return "android";
 }
 
-function getUpdateConfigPathForPlatform(platformRaw: unknown): string {
+function getVariantSpecificUpdateConfigPath(platformRaw: unknown, variantRaw: unknown): string {
+  const platform = normalizeUpdatePlatform(platformRaw);
+  const variant = normalizeUpdateVariant(variantRaw);
+  if (variant === "unified") {
+    return platform === "desktop" ? getDesktopUpdateConfigPath() : getAppUpdateConfigPath();
+  }
+  const filename = platform === "desktop" ? `desktop-update.${variant}.json` : `app-update.${variant}.json`;
+  return resolveFromBase("server", "config", filename);
+}
+
+function getUpdateConfigPathForPlatform(platformRaw: unknown, variantRaw: unknown): string {
+  const variantPath = getVariantSpecificUpdateConfigPath(platformRaw, variantRaw);
+  if (fs.existsSync(variantPath)) return variantPath;
   const platform = normalizeUpdatePlatform(platformRaw);
   if (platform === "desktop") return getDesktopUpdateConfigPath();
   return getAppUpdateConfigPath();
@@ -366,7 +388,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const handleUpdateCheck = (platformRaw: unknown, req: any, res: any) => {
     try {
-      const configPath = getUpdateConfigPathForPlatform(platformRaw);
+      const configPath = getUpdateConfigPathForPlatform(platformRaw, req.query.variant);
       if (!fs.existsSync(configPath)) {
         return res.status(404).json({ message: "update_config_not_found" });
       }

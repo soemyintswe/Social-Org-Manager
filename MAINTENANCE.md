@@ -194,6 +194,10 @@ Current separation status:
 - `org-client` hides `System Admin Login`
 - `org-client` blocks `/system`
 - `central-admin` uses dedicated app identity from `app.config.js`
+- update metadata can now resolve by variant with fallback:
+  - `app-update.org-client.json`
+  - `desktop-update.org-client.json`
+  - if variant file is missing, current default update JSON is still used
 - Default `unified` build remains unchanged until dedicated release channels are finalized
 
 ## Common Maintenance Tasks

@@ -2,6 +2,17 @@ const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 
+function normalizeVariant(raw) {
+  const value = String(raw || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+  if (value === "org-client" || value === "client" || value === "org") return "org-client";
+  if (value === "central-admin" || value === "admin" || value === "central") return "central-admin";
+  return "unified";
+}
+
+function getAppVariant() {
+  return normalizeVariant(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || "unified");
+}
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -64,10 +75,16 @@ function resolveDownloadUrl(version) {
   return "";
 }
 
+function getDesktopUpdateConfigPath() {
+  const variant = getAppVariant();
+  const filename = variant === "unified" ? "desktop-update.json" : `desktop-update.${variant}.json`;
+  return path.resolve(__dirname, "..", "server", "config", filename);
+}
+
 function main() {
   const version = readAppVersion();
   const buildNumber = readDesktopBuildNumber(version);
-  const configPath = path.resolve(__dirname, "..", "server", "config", "desktop-update.json");
+  const configPath = getDesktopUpdateConfigPath();
   let config = {};
 
   if (fs.existsSync(configPath)) {
@@ -82,6 +99,7 @@ function main() {
 
   const next = {
     ...config,
+    variant: getAppVariant(),
     latestVersion: version,
     latestBuildNumber: buildNumber || String(config.latestBuildNumber || ""),
     minimumVersion: String(config.minimumVersion || "1.0.0"),

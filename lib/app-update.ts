@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 import * as Application from "expo-application";
 import { getAccountSettings } from "./storage-service";
 import { getAppUpdateJsonUrl } from "./remote-config";
+import { getAppVariant, isCentralAdminVariant } from "./app-variant";
 
 export type AppUpdateInfo = {
   ok: boolean;
@@ -21,6 +22,16 @@ const DEFAULT_GITHUB_APP_UPDATE_JSON_URLS = [
   "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/main/server/config/app-update.json",
   "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/feature/expense-management-system/server/config/app-update.json",
 ].filter(Boolean);
+
+function buildVariantUpdateJsonCandidates(baseUrl: string, variant: string): string[] {
+  const trimmed = String(baseUrl || "").trim();
+  if (!trimmed || !variant || variant === "unified") return trimmed ? [trimmed] : [];
+  const qIndex = trimmed.indexOf("?");
+  const pathPart = qIndex >= 0 ? trimmed.slice(0, qIndex) : trimmed;
+  const queryPart = qIndex >= 0 ? trimmed.slice(qIndex) : "";
+  const suffixPath = pathPart.replace(/\.json$/i, `.${variant}.json`);
+  return Array.from(new Set([`${suffixPath}${queryPart}`, trimmed].filter(Boolean)));
+}
 
 function parseVersion(version: string): number[] {
   return String(version || "")
@@ -84,7 +95,12 @@ function withCacheBust(url: string): string {
 
 function getRemoteUpdateJsonCandidates(remoteUrlRaw: string): string[] {
   const fromRemoteConfig = String(remoteUrlRaw || "").trim();
-  return Array.from(new Set([fromRemoteConfig, ...DEFAULT_GITHUB_APP_UPDATE_JSON_URLS].filter(Boolean)));
+  const variant = getAppVariant();
+  const candidates = [
+    ...buildVariantUpdateJsonCandidates(fromRemoteConfig, variant),
+    ...DEFAULT_GITHUB_APP_UPDATE_JSON_URLS.flatMap((url) => buildVariantUpdateJsonCandidates(url, variant)),
+  ];
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 
 async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
@@ -143,6 +159,8 @@ function mapPayloadToInfo(payload: Partial<AppUpdateInfo>, currentVersion: strin
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = getCurrentAppVersion();
   const currentBuild = getCurrentBuildNumber();
+  const variant = getAppVariant();
+  const platform = isCentralAdminVariant() ? "desktop" : "android";
   let lastReason = "update_check_failed";
   let bestInfo: AppUpdateInfo | null = null;
 
@@ -181,7 +199,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     if (lanSyncEnabled) {
       try {
         const res = await fetchWithTimeout(
-          `${baseUrl}/api/app-update?platform=android&version=${encodeURIComponent(currentVersion)}&build=${encodeURIComponent(currentBuild)}`,
+          `${baseUrl}/api/app-update?platform=${encodeURIComponent(platform)}&variant=${encodeURIComponent(variant)}&version=${encodeURIComponent(currentVersion)}&build=${encodeURIComponent(currentBuild)}`,
           3000 // Short timeout for LAN check
         );
         if (res.ok) {
