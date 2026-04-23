@@ -36,23 +36,23 @@ This session focused on release automation completion, Org Connect startup stabi
 
 ## Release Asset Status
 
-- GitHub release tag: `v1.1.71`
-- Current assets on that tag:
+- GitHub release tag normalized to clean semantic tag: `v1.1.72`
+- Current assets on `v1.1.72`:
   - `release-lan-sync-v1.1.72-202604230241.apk`
-  - `release-lan-sync-v1.1.71-202604220140.apk`
-  - `Social-Org-Manager-Setup-v1.1.71.exe`
+  - `Social-Org-Manager-Setup-v1.1.72.exe`
+  - `Social-Org-Manager-Setup-v1.1.72.exe.blockmap`
+- Desktop update metadata is aligned to `1.1.72`:
+  - `server/config/desktop-update.json` -> `latestVersion=1.1.72`
 
 ## Watch Items / Unresolved
 
-- Desktop update track is still `1.1.71` (`desktop-update.json` + EXE version), while Android is `1.1.72`.
-- Release tag/version naming should be normalized (avoid newer APK under older semantic tag long-term).
 - End-to-end automated regression suite is still missing (manual QA checklist remains primary).
+- Full manual reconnect smoke matrix results (Android/Web with screenshots) should still be recorded.
+- Legacy `v1.1.71` tag assets can be kept as history or pruned later by release policy.
 
 ## Recommended Next Session Start
 
 1. Stay on branch `deploy-fix`.
 2. Confirm `/api/sync/health` still matches current `HEAD`.
-3. Decide release strategy:
-   - keep `v1.1.71` as rolling latest container, or
-   - create clean `v1.1.72` tag and align assets.
-4. If releasing desktop update too, build EXE `1.1.72` and refresh `server/config/desktop-update.json`.
+3. Run manual reconnect matrix on Android and Web, and save evidence in docs.
+4. If QA passes, create a fresh restore-point tag for this release-aligned state.

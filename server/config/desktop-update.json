@@ -1,9 +1,9 @@
 {
-  "latestVersion": "1.1.71",
-  "latestBuildNumber": "71",
+  "latestVersion": "1.1.72",
+  "latestBuildNumber": "72",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Social-Org-Manager-Setup-v1.1.71.exe",
-  "notes": "Version 1.1.71: Desktop startup update checker + org reconnect hardening.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Social-Org-Manager-Setup-v1.1.72.exe",
+  "notes": "Version 1.1.72: Desktop release line aligned with mobile release and clean v1.1.72 tag assets.",
   "force": false,
-  "publishedAt": "2026-04-21T19:14:47.908Z"
+  "publishedAt": "2026-04-22T20:58:41.950Z"
 }

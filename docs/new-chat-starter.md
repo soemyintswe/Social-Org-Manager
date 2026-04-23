@@ -15,14 +15,22 @@ Use this file to continue work in a brand-new chat without losing context.
 
 ## Current Baseline
 
-- Latest deploy-fix commit: `3884dc4`
-- Render health commit: matched with `3884dc4` in latest verification
+- Latest deploy-fix commit: `b64d42a`
+- Render health commit: matched with `b64d42a` in latest verification
 - Mobile release line:
   - version `1.1.72`
   - build `73`
   - update metadata points to `release-lan-sync-v1.1.72-202604230241.apk`
 - Desktop release line:
-  - still `1.1.71` in `server/config/desktop-update.json`
+  - version `1.1.72`
+  - build `72`
+  - update metadata points to `Social-Org-Manager-Setup-v1.1.72.exe`
+- Release tag policy:
+  - clean semantic tag `v1.1.72` created
+  - assets verified on tag:
+    - `release-lan-sync-v1.1.72-202604230241.apk`
+    - `Social-Org-Manager-Setup-v1.1.72.exe`
+    - `Social-Org-Manager-Setup-v1.1.72.exe.blockmap`
 
 ## Must-Read Order
 
@@ -58,6 +66,6 @@ Then continue only from unresolved items in part7 summary.
 
 ## Immediate Next Tasks (If Continuing Now)
 
-1. Align desktop release version to `1.1.72` and refresh `desktop-update.json`.
-2. Decide final release-tag policy (`v1.1.71` rolling vs clean `v1.1.72` tag).
-3. Run org reconnect smoke checks on Android and Web, record results.
+1. Run full manual org reconnect smoke checks on Android and Web (EXE optional), and record screenshot evidence.
+2. Decide whether to keep legacy `v1.1.71` tag assets as history or prune mismatched legacy assets.
+3. Add a new restore-point tag after QA sign-off for this release-aligned state.

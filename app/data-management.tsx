@@ -33,6 +33,7 @@ import { normalizeOrgPosition } from "../lib/types";
 const AsyncStorage = orgStorage;
 
 export default function DataManagementScreen() {
+  const FILE_PREVIEW_LIMIT = 120000;
   const insets = useSafeAreaInsets();
   const { refreshData, accountSettings } = useData() as any;
   const { can, currentUser, currentMember } = useAuth();
@@ -45,6 +46,8 @@ export default function DataManagementScreen() {
   const backupOrgIdToken = activeOrgId.replace(/[^A-Z0-9_-]/g, "") || "ORG000";
   const [importing, setImporting] = useState(false);
   const [backupText, setBackupText] = useState("");
+  const [selectedBackupContent, setSelectedBackupContent] = useState("");
+  const [selectedBackupName, setSelectedBackupName] = useState("");
   const [processing, setProcessing] = useState(false);
   const [restoreMode, setRestoreMode] = useState<"replace" | "merge">("replace");
   const [isAutoBackup, setIsAutoBackup] = useState(false);
@@ -199,14 +202,28 @@ export default function DataManagementScreen() {
       let content = "";
 
       if (Platform.OS === "web") {
-        const response = await fetch(asset.uri);
-        content = await response.text();
+        const webFile = (asset as any)?.file as File | undefined;
+        if (webFile && typeof webFile.text === "function") {
+          content = await webFile.text();
+        } else {
+          const response = await fetch(asset.uri);
+          content = await response.text();
+        }
       } else {
         content = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
       }
 
-      setBackupText(content);
-      const msg = "ဖိုင်ထဲမှ အချက်အလက်များကို ထည့်သွင်းပြီးပါပြီ။ Restore ခလုတ်နှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ။";
+      setSelectedBackupContent(content);
+      setSelectedBackupName(String(asset.name || "selected-backup.json"));
+      if (content.length > FILE_PREVIEW_LIMIT) {
+        setBackupText(
+          `${content.slice(0, FILE_PREVIEW_LIMIT)}\n\n...[Preview truncated. Full file remains loaded for restore.]`
+        );
+      } else {
+        setBackupText(content);
+      }
+      const msg =
+        "ဖိုင်ကို တိုက်ရိုက်ဖတ်ပြီးပါပြီ။ Text box သည် preview သာဖြစ်နိုင်ပြီး Restore/Import လုပ်ရာတွင် full file content ကို အသုံးပြုပါမည်။";
       if (Platform.OS === "web") {
         alert(msg);
       } else {
@@ -221,6 +238,8 @@ export default function DataManagementScreen() {
   const handlePaste = async () => {
     const text = await Clipboard.getStringAsync();
     if (text) {
+      setSelectedBackupContent("");
+      setSelectedBackupName("");
       setBackupText(text);
       if (Platform.OS === 'android') {
         ToastAndroid.show("Pasted from Clipboard", ToastAndroid.SHORT);
@@ -257,7 +276,8 @@ export default function DataManagementScreen() {
   };
 
   const handleRestore = async () => {
-    if (!backupText.trim()) {
+    const restorePayload = (selectedBackupContent || backupText).trim();
+    if (!restorePayload) {
       alert("Restore လုပ်ရန် အပေါ်ရှိ အကွက်ထဲတွင် Backup စာသားများကို Paste လုပ်ပေးပါ။");
       return;
     }
@@ -282,10 +302,11 @@ export default function DataManagementScreen() {
 
   const performRestore = async () => {
     setImporting(true);
+    const restorePayload = selectedBackupContent || backupText;
     
     // Events နှင့် Custom Categories များကို သီးသန့်ပြန်ထည့်မည်
     try {
-      const parsed = JSON.parse(backupText);
+      const parsed = JSON.parse(restorePayload);
       if (Array.isArray(parsed.events)) {
         if (restoreMode === "merge") {
           const currentEventsRaw = await AsyncStorage.getItem("@orghub_events");
@@ -308,7 +329,7 @@ export default function DataManagementScreen() {
       }
     } catch (e) { console.log("Extra data restore error", e); }
 
-    const success = restoreMode === "merge" ? await mergeData(backupText) : await restoreData(backupText);
+    const success = restoreMode === "merge" ? await mergeData(restorePayload) : await restoreData(restorePayload);
     if (success) {
       if (refreshData) await refreshData();
       
@@ -443,9 +464,19 @@ export default function DataManagementScreen() {
             multiline
             placeholder="Restore လုပ်ရန် Backup စာသားများကို ဒီမှာ Paste လုပ်ပါ (သို့မဟုတ်) အပေါ်ကခလုတ်ဖြင့် ဖိုင်ရွေးပါ..."
             value={backupText}
-            onChangeText={setBackupText}
+            onChangeText={(text) => {
+              setSelectedBackupContent("");
+              setSelectedBackupName("");
+              setBackupText(text);
+            }}
             textAlignVertical="top"
           />
+
+          {selectedBackupName ? (
+            <Text style={styles.fileSourceNote}>
+              Selected file: {selectedBackupName} | direct file import is active
+            </Text>
+          ) : null}
 
           <View style={styles.modeRow}>
             <Pressable
@@ -581,6 +612,13 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: Colors.light.textSecondary,
     textAlign: "center",
+  },
+  fileSourceNote: {
+    marginTop: -8,
+    marginBottom: 14,
+    fontSize: 12,
+    color: Colors.light.tint,
+    fontFamily: "Inter_500Medium",
   },
 });
 

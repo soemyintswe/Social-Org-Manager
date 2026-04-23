@@ -46,7 +46,16 @@ _Last updated: 2026-04-23 (Asia/Rangoon)_
     - `release:upload-assets:verify-render`
 - Release prep updated to version `1.1.72` / Android build `73`; mobile APK metadata is live.
 - Render deployed commit was re-verified after latest deploy-fix updates:
-  - local `HEAD` and `/api/sync/health` commit hash matched (`3884dc4...`) in latest check.
+  - local `HEAD` and `/api/sync/health` commit hash matched (`b64d42a...`) in latest check.
+- Desktop update metadata is now aligned to `1.1.72`:
+  - `server/config/desktop-update.json` points to `Social-Org-Manager-Setup-v1.1.72.exe`
+- Clean semantic release tag `v1.1.72` now exists with verified assets:
+  - `release-lan-sync-v1.1.72-202604230241.apk`
+  - `Social-Org-Manager-Setup-v1.1.72.exe`
+  - `Social-Org-Manager-Setup-v1.1.72.exe.blockmap`
+- Org reconnect smoke-lite verification passed on latest `deploy-fix`:
+  - Render commit match: `b64d42a...`
+  - ORG scope checks: `ORG001` and `ORG002` passed
 
 ## 2) In Progress / Watch Items
 
@@ -54,8 +63,8 @@ _Last updated: 2026-04-23 (Asia/Rangoon)_
 - Ops hygiene still recommended:
   - avoid committing large release binaries into app deploy branch
   - keep Render deployed commit aligned with latest `deploy-fix`.
-- Version alignment still recommended:
-  - desktop release stream is still on `1.1.71` while Android stream is `1.1.72`.
+- Manual reconnect smoke matrix evidence collection is still recommended:
+  - Android/Web full scenario runs with screenshot/API evidence should be recorded in docs.
 
 ## 3) Restore Point Policy
 
