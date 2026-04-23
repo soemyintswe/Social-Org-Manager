@@ -24,7 +24,14 @@ import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
 import orgStorage from "../lib/org-storage";
 import Colors from "../constants/colors";
-import { clearAllLocalDataKeepSystemConfig, exportData, mergeData, restoreData } from "../lib/storage-service";
+import {
+  clearAllLocalDataKeepSystemConfig,
+  exportData,
+  mergeData,
+  pushCloudSnapshotFromLocalDetailed,
+  pushLanSnapshotFromLocalDetailed,
+  restoreData,
+} from "../lib/storage-service";
 import { useData } from "../lib/DataContext";
 import { useAuth } from "../lib/AuthContext";
 import AccessDenied from "../components/AccessDenied";
@@ -331,21 +338,33 @@ export default function DataManagementScreen() {
 
     const success = restoreMode === "merge" ? await mergeData(restorePayload) : await restoreData(restorePayload);
     if (success) {
-      if (refreshData) await refreshData();
+      if (refreshData) {
+        await refreshData({ skipPull: true, markLocalMutation: true });
+      }
+      const [cloudPush, lanPush] = await Promise.allSettled([
+        pushCloudSnapshotFromLocalDetailed(),
+        pushLanSnapshotFromLocalDetailed(),
+      ]);
+      const cloudPushOk = cloudPush.status === "fulfilled" ? cloudPush.value.ok : false;
+      const lanPushOk = lanPush.status === "fulfilled" ? lanPush.value.ok : false;
+      const syncNote =
+        cloudPushOk || lanPushOk
+          ? "\nRestored data has been pushed to sync targets."
+          : "\nRestore succeeded locally, but sync push did not complete yet.";
       
       if (Platform.OS === 'web') {
         alert(
           restoreMode === "merge"
-            ? "အောင်မြင်ပါသည်\nBackup data ကို လက်ရှိ data နှင့် ပေါင်းထည့်ပြီးပါပြီ။"
-            : "အောင်မြင်ပါသည်\nအချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။"
+            ? `အောင်မြင်ပါသည်\nBackup data ကို လက်ရှိ data နှင့် ပေါင်းထည့်ပြီးပါပြီ။${syncNote}`
+            : `အောင်မြင်ပါသည်\nအချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။${syncNote}`
         );
         window.location.reload();
       } else {
         Alert.alert(
           restoreMode === "merge" ? "Merge Success" : "Restore Success",
           restoreMode === "merge"
-            ? "Backup data ကို လက်ရှိ data နှင့် ပေါင်းထည့်ပြီးပါပြီ။ App ကို Restart ပြုလုပ်ပါမည်။"
-            : "အချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။ App ကို Restart ပြုလုပ်ပါမည်။",
+            ? `Backup data ကို လက်ရှိ data နှင့် ပေါင်းထည့်ပြီးပါပြီ။${syncNote} App ကို Restart ပြုလုပ်ပါမည်။`
+            : `အချက်အလက်များ ပြန်လည်ထည့်သွင်းပြီးပါပြီ။${syncNote} App ကို Restart ပြုလုပ်ပါမည်။`,
           [{ 
             text: "OK", 
             onPress: async () => {
