@@ -13,6 +13,12 @@ function getAppVariant() {
   return normalizeVariant(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || "unified");
 }
 
+function getDesktopArtifactBaseName() {
+  const variant = getAppVariant();
+  if (variant === "central-admin") return "Org-Registry-Central-Admin-Setup";
+  return "Social-Org-Manager-Setup";
+}
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -61,15 +67,16 @@ function getGitRemoteMeta() {
 function resolveDownloadUrl(version) {
   const explicitUrl = String(process.env.DESKTOP_UPDATE_DOWNLOAD_URL || "").trim();
   if (explicitUrl) return explicitUrl;
+  const artifactBaseName = getDesktopArtifactBaseName();
 
   const baseUrl = String(process.env.DESKTOP_UPDATE_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
   if (baseUrl) {
-    return `${baseUrl}/Social-Org-Manager-Setup-v${version}.exe`;
+    return `${baseUrl}/${artifactBaseName}-v${version}.exe`;
   }
 
   const meta = getGitRemoteMeta();
   if (meta) {
-    return `https://github.com/${meta.owner}/${meta.repo}/releases/latest/download/Social-Org-Manager-Setup-v${version}.exe`;
+    return `https://github.com/${meta.owner}/${meta.repo}/releases/latest/download/${artifactBaseName}-v${version}.exe`;
   }
 
   return "";
