@@ -11,7 +11,7 @@ import { ensureOrgLicenseActive } from "./org-registry";
 
 const AUTH_SESSION_KEY = "@orghub_auth_session";
 const AUTH_BACKGROUND_MARK_KEY = "@orghub_auth_background_marked";
-const RESTORE_SESSION_ON_LAUNCH = true;
+const RESTORE_SESSION_ON_LAUNCH = false;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 3 * 60 * 60 * 1000;

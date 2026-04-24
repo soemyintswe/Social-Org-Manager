@@ -3,8 +3,8 @@
   "latestVersion": "1.1.73",
   "latestBuildNumber": "74",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.73-202604231112.apk",
-  "notes": "Org Client channel placeholder. Default org distribution can move here without affecting unified update metadata.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/social-org-manager-org-client-v1.1.73-202604250402.apk",
+  "notes": "Org Client mobile update channel is active.",
   "force": false,
-  "publishedAt": "2026-04-24T00:00:00.000Z"
+  "publishedAt": "2026-04-24T21:32:10.196Z"
 }

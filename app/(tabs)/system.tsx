@@ -821,6 +821,11 @@ export default function SystemScreen() {
                 {registryListInfo ? (
                   <Text style={styles.registryListInfo}>{registryListInfo}</Text>
                 ) : null}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator
+                  contentContainerStyle={styles.registryListScrollContent}
+                >
                 <View style={styles.registryListTable}>
                   <View style={[styles.registryListRow, styles.registryListHeaderRow]}>
                     <Text style={[styles.registryListCell, styles.registryListColId]}>Org ID</Text>
@@ -902,6 +907,7 @@ export default function SystemScreen() {
                     </View>
                   ))}
                 </View>
+                </ScrollView>
               </View>
 
               {registryDetailEntry ? (
@@ -968,6 +974,11 @@ export default function SystemScreen() {
                       <Text style={styles.registryNoticeText}>{registryMessageDisplay}</Text>
                     </View>
                   ) : null}
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator
+                    contentContainerStyle={styles.registryFormScrollContent}
+                  >
                   <View style={styles.registryTable}>
                 <RegistryRow label="Org ID" required>
                   <TextInput
@@ -1222,6 +1233,7 @@ export default function SystemScreen() {
                   </Pressable>
                 </View>
               </View>
+              </ScrollView>
                 </>
               ) : (
                 <View style={styles.registryFormCollapsed}>
@@ -1440,6 +1452,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: "hidden",
   },
+  registryListScrollContent: {
+    minWidth: 820,
+  },
   registryListRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1629,11 +1644,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: "hidden",
   },
+  registryFormScrollContent: {
+    minWidth: 860,
+  },
   registryRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
@@ -1643,9 +1661,12 @@ const styles = StyleSheet.create({
   registryLabelCell: {
     width: 190,
     minWidth: 150,
+    flexShrink: 0,
   },
   registryInputCell: {
     flex: 1,
+    minWidth: 520,
+    flexShrink: 0,
   },
   registryLabelText: {
     fontSize: 13,

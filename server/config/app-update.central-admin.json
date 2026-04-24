@@ -3,8 +3,8 @@
   "latestVersion": "1.1.73",
   "latestBuildNumber": "74",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/release-lan-sync-v1.1.73-202604231112.apk",
-  "notes": "Central Admin mobile channel placeholder. Replace with dedicated admin APK once that build line is produced.",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/org-registry-central-admin-v1.1.73-202604250447.apk",
+  "notes": "Central Admin mobile update channel is active.",
   "force": false,
-  "publishedAt": "2026-04-24T00:00:00.000Z"
+  "publishedAt": "2026-04-24T22:17:44.271Z"
 }

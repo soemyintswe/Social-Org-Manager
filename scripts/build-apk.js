@@ -16,6 +16,13 @@ function getAppVariant() {
   return normalizeVariant(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || 'unified');
 }
 
+function getReleaseArtifactBaseName() {
+  const variant = getAppVariant();
+  if (variant === 'central-admin') return 'org-registry-central-admin';
+  if (variant === 'org-client') return 'social-org-manager-org-client';
+  return 'release-lan-sync';
+}
+
 function readAppVersion() {
   try {
     const appJsonRaw = fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8');
@@ -93,6 +100,33 @@ function getAppUpdateConfigPath() {
   return path.resolve(__dirname, '../server/config', filename);
 }
 
+function prepareGoogleServicesConfig() {
+  const variant = getAppVariant();
+  const appDir = path.resolve(__dirname, '../android/app');
+  const sourceName =
+    variant === 'central-admin'
+      ? 'google-services.central-admin.json'
+      : variant === 'org-client'
+        ? 'google-services.org-client.json'
+        : 'google-services.unified.json';
+  const sourcePath = path.join(appDir, sourceName);
+  const destPath = path.join(appDir, 'google-services.json');
+
+  if (!fs.existsSync(sourcePath)) {
+    console.warn(`Google services variant file not found (skip): ${sourcePath}`);
+    return;
+  }
+
+  const sourceRaw = fs.readFileSync(sourcePath, 'utf8');
+  const destRaw = fs.existsSync(destPath) ? fs.readFileSync(destPath, 'utf8') : '';
+  if (sourceRaw !== destRaw) {
+    fs.writeFileSync(destPath, sourceRaw, 'utf8');
+    console.log(`Prepared google services config: ${sourceName}`);
+  } else {
+    console.log(`Google services config already ready: ${sourceName}`);
+  }
+}
+
 function syncAndroidNativeVersion({ version, buildNumber }) {
   const gradlePath = path.resolve(__dirname, '../android/app/build.gradle');
   if (!fs.existsSync(gradlePath)) {
@@ -147,6 +181,7 @@ function updateAppUpdateConfig({ version, buildNumber, filename }) {
 const version = readAppVersion();
 const buildNumber = readBuildNumber();
 syncAndroidNativeVersion({ version, buildNumber });
+prepareGoogleServicesConfig();
 
 // Ensure releases directory exists
 const releasesDir = path.resolve(__dirname, '../releases');
@@ -185,7 +220,7 @@ try {
       now.getHours().toString().padStart(2, '0') +
       now.getMinutes().toString().padStart(2, '0');
     
-    const filename = `release-lan-sync-v${version}-${dateStr}.apk`;
+    const filename = `${getReleaseArtifactBaseName()}-v${version}-${dateStr}.apk`;
     const destApk = path.join(releasesDir, filename);
 
     fs.copyFileSync(sourceApk, destApk);

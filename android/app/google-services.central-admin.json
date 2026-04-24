@@ -7,28 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:766197156511:android:6712eb73fead81920270aa",
-        "android_client_info": {
-          "package_name": "com.sms.wvixamqskelnmvmprg"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyCcoCBD9HAV_6_ohGQMXWszLWm-TFD2hAQ"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
         "mobilesdk_app_id": "1:766197156511:android:003cd7fec883ad950270aa",
         "android_client_info": {
-          "package_name": "com.soemyintswe.orghub"
+          "package_name": "com.soemyintswe.orghub.centraladmin"
         }
       },
       "oauth_client": [],

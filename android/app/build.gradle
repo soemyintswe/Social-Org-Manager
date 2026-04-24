@@ -5,6 +5,28 @@ apply plugin: "com.google.gms.google-services"
 
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def rawAppVariant = (System.getenv("APP_VARIANT") ?: System.getenv("EXPO_PUBLIC_APP_VARIANT") ?: "unified")
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replaceAll(/[_\s]+/, "-")
+def resolvedAppVariant = (rawAppVariant == "org-client" || rawAppVariant == "client" || rawAppVariant == "org")
+        ? "org-client"
+        : ((rawAppVariant == "central-admin" || rawAppVariant == "admin" || rawAppVariant == "central")
+            ? "central-admin"
+            : "unified")
+def resolvedApplicationId = resolvedAppVariant == "central-admin"
+        ? "com.soemyintswe.orghub.centraladmin"
+        : "com.soemyintswe.orghub"
+def resolvedAppName = resolvedAppVariant == "central-admin"
+        ? "Org Registry Central Admin"
+        : "Social Org Manager"
+def resolvedAppScheme = resolvedAppVariant == "central-admin"
+        ? "orghubadmin"
+        : "myapp"
+def resolvedExpoScheme = resolvedAppVariant == "central-admin"
+        ? "exp+orghub-central-admin"
+        : "exp+orghub"
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -91,13 +113,19 @@ android {
 
     namespace 'com.soemyintswe.orghub'
     defaultConfig {
-        applicationId 'com.soemyintswe.orghub'
+        applicationId resolvedApplicationId
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 74
         versionName "1.1.73"
+        resValue "string", "app_name", resolvedAppName
+        manifestPlaceholders = [
+            appAuthScheme: resolvedAppScheme,
+            expoRuntimeScheme: resolvedExpoScheme,
+        ]
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
+        buildConfigField "String", "APP_VARIANT", "\"${resolvedAppVariant}\""
     }
     signingConfigs {
         debug {
