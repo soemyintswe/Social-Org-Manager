@@ -193,8 +193,10 @@ export default function OrgConnectScreen() {
         try {
           window.sessionStorage?.setItem("@orghub_org_connect_override", "1");
           window.sessionStorage?.setItem("@orghub_last_connected_org_id", entry.orgId);
+          window.sessionStorage?.setItem("@orghub_desktop_org_bound_v1", "1");
           window.localStorage?.setItem("@orghub_org_connect_override", "1");
           window.localStorage?.setItem("@orghub_last_connected_org_id", entry.orgId);
+          window.localStorage?.setItem("@orghub_desktop_org_bound_v1", "1");
         } catch {}
         const nextUrl = `/sign-in?orgConnect=1&orgId=${encodeURIComponent(entry.orgId)}`;
         window.location.href = nextUrl;

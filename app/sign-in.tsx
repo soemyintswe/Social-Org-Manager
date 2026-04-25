@@ -52,6 +52,11 @@ function isValidOrgId(orgId?: string | null): boolean {
   return /^ORG\d{3,}$/.test(normalizeOrgIdInput(orgId));
 }
 
+function isDesktopElectronWeb(): boolean {
+  if (Platform.OS !== "web" || typeof navigator === "undefined") return false;
+  return /electron/i.test(String(navigator.userAgent || ""));
+}
+
 export default function SignInScreen() {
   const { attemptLogin, checkUsernameStatus, getLoginLockInfo, loading, resetPassword } = useAuth();
   const { refreshData } = useData();
@@ -190,6 +195,14 @@ export default function SignInScreen() {
       active = false;
     };
   }, [params?.orgId]);
+
+  useEffect(() => {
+    if (!isDesktopElectronWeb()) return;
+    if (!orgClientVariant) return;
+    if (orgHydrating) return;
+    if (!orgBindingRequired) return;
+    router.replace("/org-connect" as any);
+  }, [orgBindingRequired, orgHydrating, orgClientVariant, router]);
 
   useEffect(() => {
     const orgConnectMode = String(params?.orgConnect || "").trim() === "1";
@@ -550,7 +563,8 @@ export default function SignInScreen() {
                 style={styles.passwordInput}
               />
               <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)} style={styles.eyeBtn}>
-                <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color="#64748B" />
+                <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={18} color="#64748B" />
+                <Text style={styles.eyeBtnText}>{showPassword ? "Hide" : "Show"}</Text>
               </TouchableOpacity>
             </View>
             {passwordTouched && passwordValid === false ? (
@@ -721,7 +735,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   passwordInput: { flex: 1, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: "#0F172A" },
-  eyeBtn: { paddingHorizontal: 12, paddingVertical: 10 },
+  eyeBtn: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 4 },
+  eyeBtnText: { color: "#475569", fontSize: 12, fontWeight: "700" },
   submitButton: {
     marginTop: 16,
     backgroundColor: "#0F766E",

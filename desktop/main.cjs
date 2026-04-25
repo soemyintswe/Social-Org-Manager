@@ -17,6 +17,13 @@ function inferDesktopVariant() {
   const fromEnv = normalizeVariant(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || "");
   if (fromEnv !== "unified") return fromEnv;
   try {
+    const exeName = String(path.basename(process.execPath || "")).trim().toLowerCase();
+    if (exeName.includes("central-admin") || exeName.includes("central admin")) return "central-admin";
+    if (exeName.includes("social-org-manager") || exeName.includes("social org manager")) return "org-client";
+  } catch {
+    // ignore
+  }
+  try {
     const name = String(app.getName() || "").trim().toLowerCase();
     if (name.includes("central admin")) return "central-admin";
     if (name.includes("social org manager")) return "org-client";
@@ -54,6 +61,11 @@ process.env.APP_VARIANT = desktopIdentity.variant;
 process.env.EXPO_PUBLIC_APP_VARIANT = desktopIdentity.variant;
 app.setName(desktopIdentity.appName);
 app.setAppUserModelId(desktopIdentity.appUserModelId);
+try {
+  app.setPath("userData", path.join(app.getPath("appData"), desktopIdentity.appName));
+} catch {
+  // ignore
+}
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.disableHardwareAcceleration();

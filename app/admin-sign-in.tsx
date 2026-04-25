@@ -107,7 +107,8 @@ export default function AdminSignInScreen() {
                 style={styles.passwordInput}
               />
               <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)} style={styles.eyeBtn}>
-                <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color="#64748B" />
+                <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={18} color="#64748B" />
+                <Text style={styles.eyeBtnText}>{showPassword ? "Hide" : "Show"}</Text>
               </TouchableOpacity>
             </View>
             {passwordTouched && passwordValid === false ? (
@@ -183,7 +184,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   passwordInput: { flex: 1, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: "#0F172A" },
-  eyeBtn: { paddingHorizontal: 12, paddingVertical: 10 },
+  eyeBtn: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 4 },
+  eyeBtnText: { color: "#475569", fontSize: 12, fontWeight: "700" },
   submitButton: {
     marginTop: 16,
     backgroundColor: "#0F766E",

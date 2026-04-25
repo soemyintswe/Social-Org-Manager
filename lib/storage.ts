@@ -1342,12 +1342,7 @@ export async function ensureSystemAdminPassword(): Promise<string> {
       parseTimestampMs(legacyUpdatedAt),
       parseTimestampMs(webMirrorUpdatedAt)
     );
-    const shouldUseRemote =
-      !!remotePassword &&
-      (
-        !localResolved ||
-        (remoteUpdatedAtMs > 0 && remoteUpdatedAtMs >= localUpdatedAtMs)
-      );
+    const shouldUseRemote = !!remotePassword;
     const resolved = shouldUseRemote ? remotePassword : (localResolved || remotePassword);
     const resolvedUpdatedAtIso =
       (shouldUseRemote ? remoteUpdatedAt : "") ||

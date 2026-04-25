@@ -281,6 +281,10 @@ function RootLayoutNav() {
     Platform.OS === "web" &&
     typeof window !== "undefined" &&
     ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
+  const isDesktopElectronWeb =
+    Platform.OS === "web" &&
+    typeof navigator !== "undefined" &&
+    /electron/i.test(String(navigator.userAgent || ""));
   const allowOrgConnect =
     Platform.OS === "web" &&
     typeof window !== "undefined" &&
@@ -336,6 +340,20 @@ function RootLayoutNav() {
     const loadOrgSetup = async () => {
       try {
         let settings = await getAccountSettings();
+        const desktopOrgBound =
+          Platform.OS === "web" &&
+          typeof window !== "undefined" &&
+          (() => {
+            try {
+              return (
+                window.sessionStorage?.getItem("@orghub_desktop_org_bound_v1") === "1" ||
+                window.localStorage?.getItem("@orghub_desktop_org_bound_v1") === "1"
+              );
+            } catch {
+              return false;
+            }
+          })();
+        const requireDesktopDesktopOrgConnect = isDesktopElectronWeb && orgClientVariant && !desktopOrgBound;
         if (!String(settings.orgId || "").trim()) {
           let hintedOrgId = "";
           try {
@@ -356,7 +374,7 @@ function RootLayoutNav() {
             } catch {}
           }
 
-          if (hintedOrgId) {
+          if (hintedOrgId && !requireDesktopDesktopOrgConnect) {
             const nextSettings = {
               ...settings,
               orgId: hintedOrgId,
@@ -388,7 +406,7 @@ function RootLayoutNav() {
           } catch {}
         }
         const orgId = resolvedOrgId;
-        const hasOrgId = Boolean(orgId);
+        const hasOrgId = Boolean(orgId) && !requireDesktopDesktopOrgConnect;
         // Org ID exists means setup is complete for current route gating.
         // Contact fields can be completed later in Account Settings.
         if (!active) return;
@@ -402,7 +420,7 @@ function RootLayoutNav() {
     return () => {
       active = false;
     };
-  }, [inOrgConnect, isAuthenticated]);
+  }, [inOrgConnect, isAuthenticated, isDesktopElectronWeb, orgClientVariant]);
 
   useEffect(() => {
     if (loading) return;
