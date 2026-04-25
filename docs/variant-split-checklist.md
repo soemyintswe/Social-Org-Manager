@@ -1,46 +1,57 @@
 # Variant Split Checklist
 
-_Last updated: 2026-04-24 (Asia/Rangoon)_
+_Last updated: 2026-04-26 (Asia/Rangoon)_
 
 ## Goal
 
-Split the current unified app into:
+Maintain the app as two practical distribution lines:
 
 - `org-client`
 - `central-admin`
 
-while keeping the existing production line stable until dedicated builds are validated.
+while keeping release operations safe and recoverable.
 
-## Already Completed
+## Completed
 
-- restore point created before variant work:
+- restore point created before split work:
   - `restore-point-2026-04-24-pre-variant-split`
 - app variant runtime/build scaffolding added
-- sign-in/admin routes gated by variant
-- `org-client` hides admin entry and blocks `/system`
-- desktop build identity/config now supports variant-specific product naming
-- update metadata now supports variant-specific config files with fallback
+- route and admin-entry guards added
+- variant-aware update metadata added
+- desktop variant identity/config added
+- mobile split APK behavior completed
+- desktop split EXE behavior completed
+- central-admin login/registry/edit usability fixes completed
+- session relaunch now returns to login
 
-## Still Pending Before Release
+## Current Verified Behavior
 
-1. Local-only `org-client` APK build
-2. Local-only `org-client` EXE build
-3. Local-only `central-admin` EXE build
-4. Manual QA:
-   - org-client sign-in
-   - org-client no admin entry
-   - org-client cannot open `/system`
-   - central-admin opens admin flow directly
-   - update checks read the correct variant channel
-5. Decide whether web should use:
-   - separate subdomain
+### Org Client
+
+- admin entry is hidden
+- `/system` is blocked
+- first-run desktop flow goes through `Org Connect`
+- mobile/desktop package identity is separate from central-admin
+
+### Central Admin
+
+- admin login opens directly on desktop
+- central registry is reachable
+- mobile list and edit form support horizontal scrolling
+- mobile/desktop package identity is separate from org-client
+
+## Still Pending / Nice To Finalize
+
+1. Final web strategy:
+   - keep unified web
    - separate path
-   - separate deploy target
-6. Finalize release naming and GitHub asset naming policy
-7. Only then push/deploy the split release line
+   - separate subdomain/service
+2. Final screenshot evidence for both variants
+3. Optional new restore-point tags after the later desktop/mobile split fixes
+4. Optional clean-machine QA for both EXEs
 
 ## Safety Rules
 
-- Do not overwrite the current production update channel until a dedicated variant build has been tested.
-- Prefer restore-point tags over ad-hoc rollback steps.
-- Keep `unified` behavior as the fallback until split rollout is approved.
+- Do not overwrite working release assets casually.
+- Verify `/api/sync/health` after any production deploy.
+- Prefer restore-point tags or known-good milestone commits over ad-hoc rollback decisions.

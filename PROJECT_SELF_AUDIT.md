@@ -1,83 +1,56 @@
 # PROJECT_SELF_AUDIT
 
-_Last updated: 2026-04-23 (Asia/Rangoon)_
+_Last updated: 2026-04-26 (Asia/Rangoon)_
 
 ## 1) Completed / Implemented
 
 - System Admin architecture remains separated from org data storage via system-scoped keys (`@sysdb:*`).
-- Org-scoped storage is active (`@orgdb:<ORGID>:`), and login/connect flow persists org context correctly on web and app.
-- Admin routes are stable and reachable:
-  - `/system`
-  - `/data-management`
-  - `/phone-transfer`
-  - `/member-data-management`
-  - `/import-members`
-- Render deploy blocker was fixed by removing release APK artifacts from Git LFS tracking on deploy branch.
-- ORG001 data recovery completed with safe restore flow from backup:
-  - members restored to 65
-  - users/password map restored and verified by login test
-  - ORG isolation retained
-- Chairperson can now access Data Backup/Restore from Account Settings without System Admin account.
-- Chairperson Data Management is org-scoped in practice through active org storage context.
-- System Reset remains admin-only.
-- Backup export filename now includes OrgID for easier separation:
-  - `orghub_backup_<ORGID>_<timestamp>.json`
-- Pre-existing JSX parse blocker in `app/audit-change-requests.tsx` has been resolved.
-- First-run/reconnect guard was hardened:
-  - sign-in is blocked when valid org binding is missing
-  - invalid org deep-link route now redirects to `/org-connect`
-  - org-connect validates OrgID format (`ORG001` pattern).
-- Org Connect startup flicker risk reduced:
-  - removed duplicate auto-redirect in `app/org-connect.tsx`
-  - unauthenticated route guard now allows staying on `/org-connect` without bounce loops
-- Android auto-update check now runs before login as well (not only after authentication).
-- Added platform QA checklist for reconnect validation:
-  - `docs/org-reconnect-smoke-test-matrix.md`
-- Added automation helper for quick reconnect baseline checks:
-  - `scripts/sync/run-org-reconnect-smoke-lite.ps1`
-- Desktop update check path added (version-controlled metadata):
-  - `server/config/desktop-update.json`
-  - `/api/desktop-update`
-  - startup prompt in `desktop/main.cjs`
-- GitHub release asset automation added for APK + Desktop EXE:
-  - `scripts/release/upload-release-assets.js`
-  - npm scripts:
-    - `release:upload-assets`
-    - `release:upload-assets:verify-render`
-- Release prep updated to version `1.1.72` / Android build `73`; mobile APK metadata is live.
-- Render deployed commit was re-verified after latest deploy-fix updates:
-  - local `HEAD` and `/api/sync/health` commit hash matched (`b64d42a...`) in latest check.
-- Desktop update metadata is now aligned to `1.1.72`:
-  - `server/config/desktop-update.json` points to `Social-Org-Manager-Setup-v1.1.72.exe`
-- Clean semantic release tag `v1.1.72` now exists with verified assets:
-  - `release-lan-sync-v1.1.72-202604230241.apk`
-  - `Social-Org-Manager-Setup-v1.1.72.exe`
-  - `Social-Org-Manager-Setup-v1.1.72.exe.blockmap`
-- Org reconnect smoke-lite verification passed on latest `deploy-fix`:
-  - Render commit match: `b64d42a...`
-  - ORG scope checks: `ORG001` and `ORG002` passed
+- Org-scoped storage remains active (`@orgdb:<ORGID>:`), with strict ORG isolation preserved in current flows.
+- Restore/import reliability was hardened:
+  - selected file content is used directly
+  - large JSON restore is no longer limited by preview text behavior
+  - restored local state is no longer immediately overwritten by stale remote pull
+- ORG001 recovery path was successfully unblocked, including financial records.
+- Chairperson can access org-scoped backup/restore without needing system-admin login.
+- Variant split is now functional in practice:
+  - `org-client`
+  - `central-admin`
+- `org-client` hides `System Admin Login` and blocks `/system`.
+- `central-admin` keeps central registry/admin flow reachable.
+- Android split is functional with separate app identity/package behavior for the two variants.
+- Desktop split is functional:
+  - org-client opens `Org Connect` first
+  - central-admin opens admin login first
+- Desktop admin password now follows authoritative current data instead of stale local state.
+- Desktop login screens now expose visible `Show / Hide` password controls.
+- Org Connect validation accepts a matching email OR matching phone when both are entered.
+- App close/reopen now returns to login instead of silently restoring the last signed-in session.
+- Central Admin Org Registry mobile usability was improved:
+  - list supports horizontal scroll
+  - edit form supports horizontal scroll
+  - long field values are visible/editable
+- Release automation now supports current APK/EXE publication flow through GitHub releases.
+- Current public release line is `1.1.73`.
+- Latest verified deployed commit before this doc refresh:
+  - `18b45bae78485455e2c978f63010af637d400516`
 
 ## 2) In Progress / Watch Items
 
-- Full automated regression suite is still missing; verification remains manual checklist based.
-- Ops hygiene still recommended:
-  - avoid committing large release binaries into app deploy branch
-  - keep Render deployed commit aligned with latest `deploy-fix`.
-- Manual reconnect smoke matrix evidence collection is still recommended:
-  - Android/Web full scenario runs with screenshot/API evidence should be recorded in docs.
+- Full automated regression suite is still missing.
+- Web split strategy is not finalized yet.
+- Release evidence/docs could still benefit from final screenshot-based QA records.
+- Desktop clean-machine QA is still worth repeating if a high-confidence handoff is needed.
 
 ## 3) Restore Point Policy
 
-- Use `docs/restore-points.md` as the source of truth for stable checkpoints.
-- Latest stable checkpoint is recorded for Part 7 work and includes:
-  - org-connect startup flicker stabilization
-  - pre-login mobile update check behavior
-  - release metadata sync to `1.1.72/73`
-  - render commit verification alignment on `deploy-fix`.
+- Use `docs/restore-points.md` as the source of truth for tagged rollback landmarks.
+- The most important release-aligned restore point remains:
+  - `restore-point-2026-04-24-pre-variant-split` -> `28d9e0b`
+- Variant groundwork restore points remain useful if future split work needs partial rollback.
 
 ## Recommended Next Sequence
 
-1. Keep using per-org backup files (`ORG001`, `ORG002`) before any major change.
-2. For any data restore, prefer `Import (Merge)` first and verify member/user counts.
-3. Before production deploy, verify `/api/sync/health` commit hash equals latest `deploy-fix`.
-4. If needed, return to the latest restore point tag from `docs/restore-points.md`.
+1. Keep using per-org backups before any major data operation.
+2. For restore/import, prefer `Import (Merge)` first unless a full replacement is truly intended.
+3. Before any new deploy, verify `/api/sync/health` matches the target commit.
+4. If web split is pursued next, preserve the current working desktop/mobile split behavior.
