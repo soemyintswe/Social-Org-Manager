@@ -18,13 +18,23 @@ function normalizeVariant(raw?: string | null): AppVariant {
 }
 
 export function getAppVariant(): AppVariant {
+  const globalVariant = (() => {
+    try {
+      const globalAny = globalThis as Record<string, any> | undefined;
+      return globalAny?.__APP_CONFIG__?.appVariant;
+    } catch {
+      return undefined;
+    }
+  })();
+
   const expoExtraVariant =
     (Constants.expoConfig?.extra as Record<string, unknown> | undefined)?.appVariant ||
     (Constants.manifest2?.extra as Record<string, unknown> | undefined)?.expoClient?.extra?.appVariant;
 
   return normalizeVariant(
     String(
-      expoExtraVariant ||
+      globalVariant ||
+        expoExtraVariant ||
         process.env.EXPO_PUBLIC_APP_VARIANT ||
         process.env.APP_VARIANT ||
         "unified"

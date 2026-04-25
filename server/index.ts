@@ -226,6 +226,26 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function normalizeVariant(raw?: string | null): "unified" | "org-client" | "central-admin" {
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-");
+  if (value === "org-client" || value === "client" || value === "org") return "org-client";
+  if (value === "central-admin" || value === "admin" || value === "central") return "central-admin";
+  return "unified";
+}
+
+function readJsonConfigFromBase(...parts: string[]): unknown | null {
+  try {
+    const fullPath = resolveFromBase(...parts);
+    if (!fs.existsSync(fullPath)) return null;
+    return JSON.parse(fs.readFileSync(fullPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 function buildBootLoaderHtml(targetPath: string): string {
   const safeTarget = escapeHtml(targetPath || "/");
   return `<!doctype html>
@@ -408,6 +428,9 @@ function configureExpoAndLanding(app: express.Application) {
   let cachedWebIndexMtimeMs = 0;
 
   const buildInjectedWebIndex = (html: string): string => {
+    const appVariant = normalizeVariant(
+      String(process.env.APP_VARIANT || process.env.EXPO_PUBLIC_APP_VARIANT || "unified"),
+    );
     const managedOrgConfigsRaw = String(
       process.env.EXPO_PUBLIC_MANAGED_ORG_CONFIGS || "",
     ).trim();
@@ -451,7 +474,14 @@ function configureExpoAndLanding(app: express.Application) {
       }
     }
 
-    const injection = `<script>window.__APP_CONFIG__=window.__APP_CONFIG__||{};window.__APP_CONFIG__.managedOrgConfigs=${managedOrgConfigsPayload};window.__APP_CONFIG__.firebaseConfig=${firebaseConfigPayload};</script>`;
+    if (firebaseConfigPayload === "null") {
+      const fileConfig = readJsonConfigFromBase("server", "config", "firebase-web-config.json");
+      if (fileConfig) {
+        firebaseConfigPayload = JSON.stringify(fileConfig);
+      }
+    }
+
+    const injection = `<script>window.__APP_CONFIG__=window.__APP_CONFIG__||{};window.__APP_CONFIG__.appVariant=${JSON.stringify(appVariant)};window.__APP_CONFIG__.managedOrgConfigs=${managedOrgConfigsPayload};window.__APP_CONFIG__.firebaseConfig=${firebaseConfigPayload};</script>`;
     return html.replace("</head>", `${injection}</head>`);
   };
 

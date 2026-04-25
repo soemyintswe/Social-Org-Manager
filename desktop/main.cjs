@@ -50,6 +50,8 @@ function getDesktopAppIdentity() {
 }
 
 const desktopIdentity = getDesktopAppIdentity();
+process.env.APP_VARIANT = desktopIdentity.variant;
+process.env.EXPO_PUBLIC_APP_VARIANT = desktopIdentity.variant;
 app.setName(desktopIdentity.appName);
 app.setAppUserModelId(desktopIdentity.appUserModelId);
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
