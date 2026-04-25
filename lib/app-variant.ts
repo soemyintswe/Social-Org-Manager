@@ -18,6 +18,16 @@ function normalizeVariant(raw?: string | null): AppVariant {
 }
 
 export function getAppVariant(): AppVariant {
+  const queryVariant = (() => {
+    try {
+      if (typeof window === "undefined") return undefined;
+      const params = new URLSearchParams(window.location.search || "");
+      return params.get("appVariant") || params.get("variant") || undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+
   const globalVariant = (() => {
     try {
       const globalAny = globalThis as Record<string, any> | undefined;
@@ -33,7 +43,8 @@ export function getAppVariant(): AppVariant {
 
   return normalizeVariant(
     String(
-      globalVariant ||
+      queryVariant ||
+        globalVariant ||
         expoExtraVariant ||
         process.env.EXPO_PUBLIC_APP_VARIANT ||
         process.env.APP_VARIANT ||

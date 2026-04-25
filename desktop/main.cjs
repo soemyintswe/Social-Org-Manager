@@ -56,6 +56,20 @@ function getDesktopAppIdentity() {
   };
 }
 
+function getDesktopInitialPath(baseUrl) {
+  const params = new URLSearchParams();
+  params.set("appVariant", desktopIdentity.variant);
+  params.set("desktop", "1");
+  params.set("t", String(Date.now()));
+  if (desktopIdentity.variant === "central-admin") {
+    return `${baseUrl}/admin-sign-in?${params.toString()}`;
+  }
+  if (desktopIdentity.variant === "org-client") {
+    return `${baseUrl}/org-connect?${params.toString()}`;
+  }
+  return `${baseUrl}/web/?${params.toString()}`;
+}
+
 const desktopIdentity = getDesktopAppIdentity();
 process.env.APP_VARIANT = desktopIdentity.variant;
 process.env.EXPO_PUBLIC_APP_VARIANT = desktopIdentity.variant;
@@ -429,7 +443,7 @@ async function createWindow() {
         return;
       }
 
-      const webUrl = `${baseUrl}/web/`;
+      const webUrl = getDesktopInitialPath(baseUrl);
       const fallbackHtml = `
         <!doctype html>
       <html lang="en">
@@ -441,7 +455,7 @@ async function createWindow() {
             <p><button id="retry" style="margin-top:8px;padding:8px 12px;border-radius:6px;border:1px solid #cbd5f5;background:#fff;cursor:pointer">Retry Desktop UI</button></p>
             <script>
               document.getElementById('retry')?.addEventListener('click', () => {
-                location.href = '${baseUrl}/web/?t=' + Date.now();
+                location.href = '${baseUrl}/${desktopIdentity.variant === "central-admin" ? "admin-sign-in" : desktopIdentity.variant === "org-client" ? "org-connect" : "web/"}?appVariant=${desktopIdentity.variant}&desktop=1&t=' + Date.now();
               });
             </script>
           </body>
@@ -478,7 +492,7 @@ async function createWindow() {
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     logDesktop(`did-fail-load code=${errorCode} reason=${errorDescription} url=${validatedURL}`);
-    const webUrl = `${baseUrl}/web/`;
+    const webUrl = getDesktopInitialPath(baseUrl);
     const fallbackHtml = `
       <!doctype html>
       <html lang="en">
@@ -498,11 +512,11 @@ URL: ${validatedURL}
   });
 
   try {
-    const target = `${baseUrl}/web/?t=${Date.now()}`;
+    const target = getDesktopInitialPath(baseUrl);
     logDesktop(`loadURL ${target}`);
     await mainWindow.loadURL(target);
   } catch {
-    const fallback = `${baseUrl}/?t=${Date.now()}`;
+    const fallback = `${baseUrl}/?appVariant=${desktopIdentity.variant}&desktop=1&t=${Date.now()}`;
     logDesktop(`loadURL fallback ${fallback}`);
     await mainWindow.loadURL(fallback);
   }

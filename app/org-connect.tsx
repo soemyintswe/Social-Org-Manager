@@ -110,7 +110,7 @@ export default function OrgConnectScreen() {
           message = "Registry ကို မချိတ်ဆက်နိုင်ပါ။ Internet ကိုစစ်ဆေးပါ။";
           break;
         default:
-          message = "Org Validation မအောင်မြင်ပါ။ Org ID နှင့် Contact ကို စစ်ဆေးပါ။";
+          message = `Org Validation မအောင်မြင်ပါ။ Org ID နှင့် Contact ကို စစ်ဆေးပါ။ (${String(result.reason || "unknown")})`;
           break;
       }
       setErrorMessage(message);

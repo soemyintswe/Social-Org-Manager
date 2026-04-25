@@ -814,24 +814,26 @@ export async function verifyOrgRegistryCredentials(input: {
   const entry = fetchResult.entry;
   const registryEmail = normalizeEmail(entry.org.email);
   const registryPhone = normalizePhone(entry.org.phone);
+  const emailMatches = !!email && !!registryEmail && registryEmail === email;
+  const phoneMatches = !!phone && !!registryPhone && registryPhone === phone;
+
+  if (email && phone) {
+    if (emailMatches || phoneMatches) {
+      await cacheOrgRegistryEntry(entry);
+      return { ok: true, entry, license: evaluateOrgLicense(entry) };
+    }
+    if (!registryEmail && !registryPhone) return { ok: false, reason: "missing_org_credentials" };
+    if (!registryEmail && registryPhone) return { ok: false, reason: "org_email_missing" };
+    if (!registryPhone && registryEmail) return { ok: false, reason: "org_phone_missing" };
+    return { ok: false, reason: "org_email_mismatch" };
+  }
 
   if (email) {
-    if (!registryEmail) {
-      if (phone) {
-        if (registryPhone && registryPhone === phone) {
-          await cacheOrgRegistryEntry(entry);
-          return { ok: true, entry, license: evaluateOrgLicense(entry) };
-        }
-        return { ok: false, reason: "org_phone_mismatch" };
-      }
-      return { ok: false, reason: "org_email_missing" };
-    }
-    if (registryEmail !== email) {
-      return { ok: false, reason: "org_email_mismatch" };
-    }
+    if (!registryEmail) return { ok: false, reason: "org_email_missing" };
+    if (!emailMatches) return { ok: false, reason: "org_email_mismatch" };
   } else if (phone) {
     if (!registryPhone) return { ok: false, reason: "org_phone_missing" };
-    if (registryPhone !== phone) return { ok: false, reason: "org_phone_mismatch" };
+    if (!phoneMatches) return { ok: false, reason: "org_phone_mismatch" };
   }
 
   await cacheOrgRegistryEntry(entry);
