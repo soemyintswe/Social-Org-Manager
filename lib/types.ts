@@ -302,6 +302,7 @@ export interface Loan {
 }
 
 export type SystemRole = "admin" | "org_user";
+export type AdminAccountStatus = "active" | "suspended" | "terminated";
 export type OrgPosition =
   | "patron"
   | "chairperson"
@@ -323,6 +324,14 @@ export interface UserAccount {
   orgPosition?: OrgPosition;
   isActive: boolean;
   createdAt: string;
+  updatedAt?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  appointedAt?: string;
+  statusNote?: string;
+  adminStatus?: AdminAccountStatus;
+  lastPasswordResetAt?: string;
 }
 
 export type MemberChangeAction = "create" | "update" | "delete";

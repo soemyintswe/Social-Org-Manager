@@ -36,6 +36,7 @@ export default function FloatingTabMenu({
       return [
         { name: "ပင်မစာမျက်နှာ", icon: "home-outline", route: "/" },
         { name: "System Information", icon: "settings-outline", route: "/system", enabled: true },
+        { name: "Admin User Management", icon: "people-circle-outline", route: "/admin-users", enabled: true },
         { name: "ချိန်ညှိရန်", icon: "options-outline", route: "/account-settings", enabled: true },
       ];
     }

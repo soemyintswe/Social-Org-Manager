@@ -268,14 +268,22 @@ function RootLayoutNav() {
       webPathname === "/admin-sign-in/" ||
       webPathname.endsWith("/admin-sign-in") ||
       webPathname.endsWith("/admin-sign-in/"));
-  const routeReady = Boolean(rootSegment) || webSystemPath || webAdminLoginPath;
+  const webAdminUsersPath =
+    !!webPathname &&
+    (webPathname === "/admin-users" ||
+      webPathname === "/admin-users/" ||
+      webPathname.endsWith("/admin-users") ||
+      webPathname.endsWith("/admin-users/"));
+  const routeReady = Boolean(rootSegment) || webSystemPath || webAdminLoginPath || webAdminUsersPath;
   const inLogin = rootSegment === "sign-in";
   const inAdminLogin = rootSegment === "admin-sign-in";
+  const inAdminUsersRoute = rootSegment === "admin-users";
   const inAnyLogin = inLogin || inAdminLogin;
   const inOrgIdRoute = rootSegment === "[orgId]";
   const inOrgConnect = rootSegment === "org-connect";
   const inSystemRoute = (rootSegment === "(tabs)" && childSegment === "system") || rootSegment === "system";
-  const isAdminEntryRoute = inAdminLogin || inSystemRoute || webSystemPath || webAdminLoginPath;
+  const isAdminEntryRoute =
+    inAdminLogin || inAdminUsersRoute || inSystemRoute || webSystemPath || webAdminLoginPath || webAdminUsersPath;
   const isSystemAdmin = currentUser?.systemRole === "admin";
   const isLocalhost =
     Platform.OS === "web" &&
@@ -467,6 +475,7 @@ function RootLayoutNav() {
     if (centralAdminVariant) return;
     const isAdminHome = rootSegment === "(tabs)" && (!childSegment || childSegment === "index");
     const isAdminSystem = rootSegment === "(tabs)" && childSegment === "system";
+    const isAdminUsers = rootSegment === "admin-users";
     const isAdminAccountSettings = rootSegment === "account-settings";
     const isAdminDataManagement = rootSegment === "data-management";
     const isAdminPhoneTransfer = rootSegment === "phone-transfer";
@@ -475,6 +484,7 @@ function RootLayoutNav() {
     if (
       isAdminHome ||
       isAdminSystem ||
+      isAdminUsers ||
       isAdminAccountSettings ||
       isAdminDataManagement ||
       isAdminPhoneTransfer ||
@@ -971,6 +981,7 @@ function RootLayoutNav() {
             <Stack.Screen name="org-connect" options={{ headerShown: false }} />
             <Stack.Screen name="sign-in" options={{ headerShown: false }} />
             <Stack.Screen name="admin-sign-in" options={{ headerShown: false }} />
+            <Stack.Screen name="admin-users" options={{ headerShown: false }} />
             <Stack.Screen name="[orgId]" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="add-member" options={{ headerShown: false, presentation: "modal" }} />

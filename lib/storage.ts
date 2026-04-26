@@ -6171,8 +6171,15 @@ export async function upsertUserAccount(user: UserAccount) {
 }
 
 export async function deleteUserAccount(id: string) {
+  const userId = String(id || "").trim();
+  if (!userId) return;
   const users = await getUsers();
-  await saveUsers(users.filter(u => u.id !== id));
+  await saveUsers(users.filter(u => u.id !== userId));
+  const passwords = await getUserPasswords();
+  if (Object.prototype.hasOwnProperty.call(passwords, userId)) {
+    delete passwords[userId];
+    await AsyncStorage.setItem(KEYS.USER_PASSWORDS, JSON.stringify(passwords));
+  }
 }
 
 // Backup Data (Export All)
