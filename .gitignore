@@ -34,8 +34,12 @@ Backup/
 # Local build/runtime artifacts
 /release-lan-sync*.apk
 /releases/*.apk
+/releases/*.exe
+/releases/*.blockmap
 /releases-desktop/*.exe
 /releases-desktop/*.blockmap
+/variant-builds/
+/.gradle-user-home/
 /server/data/*
 !/server/data/.gitkeep
 *.db
