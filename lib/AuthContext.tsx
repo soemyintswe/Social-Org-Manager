@@ -173,9 +173,6 @@ function resolveUserByIdentifier(
 
   const exactMatch = users.find((user) => {
     if (!includeInactive && !user.isActive) return false;
-    if (user.systemRole === "admin") {
-      return needle === "admin";
-    }
     if (normalizeIdentifier(user.id) === needle) {
       return true;
     }
@@ -203,13 +200,13 @@ function resolveUserByIdentifier(
 
   return users.find((user) => {
     if (!includeInactive && !user.isActive) return false;
-    if (user.systemRole === "admin") {
-      return needle === "admin";
+    const userDisplayNameCandidate = normalizeNameForLookup(user.displayName || "");
+    if (!!needleName && needleName === userDisplayNameCandidate) {
+      return true;
     }
     const member = members.find((item) => item.id === user.memberId);
     if (!member) return false;
     const memberNameCandidate = normalizeNameForLookup(member.name || "");
-    const userDisplayNameCandidate = normalizeNameForLookup(user.displayName || "");
     return (
       !!needleName &&
       (needleName === memberNameCandidate ||
@@ -532,7 +529,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const attemptLogin = useCallback(async (username: string, passwordPlaintext: string): Promise<LoginResult> => {
     const normalizedUsername = normalizeIdentifier(username);
-    if (normalizedUsername === "admin") {
+    const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    if (normalizedUsername === "admin" || user?.systemRole === "admin") {
       return { ok: false, reason: "admin_login_only" };
     }
     const guard = await readLoginGuardState();
@@ -568,7 +566,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
     const member = user?.memberId ? members.find((item) => item.id === user.memberId) : undefined;
     const loginState = evaluateUserLoginState(user, member, username);
     if (!loginState.exists) {
@@ -637,7 +634,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const attemptAdminLogin = useCallback(async (username: string, passwordPlaintext: string): Promise<LoginResult> => {
     const normalizedUsername = normalizeIdentifier(username);
-    if (normalizedUsername !== "admin") {
+    if (!normalizedUsername) {
       return { ok: false, reason: "invalid_username" };
     }
     const guard = await readLoginGuardState(systemStorage);
@@ -647,7 +644,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearLoginGuardState(systemStorage);
     }
 
-    const adminOk = await verifySystemAdminPassword(passwordPlaintext);
+    if (normalizedUsername === "admin") {
+      const adminOk = await verifySystemAdminPassword(passwordPlaintext);
+      if (!adminOk) {
+        const nextFailed = guard.failedAttempts + 1;
+        await writeLoginGuardState(
+          { failedAttempts: nextFailed, lockedUntil: nextFailed >= MAX_FAILED_ATTEMPTS ? now + LOCKOUT_DURATION_MS : 0 },
+          systemStorage
+        );
+        return {
+          ok: false,
+          reason: "invalid_password",
+          failedAttempts: nextFailed,
+        };
+      }
+
+      const success = await signIn(ADMIN_SESSION_ID);
+      if (!success) return { ok: false, reason: "invalid_username" };
+      await clearLoginGuardState(systemStorage);
+      return { ok: true, reason: "success" };
+    }
+
+    const adminUser = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    if (!adminUser || adminUser.systemRole !== "admin" || !adminUser.isActive) {
+      return { ok: false, reason: "invalid_username" };
+    }
+
+    const adminOk = await verifyPassword(adminUser.id, passwordPlaintext);
     if (!adminOk) {
       const nextFailed = guard.failedAttempts + 1;
       await writeLoginGuardState(
@@ -661,11 +684,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    const success = await signIn(ADMIN_SESSION_ID);
+    const success = await signIn(adminUser.id, adminUser.memberId);
     if (!success) return { ok: false, reason: "invalid_username" };
     await clearLoginGuardState(systemStorage);
     return { ok: true, reason: "success" };
-  }, [signIn]);
+  }, [users, members, signIn]);
 
   const login = useCallback(async (username: string, passwordPlaintext: string) => {
     const normalizedUsername = normalizeIdentifier(username);
@@ -681,10 +704,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!currentUser) return false;
       let changed = false;
       if (currentUser.systemRole === "admin") {
-        const ok = await verifySystemAdminPassword(currentPassword);
-        if (!ok) return false;
-        await setSystemAdminPassword(nextPassword);
-        changed = true;
+        if (currentUser.id === ADMIN_SESSION_ID) {
+          const ok = await verifySystemAdminPassword(currentPassword);
+          if (!ok) return false;
+          await setSystemAdminPassword(nextPassword);
+          changed = true;
+        } else {
+          changed = await changeUserPassword(currentUser.id, currentPassword, nextPassword);
+        }
       } else {
         changed = await changeUserPassword(currentUser.id, currentPassword, nextPassword);
       }
@@ -699,7 +726,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (password: string) => {
       if (!currentUser) return false;
       if (currentUser.systemRole === "admin") {
-        return verifySystemAdminPassword(password);
+        if (currentUser.id === ADMIN_SESSION_ID) {
+          return verifySystemAdminPassword(password);
+        }
+        return verifyPassword(currentUser.id, password);
       }
       return verifyPassword(currentUser.id, password);
     },

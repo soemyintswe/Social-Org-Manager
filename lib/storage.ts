@@ -6147,11 +6147,6 @@ export async function seedDefaultAdminUser(options?: { allowDefaultDataSeed?: bo
     }
   }
 
-  const users = await getUsers();
-  const filteredUsers = users.filter(u => u.systemRole !== "admin");
-  if (filteredUsers.length !== users.length) {
-    await saveUsers(filteredUsers);
-  }
   await ensureSystemAdminPassword();
 
   // Sync existing members to user accounts

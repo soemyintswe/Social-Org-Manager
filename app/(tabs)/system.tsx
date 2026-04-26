@@ -8,9 +8,8 @@ import * as Clipboard from "expo-clipboard";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import Colors from "../../constants/colors";
 import { useData } from "../../lib/DataContext";
-import { getAccountSettings } from "../../lib/storage-service";
+import { getAccountSettings, clearAllLocalDataKeepSystemConfig, setUserPassword } from "../../lib/storage-service";
 import { useAuth } from "../../lib/AuthContext";
-import { clearAllLocalDataKeepSystemConfig } from "../../lib/storage-service";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "../../lib/app-update";
 import {
   buildOrgRegistryEntry,
@@ -22,6 +21,7 @@ import {
   type OrgRegistryEntry,
 } from "../../lib/org-registry";
 import { getAppVariantLabel, isCentralAdminVariant, isOrgClientVariant } from "../../lib/app-variant";
+import type { UserAccount } from "../../lib/types";
 
 const RegistryRow = ({
   label,
@@ -48,8 +48,8 @@ const RegistryRow = ({
 
 export default function SystemScreen() {
   const insets = useSafeAreaInsets();
-  const { refreshData } = useData() as any;
-  const { can } = useAuth();
+  const { refreshData, users, upsertUserAccount, removeUserAccount } = useData() as any;
+  const { can, currentUser } = useAuth();
   const orgClientVariant = isOrgClientVariant();
   const centralAdminVariant = isCentralAdminVariant();
   const appVariantLabel = getAppVariantLabel();
@@ -97,12 +97,27 @@ export default function SystemScreen() {
   const [showStartDatePicker, setShowStartDatePicker] = React.useState(false);
   const [showExpiryDatePicker, setShowExpiryDatePicker] = React.useState(false);
   const [showDenyExpiryDatePicker, setShowDenyExpiryDatePicker] = React.useState(false);
+  const [adminLoginId, setAdminLoginId] = React.useState("");
+  const [adminDisplayName, setAdminDisplayName] = React.useState("");
+  const [adminPassword, setAdminPassword] = React.useState("");
+  const [creatingAdminUser, setCreatingAdminUser] = React.useState(false);
+  const [deletingAdminUserId, setDeletingAdminUserId] = React.useState<string | null>(null);
   const systemInfo = {
     releaseDate: "2026-02-21",
     developer: "MR. SOE MYINT SWE",
     packageId: centralAdminVariant ? "com.soemyintswe.orghub.centraladmin" : "com.soemyintswe.orghub",
     copyright: "Copyright (c) 2026 Social Org Manager. All rights reserved.",
   };
+
+  const adminUsers = React.useMemo<UserAccount[]>(() => {
+    if (!Array.isArray(users)) return [];
+    return users
+      .filter((user: UserAccount) => user?.systemRole === "admin")
+      .slice()
+      .sort((left: UserAccount, right: UserAccount) =>
+        String(left.displayName || left.id || "").localeCompare(String(right.displayName || right.id || ""))
+      );
+  }, [users]);
 
   React.useEffect(() => {
     if (!orgClientVariant) return;
@@ -292,7 +307,7 @@ export default function SystemScreen() {
       setShowRegistryForm(true);
       setRegistryStatus("success", "Org Registry အချက်အလက်ကို ဖတ်ယူပြီးပါပြီ။");
       Alert.alert("Registry", "Org Registry အချက်အလက်ကို ဖတ်ယူပြီးပါပြီ။");
-    } catch (error) {
+    } catch {
       const msg = "Org Registry ကိုဖတ်ရာတွင် အမှားဖြစ်နေပါသည်။";
       setRegistryStatus("error", msg);
       Alert.alert("Registry", msg);
@@ -655,7 +670,7 @@ export default function SystemScreen() {
           { text: "OK", style: "cancel" },
         ]
       );
-    } catch (error) {
+    } catch {
       Alert.alert("Registry", "Registry သိမ်းဆည်းရာတွင် အမှားဖြစ်နေပါသည်။");
     } finally {
       setSavingRegistry(false);
@@ -736,6 +751,105 @@ export default function SystemScreen() {
     );
   };
 
+  const normalizeAdminLoginId = (rawValue: string): string => {
+    return String(rawValue || "").trim().toLowerCase();
+  };
+
+  const handleCreateAdminUser = async () => {
+    if (!canManageSystem || creatingAdminUser) return;
+    const loginId = normalizeAdminLoginId(adminLoginId);
+    const displayName = String(adminDisplayName || "").trim();
+    const password = String(adminPassword || "").trim();
+
+    if (!loginId) {
+      Alert.alert("လိုအပ်ချက်", "Admin Username/Email ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (!/^[a-z0-9._@-]+$/i.test(loginId)) {
+      Alert.alert("မမှန်ကန်ပါ", "Username/Email တွင် အက္ခရာ၊ ဂဏန်းနှင့် . _ @ - သာ သုံးပါ။");
+      return;
+    }
+    if (loginId === "admin") {
+      Alert.alert("မပြုလုပ်နိုင်ပါ", "admin username ကို system legacy account အတွက် reserved ထားပါသည်။");
+      return;
+    }
+    if (!password) {
+      Alert.alert("လိုအပ်ချက်", "Admin Password ကိုဖြည့်ပါ။");
+      return;
+    }
+
+    const existing = (Array.isArray(users) ? users : []).find(
+      (user: UserAccount) => normalizeAdminLoginId(String(user?.id || "")) === loginId
+    );
+    if (existing) {
+      Alert.alert("ရှိပြီးသားအကောင့်", `${loginId} သည်ရှိပြီးသားဖြစ်နေပါသည်။`);
+      return;
+    }
+
+    try {
+      setCreatingAdminUser(true);
+      const nextUser: UserAccount = {
+        id: loginId,
+        displayName: displayName || loginId,
+        systemRole: "admin",
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      };
+      await upsertUserAccount(nextUser);
+      await setUserPassword(nextUser.id, password);
+      if (refreshData) await refreshData({ skipPull: true });
+      setAdminLoginId("");
+      setAdminDisplayName("");
+      setAdminPassword("");
+      Alert.alert("အောင်မြင်ပါသည်", `${loginId} admin user ကိုထည့်ပြီးပါပြီ။`);
+    } catch {
+      Alert.alert("အမှား", "Admin user ထည့်ရာတွင် အမှားဖြစ်နေပါသည်။");
+    } finally {
+      setCreatingAdminUser(false);
+    }
+  };
+
+  const handleDeleteAdminUser = async (targetUserId: string) => {
+    if (!canManageSystem || deletingAdminUserId) return;
+    const targetId = normalizeAdminLoginId(targetUserId);
+    if (!targetId) return;
+    if (targetId === "admin") {
+      Alert.alert("မပြုလုပ်နိုင်ပါ", "Legacy system admin account ကို မဖျက်နိုင်ပါ။");
+      return;
+    }
+    if (normalizeAdminLoginId(String(currentUser?.id || "")) === targetId) {
+      Alert.alert("မပြုလုပ်နိုင်ပါ", "လက်ရှိ login ဝင်ထားသော admin account ကို မဖျက်နိုင်ပါ။");
+      return;
+    }
+
+    const confirmed = await (async () => {
+      if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+        return window.confirm(`${targetId} admin account ကို ဖျက်မည်လား?`);
+      }
+      return await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          "Admin User ဖျက်မည်",
+          `${targetId} admin account ကို ဖျက်မည်လား?`,
+          [
+            { text: "မဖျက်ပါ", style: "cancel", onPress: () => resolve(false) },
+            { text: "ဖျက်မည်", style: "destructive", onPress: () => resolve(true) },
+          ]
+        );
+      });
+    })();
+    if (!confirmed) return;
+
+    try {
+      setDeletingAdminUserId(targetId);
+      await removeUserAccount(targetId);
+      Alert.alert("အောင်မြင်ပါသည်", `${targetId} admin account ကို ဖျက်ပြီးပါပြီ။`);
+    } catch {
+      Alert.alert("အမှား", "Admin account ဖျက်ရာတွင် အမှားဖြစ်နေပါသည်။");
+    } finally {
+      setDeletingAdminUserId(null);
+    }
+  };
+
   return (
     <ScrollView
       style={[styles.container, { paddingTop: insets.top + 20 }]}
@@ -758,6 +872,81 @@ export default function SystemScreen() {
 
       {canManageSystem ? (
         <View style={styles.menuContainer}>
+          <View style={styles.bootstrapCard}>
+            <Text style={styles.bootstrapTitle}>System Admin Users</Text>
+            <Text style={styles.bootstrapDesc}>
+              Central Admin build အတွက် admin account များကို username/email ဖြင့် ထပ်ထည့်ပြီး မျှဝေစီမံနိုင်ပါသည်။
+            </Text>
+            <View style={styles.adminUserForm}>
+              <Text style={styles.fieldLabel}>Username / Email</Text>
+              <TextInput
+                style={styles.input}
+                value={adminLoginId}
+                onChangeText={setAdminLoginId}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="admin2 or admin2@example.com"
+              />
+              <Text style={styles.fieldLabel}>Display Name (Optional)</Text>
+              <TextInput
+                style={styles.input}
+                value={adminDisplayName}
+                onChangeText={setAdminDisplayName}
+                autoCapitalize="words"
+                autoCorrect={false}
+                placeholder="ဥပမာ - Central Admin 2"
+              />
+              <Text style={styles.fieldLabel}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={adminPassword}
+                onChangeText={setAdminPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+                placeholder="Admin password"
+              />
+              <Pressable
+                style={[styles.bootstrapButton, creatingAdminUser && styles.registryListDeleteButtonDisabled]}
+                onPress={() => void handleCreateAdminUser()}
+                disabled={creatingAdminUser}
+              >
+                <Text style={styles.bootstrapButtonText}>{creatingAdminUser ? "Adding..." : "Add Admin User"}</Text>
+              </Pressable>
+              <Text style={styles.helperText}>
+                Legacy admin account ကို ဆက်လက်အသုံးပြုနိုင်ပါသည်။ အသစ်ထည့်သည့် admin user များသည် Admin Login စာမျက်နှာမှ ဝင်ရောက်ပါ။
+              </Text>
+            </View>
+            <View style={styles.adminUserList}>
+              <Text style={styles.sectionTitle}>Existing Admin Users</Text>
+              {adminUsers.length === 0 ? (
+                <Text style={styles.helperText}>အပို admin user မရှိသေးပါ။</Text>
+              ) : (
+                adminUsers.map((user) => (
+                  <View key={user.id} style={styles.adminUserRow}>
+                    <View style={styles.adminUserMeta}>
+                      <Text style={styles.adminUserName}>{user.displayName || user.id}</Text>
+                      <Text style={styles.adminUserId}>{user.id}</Text>
+                    </View>
+                    <Pressable
+                      style={[
+                        styles.registryListDeleteButton,
+                        normalizeAdminLoginId(String(user.id || "")) === deletingAdminUserId &&
+                          styles.registryListDeleteButtonDisabled,
+                      ]}
+                      onPress={() => void handleDeleteAdminUser(user.id)}
+                      disabled={Boolean(deletingAdminUserId)}
+                    >
+                      <Text style={styles.registryListDeleteButtonText}>
+                        {normalizeAdminLoginId(String(user.id || "")) === deletingAdminUserId ? "Deleting..." : "Remove"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ))
+              )}
+            </View>
+          </View>
+
           <View style={styles.bootstrapCard}>
             <Text style={styles.bootstrapTitle}>Org Registry (Central)</Text>
             <Text style={styles.bootstrapDesc}>
@@ -1238,10 +1427,10 @@ export default function SystemScreen() {
               ) : (
                 <View style={styles.registryFormCollapsed}>
                   <Text style={styles.registryFormCollapsedText}>
-                    Org အသစ်ထည့်ရန် "Add New Org" ကိုနှိပ်ပါ။
+                    Org အသစ်ထည့်ရန် &quot;Add New Org&quot; ကိုနှိပ်ပါ။
                   </Text>
                   <Text style={styles.registryFormCollapsedText}>
-                    ရှိပြီးသား Org ကို ပြင်ရန် List မှ "Edit" ကိုနှိပ်ပါ။
+                    ရှိပြီးသား Org ကို ပြင်ရန် List မှ &quot;Edit&quot; ကိုနှိပ်ပါ။
                   </Text>
                 </View>
               )}
@@ -1706,6 +1895,22 @@ const styles = StyleSheet.create({
   bootstrapSummaryLine: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
   bootstrapHint: { marginTop: 6, fontSize: 12, lineHeight: 18, color: Colors.light.textSecondary },
   sectionTitle: { marginTop: 14, fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  adminUserForm: { gap: 8 },
+  adminUserList: { marginTop: 12, gap: 8 },
+  adminUserRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  adminUserMeta: { flex: 1, gap: 2 },
+  adminUserName: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  adminUserId: { fontSize: 12, color: Colors.light.textSecondary },
   fieldLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 2 },
   input: {
     backgroundColor: Colors.light.background,

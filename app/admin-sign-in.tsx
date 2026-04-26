@@ -7,7 +7,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -26,15 +25,18 @@ export default function AdminSignInScreen() {
   const appVersion = getCurrentAppVersion();
   const orgClientVariant = isOrgClientVariant();
   const variantLabel = getAppVariantLabel();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
+  const [usernameTouched, setUsernameTouched] = useState(false);
+  const [usernameValid, setUsernameValid] = useState<boolean | null>(null);
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [passwordValid, setPasswordValid] = useState<boolean | null>(null);
 
   const canSubmit = useMemo(() => {
-    return !orgClientVariant && !loading && !signingIn && password.trim().length > 0;
-  }, [orgClientVariant, loading, signingIn, password]);
+    return !orgClientVariant && !loading && !signingIn && username.trim().length > 0 && password.trim().length > 0;
+  }, [orgClientVariant, loading, signingIn, username, password]);
 
   React.useEffect(() => {
     if (!orgClientVariant) return;
@@ -45,17 +47,21 @@ export default function AdminSignInScreen() {
     if (!canSubmit) return;
     setSigningIn(true);
     try {
-      const result = await attemptAdminLogin("admin", password.trim());
+      const result = await attemptAdminLogin(username.trim(), password.trim());
       if (result.ok) {
+        setUsernameTouched(false);
+        setUsernameValid(true);
         setPasswordTouched(false);
         setPasswordValid(true);
         router.replace("/system" as any);
         return;
       }
+      setUsernameTouched(true);
+      setUsernameValid(false);
       setPasswordTouched(true);
       setPasswordValid(false);
       if (result.reason === "invalid_username") {
-        Alert.alert("မအောင်မြင်ပါ", "Admin username မမှန်ကန်ပါ။");
+        Alert.alert("မအောင်မြင်ပါ", "Admin user ကိုမတွေ့ပါ။ Username/Email ကို ပြန်စစ်ပါ။");
       } else {
         Alert.alert("Password မမှန်ကန်ပါ", "Admin Password ကိုပြန်စစ်ပြီး ထပ်မံကြိုးစားပါ။");
       }
@@ -84,8 +90,22 @@ export default function AdminSignInScreen() {
             {orgClientVariant ? (
               <Text style={styles.errorText}>Org Client build တွင် System Admin Login ကိုပိတ်ထားပါသည်။</Text>
             ) : null}
-            <Text style={styles.label}>Username</Text>
-            <TextInput value="admin" editable={false} style={[styles.input, styles.readonlyInput]} />
+            <Text style={styles.label}>Username / Email</Text>
+            <TextInput
+              value={username}
+              onChangeText={(value) => {
+                setUsername(value);
+                setUsernameTouched(false);
+                setUsernameValid(null);
+              }}
+              placeholder="Username or Email"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.input}
+            />
+            {usernameTouched && usernameValid === false ? (
+              <Text style={styles.errorText}>Username/Email မမှန်ကန်ပါ။</Text>
+            ) : null}
 
             <Text style={styles.label}>Password</Text>
             <View style={styles.passwordWrap}>
@@ -122,10 +142,6 @@ export default function AdminSignInScreen() {
             >
               <Text style={styles.submitText}>{signingIn ? "Logging in..." : "Admin Login"}</Text>
             </TouchableOpacity>
-
-            <Pressable style={styles.backBtn} onPress={() => router.replace("/sign-in" as any)}>
-              <Text style={styles.backBtnText}>Org User Login သို့ ပြန်သွားမည်</Text>
-            </Pressable>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -173,7 +189,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#0F172A",
   },
-  readonlyInput: { color: "#475569" },
   passwordWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -196,7 +211,5 @@ const styles = StyleSheet.create({
   submitDisabled: { opacity: 0.5 },
   submitText: { color: "#fff", fontSize: 16, fontWeight: "700" },
   errorText: { marginTop: 6, color: "#DC2626", fontSize: 12, fontWeight: "600" },
-  backBtn: { marginTop: 10, alignItems: "center" },
-  backBtnText: { color: "#0369A1", fontSize: 13, fontWeight: "700" },
 });
 
