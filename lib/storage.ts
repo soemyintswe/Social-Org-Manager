@@ -4483,26 +4483,106 @@ export async function getTransactions(): Promise<Transaction[]> {
   return filterTransactionsByDeletedIndex(Array.isArray(txns) ? txns : [], index);
 }
 
+function normalizeReceiptForCompare(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
+}
+
+function ensureUniqueTransactionReceipt(rows: any[], receiptNumber: unknown, excludeId?: string): void {
+  const receiptToken = normalizeReceiptForCompare(receiptNumber);
+  if (!receiptToken) return;
+  const excluded = String(excludeId || "").trim();
+  const duplicate = rows.find((row: any) => {
+    const rowId = String(row?.id || "").trim();
+    if (excluded && rowId === excluded) return false;
+    return normalizeReceiptForCompare(row?.receiptNumber) === receiptToken;
+  });
+  if (duplicate) throw new Error("duplicate_receipt");
+}
+
+function normalizeMemberLookupText(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "")
+    .trim();
+}
+
+function inferMemberIdFromReferenceText(value: unknown, members: any[]): string | undefined {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  const idDirect = members.find((row: any) => String(row?.id || "").trim().toLowerCase() === raw.toLowerCase());
+  if (idDirect?.id) return String(idDirect.id);
+
+  const bracketMatches = Array.from(raw.matchAll(/\(([^)]+)\)/g))
+    .map((m) => String(m?.[1] || "").trim())
+    .filter(Boolean);
+  for (const token of bracketMatches) {
+    const found = members.find((row: any) => String(row?.id || "").trim().toLowerCase() === token.toLowerCase());
+    if (found?.id) return String(found.id);
+  }
+
+  const textNorm = normalizeMemberLookupText(raw);
+  if (!textNorm) return undefined;
+  const nameMatches = members.filter(
+    (row: any) => normalizeMemberLookupText(row?.name || row?.fullName || row?.displayName || "") === textNorm
+  );
+  if (nameMatches.length === 1) {
+    const resolved = String(nameMatches[0]?.id || "").trim();
+    return resolved || undefined;
+  }
+  return undefined;
+}
+
+function withInferredTransactionMemberId<T extends Record<string, any>>(txn: T, members: any[]): T {
+  const memberId = String(txn?.memberId || "").trim();
+  if (memberId) return txn;
+  const inferred = inferMemberIdFromReferenceText(txn?.payerPayee, members);
+  if (!inferred) return txn;
+  return { ...txn, memberId: inferred } as T;
+}
+
 export async function addTransaction(txn: any) {
-  const txns = await getTransactions();
-  const newTxn = { ...txn, id: generateId() };
+  const [txns, members] = await Promise.all([getTransactions(), getMembers()]);
+  const normalizedTxn = withInferredTransactionMemberId(txn, members);
+  ensureUniqueTransactionReceipt(txns, normalizedTxn?.receiptNumber);
+  const newTxn = { ...normalizedTxn, id: generateId() };
   await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTxn, ...txns]));
   return newTxn;
 }
 
 export async function updateTransaction(id: string, updates: any) {
-  const txns = await getTransactions();
+  const [txns, members] = await Promise.all([getTransactions(), getMembers()]);
   const idx = txns.findIndex((item) => item.id === id);
   if (idx !== -1) {
     const safeUpdates = { ...updates };
     if ("id" in safeUpdates) delete safeUpdates.id;
-    txns[idx] = { ...txns[idx], ...safeUpdates };
+    const merged = withInferredTransactionMemberId({ ...txns[idx], ...safeUpdates }, members);
+    const shouldValidateReceipt = Object.prototype.hasOwnProperty.call(safeUpdates, "receiptNumber");
+    if (shouldValidateReceipt) {
+      ensureUniqueTransactionReceipt(txns, merged?.receiptNumber, id);
+    }
+    txns[idx] = merged;
     await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns));
   }
 }
 
-export async function saveTransactions(data: Transaction[]): Promise<void> {
-  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(data));
+export async function saveTransactions(
+  data: Transaction[],
+  options?: { validateUniqueReceipt?: boolean }
+): Promise<void> {
+  const rows = Array.isArray(data) ? data : [];
+  if (options?.validateUniqueReceipt) {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const token = normalizeReceiptForCompare((row as any)?.receiptNumber);
+      if (!token) continue;
+      if (seen.has(token)) throw new Error("duplicate_receipt");
+      seen.add(token);
+    }
+  }
+  await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(rows));
 }
 
 export async function importTransactions(newTransactions: Transaction[]): Promise<void> {
@@ -4512,7 +4592,7 @@ export async function importTransactions(newTransactions: Transaction[]): Promis
     if (!txn?.id) continue;
     byId.set(txn.id, txn);
   }
-  await saveTransactions(Array.from(byId.values()));
+  await saveTransactions(Array.from(byId.values()), { validateUniqueReceipt: true });
 }
 
 export async function deleteTransaction(id: string) {
@@ -4544,8 +4624,14 @@ export async function updateLoan(id: string, updates: any) {
 }
 
 export async function deleteLoan(id: string) {
-  const loans = await getLoans();
-  await AsyncStorage.setItem(KEYS.LOANS, JSON.stringify(loans.filter(l => l.id !== id)));
+  const [loans, txns] = await Promise.all([getLoans(), getTransactions()]);
+  const targetLoanId = String(id || "").trim();
+  const nextLoans = loans.filter((loan) => String(loan?.id || "").trim() !== targetLoanId);
+  const nextTxns = txns.filter((txn: any) => String(txn?.loanId || "").trim() !== targetLoanId);
+  await AsyncStorage.multiSet([
+    [KEYS.LOANS, JSON.stringify(nextLoans)],
+    [KEYS.TRANSACTIONS, JSON.stringify(nextTxns)],
+  ]);
 }
 
 // --- Settings ---

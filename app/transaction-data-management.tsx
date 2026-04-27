@@ -51,8 +51,8 @@ const TEMPLATE_FILES = {
     fileName: "transactions_transfer_template.csv",
     title: "ဘဏ်သွင်း/ဘဏ်ထုတ် Template",
     csv: `id,amount,category,date,receipt_number,notes
-,300000,bank_deposit,2026-02-25,TR-0001,ငွေသားမှ ဘဏ်သို့သွင်း
-,50000,bank_withdraw,2026-02-26,TR-0002,ဘဏ်မှ ငွေသားထုတ်
+,300000,bank_deposit,2026-02-25,B-0001,ငွေသားမှ ဘဏ်သို့သွင်း
+,50000,bank_withdraw,2026-02-26,B-0002,ဘဏ်မှ ငွေသားထုတ်
 `,
   },
 } as const;
@@ -226,7 +226,7 @@ function normalizeTransaction(raw: Record<string, unknown>, idx: number): any | 
   else if (incomeSet.has(category)) type = "income";
   else if (expenseSet.has(category)) type = "expense";
   else if (receipt.startsWith("O-")) type = "expense";
-  else if (receipt.startsWith("TR-")) type = "transfer";
+  else if (receipt.startsWith("TR-") || receipt.startsWith("B-")) type = "transfer";
 
   if (!category) {
     if (type === "transfer") category = rawType.includes("ဘဏ်ထုတ်") ? "bank_withdraw" : "bank_deposit";
@@ -245,7 +245,7 @@ function normalizeTransaction(raw: Record<string, unknown>, idx: number): any | 
 
   const date = toIsoDate(c.date) || new Date().toISOString().slice(0, 10);
   const id = text(c.id) || `txn-${Date.now()}-${secureRandomToken(6)}-${idx}`;
-  const receiptNumber = receipt || `${type === "income" ? "I-" : type === "expense" ? "O-" : "TR-"}${Date.now().toString().slice(-6)}${idx}`;
+  const receiptNumber = receipt || `${type === "income" ? "I-" : type === "expense" ? "O-" : "B-"}${Date.now().toString().slice(-6)}${idx}`;
   const notes = text(c.notes);
 
   const tx: any = {
@@ -333,7 +333,9 @@ function buildBackup(transactions: any[]): string {
 }
 
 function normalizeReceipt(value: unknown): string {
-  return text(value).toUpperCase();
+  return text(value)
+    .toUpperCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
 }
 
 function buildDuplicateKey(txn: any): string | null {
@@ -346,6 +348,83 @@ function buildDuplicateKey(txn: any): string | null {
   const category = text(txn?.category).toLowerCase();
   const payment = text(txn?.paymentMethod).toLowerCase();
   return `${receipt}|${amount}|${date}|${type}|${category}|${payment}`;
+}
+
+function getFallbackReceiptPrefix(txn: any): string {
+  const txType = text(txn?.type).toLowerCase();
+  if (txType === "expense") return "O-";
+  if (txType === "transfer") return "B-";
+  return "I-";
+}
+
+function getReceiptPrefix(txn: any): string {
+  const receipt = normalizeReceipt(txn?.receiptNumber);
+  const prefixMatch = receipt.match(/^([A-Z]+-)/);
+  if (prefixMatch?.[1]) return prefixMatch[1];
+  return getFallbackReceiptPrefix(txn);
+}
+
+function getReceiptTrailingNumberMeta(receipt: string): { value: number; width: number } | null {
+  const match = normalizeReceipt(receipt).match(/(\d+)$/);
+  if (!match?.[1]) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  return { value, width: match[1].length };
+}
+
+function repairDuplicateReceipts(rows: any[]): { rows: any[]; updatedCount: number } {
+  const next = rows.map((row) => ({ ...row }));
+  const receiptGroups = new Map<string, number[]>();
+  const used = new Set<string>();
+  const prefixState = new Map<string, { next: number; width: number }>();
+
+  next.forEach((txn, idx) => {
+    const token = normalizeReceipt(txn?.receiptNumber);
+    if (!token) return;
+    if (!receiptGroups.has(token)) receiptGroups.set(token, []);
+    receiptGroups.get(token)?.push(idx);
+    used.add(token);
+
+    const prefix = getReceiptPrefix(txn);
+    const numberMeta = getReceiptTrailingNumberMeta(token);
+    const prev = prefixState.get(prefix) || { next: 1, width: 4 };
+    if (numberMeta) {
+      prev.next = Math.max(prev.next, numberMeta.value + 1);
+      prev.width = Math.max(prev.width, numberMeta.width, 4);
+    }
+    prefixState.set(prefix, prev);
+  });
+
+  const duplicateLists = Array.from(receiptGroups.values()).filter((list) => list.length > 1);
+  if (!duplicateLists.length) return { rows: next, updatedCount: 0 };
+
+  let updatedCount = 0;
+  duplicateLists.forEach((indexes) => {
+    const ranked = [...indexes].sort((a, b) => {
+      const scoreDiff = scoreTransaction(next[b]) - scoreTransaction(next[a]);
+      if (scoreDiff !== 0) return scoreDiff;
+      return String(next[a]?.createdAt || "").localeCompare(String(next[b]?.createdAt || ""));
+    });
+    const keep = ranked[0];
+    ranked.slice(1).forEach((idx) => {
+      const txn = next[idx];
+      const prefix = getReceiptPrefix(txn);
+      const state = prefixState.get(prefix) || { next: 1, width: 4 };
+      let candidate = "";
+      let candidateToken = "";
+      do {
+        candidate = `${prefix}${String(state.next).padStart(state.width, "0")}`;
+        state.next += 1;
+        candidateToken = normalizeReceipt(candidate);
+      } while (!candidateToken || used.has(candidateToken));
+      prefixState.set(prefix, state);
+      used.add(candidateToken);
+      next[idx] = { ...txn, receiptNumber: candidate };
+      if (idx !== keep) updatedCount += 1;
+    });
+  });
+
+  return { rows: next, updatedCount };
 }
 
 function scoreTransaction(txn: any): number {
@@ -648,10 +727,18 @@ export default function TransactionDataManagementScreen() {
     const run = async () => {
       setImporting(true);
       try {
-        await saveTransactions(p.transactions);
+        await saveTransactions(p.transactions, { validateUniqueReceipt: true });
         await refreshData();
         await writeAutoSnapshot();
         msg("Success", `Restore ပြီးပါပြီ။ ${p.transactions.length} rows သိမ်းခဲ့ပါသည်${p.skipped ? ` (${p.skipped} rows skip)` : ""}။`);
+      } catch (e: any) {
+        const reason = String(e?.message || "");
+        if (reason.includes("duplicate_receipt")) {
+          msg("Duplicate Receipt", "ပြေစာအမှတ် ထပ်နေပါသည်။ Restore မလုပ်မီ ပြေစာအမှတ်များ မတူညီအောင်ပြင်ပါ။");
+          return;
+        }
+        console.error(e);
+        msg("Error", "Restore မအောင်မြင်ပါ။");
       } finally {
         setImporting(false);
       }
@@ -708,7 +795,19 @@ export default function TransactionDataManagementScreen() {
       }
 
       const duplicateGroups = Array.from(groups.values()).filter((list) => list.length > 1);
-      if (!duplicateGroups.length) return msg("OK", "Duplicate transaction မတွေ့ပါ။");
+      const receiptBuckets = new Map<string, number>();
+      current.forEach((txn: any) => {
+        const receipt = normalizeReceipt(txn?.receiptNumber);
+        if (!receipt) return;
+        receiptBuckets.set(receipt, (receiptBuckets.get(receipt) || 0) + 1);
+      });
+      const duplicateReceiptRows = Array.from(receiptBuckets.values()).reduce((sum, count) => {
+        if (count > 1) return sum + (count - 1);
+        return sum;
+      }, 0);
+      if (!duplicateGroups.length && duplicateReceiptRows === 0) {
+        return msg("OK", "Duplicate transaction / receipt မတွေ့ပါ။");
+      }
 
       let removed = 0;
       const mergedById = new Map<string, any>();
@@ -726,31 +825,49 @@ export default function TransactionDataManagementScreen() {
         removed += ranked.length - 1;
       });
 
-      const question = `Duplicate ${removed} rows ကို merge + cleanup လုပ်ပါမည်။ မူလစာရင်း backup ကို clipboard/preview ထဲသို့ ထည့်ပေးထားပါမည်။ ဆက်လုပ်မလား။`;
+      const question = `Duplicate rows ${removed} ခု merge လုပ်ပြီး duplicate receipt ${duplicateReceiptRows} ခုကို အသစ်ပြန်နံပါတ်ပေးပါမည်။ မူလစာရင်း backup ကို clipboard/preview ထဲသို့ ထည့်ပေးထားပါမည်။ ဆက်လုပ်မလား။`;
       const run = async () => {
         const data = buildBackup(current);
         setBackupText(data);
-        const next: any[] = [];
-        current.forEach((row: any) => {
-          const key = buildDuplicateKey(row);
-          if (!key) {
-            next.push(row);
+        let next: any[] = [];
+        if (duplicateGroups.length > 0) {
+          current.forEach((row: any) => {
+            const key = buildDuplicateKey(row);
+            if (!key) {
+              next.push(row);
+              return;
+            }
+            const list = groups.get(key);
+            if (!list || list.length < 2) {
+              next.push(row);
+              return;
+            }
+            const keepId = String(row?.id || "");
+            if (keepIds.has(keepId)) {
+              next.push(mergedById.get(keepId) ?? row);
+            }
+          });
+        } else {
+          next = [...current];
+        }
+        const repaired = repairDuplicateReceipts(next);
+        try {
+          await saveTransactions(repaired.rows, { validateUniqueReceipt: true });
+          await refreshData();
+          await writeAutoSnapshot();
+          msg(
+            "Success",
+            `Duplicate rows ${removed} ခု merge လုပ်ပြီး duplicate receipt ${repaired.updatedCount} ခုကို အသစ်ပြန်နံပါတ်ပေးပြီး cleanup ပြီးပါပြီ။`
+          );
+        } catch (e: any) {
+          const reason = String(e?.message || "");
+          if (reason.includes("duplicate_receipt")) {
+            msg("Duplicate Receipt", "ပြေစာအမှတ် ထပ်နေသေးသောကြောင့် cleanup ကို မသိမ်းနိုင်ပါ။");
             return;
           }
-          const list = groups.get(key);
-          if (!list || list.length < 2) {
-            next.push(row);
-            return;
-          }
-          const keepId = String(row?.id || "");
-          if (keepIds.has(keepId)) {
-            next.push(mergedById.get(keepId) ?? row);
-          }
-        });
-        await saveTransactions(next);
-        await refreshData();
-        await writeAutoSnapshot();
-        msg("Success", `Duplicate ${removed} rows ကို merge + cleanup လုပ်ပြီးပါပြီ။`);
+          console.error(e);
+          msg("Error", "Duplicate cleanup ကို သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
+        }
       };
 
       if (Platform.OS === "web") {
@@ -793,7 +910,7 @@ export default function TransactionDataManagementScreen() {
 
           <View style={styles.autoBackupCard}>
             <Text style={styles.cardTitle}>Duplicate Cleanup (Safe)</Text>
-            <Text style={styles.cardDesc}>Receipt + Amount + Date + Type + Category + Payment တူနေသော rows ကိုသာ ဖျက်ပါသည်။</Text>
+            <Text style={styles.cardDesc}>တူညီ rows များကို merge လုပ်ပြီး receipt number ထပ်နေသေးပါက အလိုအလျောက် ပြန်နံပါတ်ပေးပါသည်။</Text>
             <Pressable style={styles.restoreAutoBtn} onPress={runDuplicateCleanup} disabled={busy}>
               <Text style={styles.restoreAutoText}>Run Duplicate Cleanup</Text>
             </Pressable>

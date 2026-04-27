@@ -1,10 +1,10 @@
 {
   "variant": "org-client",
-  "latestVersion": "1.1.73",
-  "latestBuildNumber": "73",
+  "latestVersion": "1.1.74",
+  "latestBuildNumber": "74",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Social-Org-Manager-Setup-v1.1.73.exe",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Social-Org-Manager-Setup-v1.1.74.exe",
   "notes": "Org Client desktop update channel is active.",
   "force": false,
-  "publishedAt": "2026-04-25T20:06:01.684Z"
+  "publishedAt": "2026-04-27T20:26:50.527Z"
 }

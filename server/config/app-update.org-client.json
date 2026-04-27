@@ -1,10 +1,10 @@
 {
   "variant": "org-client",
-  "latestVersion": "1.1.73",
-  "latestBuildNumber": "74",
+  "latestVersion": "1.1.74",
+  "latestBuildNumber": "75",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/social-org-manager-org-client-v1.1.73-202604250402.apk",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/social-org-manager-org-client-v1.1.74-202604280252.apk",
   "notes": "Org Client mobile update channel is active.",
   "force": false,
-  "publishedAt": "2026-04-24T21:32:10.196Z"
+  "publishedAt": "2026-04-27T20:22:11.827Z"
 }

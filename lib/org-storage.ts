@@ -142,6 +142,7 @@ export async function persistOrgStorageContext(input: { orgId?: string | null; o
   try {
     if (orgId) {
       await AsyncStorage.setItem(ACTIVE_ORG_ID_KEY, orgId);
+      await AsyncStorage.setItem(LAST_CONNECTED_ORG_ID_KEY, orgId);
     }
     if (orgEmail) {
       await AsyncStorage.setItem(ACTIVE_ORG_EMAIL_KEY, orgEmail);
@@ -172,8 +173,9 @@ export async function restoreOrgStorageContext(): Promise<OrgStorageContext> {
   }
   try {
     const rawOrgId = await AsyncStorage.getItem(ACTIVE_ORG_ID_KEY);
+    const rawLastOrgId = await AsyncStorage.getItem(LAST_CONNECTED_ORG_ID_KEY);
     const rawOrgEmail = await AsyncStorage.getItem(ACTIVE_ORG_EMAIL_KEY);
-    const orgId = normalizeOrgId(rawOrgId);
+    const orgId = normalizeOrgId(rawOrgId) || normalizeOrgId(rawLastOrgId);
     const orgEmail = normalizeEmail(rawOrgEmail);
     if (orgId || orgEmail) {
       activeOrgIdOverride = orgId || null;
@@ -201,6 +203,55 @@ export async function clearOrgScopedStorage(orgId?: string | null): Promise<void
     if (targets.length > 0) {
       await AsyncStorage.multiRemove(targets);
     }
+  } catch {
+    // ignore
+  }
+}
+
+export async function clearPersistedOrgStorageContext(options?: {
+  clearLastConnected?: boolean;
+  clearDesktopBoundFlag?: boolean;
+  clearOrgConnectOverride?: boolean;
+  clearForceReloadFlag?: boolean;
+}): Promise<void> {
+  const clearLastConnected = options?.clearLastConnected !== false;
+  const clearDesktopBoundFlag = options?.clearDesktopBoundFlag !== false;
+  const clearOrgConnectOverride = options?.clearOrgConnectOverride !== false;
+  const clearForceReloadFlag = options?.clearForceReloadFlag !== false;
+
+  orgContext = { orgId: null, orgEmail: null };
+  activeOrgIdOverride = null;
+
+  if (canUseWebStorage()) {
+    writeWebSessionValue(ACTIVE_ORG_ID_KEY, "");
+    writeWebSessionValue(ACTIVE_ORG_EMAIL_KEY, "");
+    writeWebLocalValue(ACTIVE_ORG_ID_KEY, "");
+    writeWebLocalValue(ACTIVE_ORG_EMAIL_KEY, "");
+    if (clearLastConnected) {
+      writeWebSessionValue(LAST_CONNECTED_ORG_ID_KEY, "");
+      writeWebLocalValue(LAST_CONNECTED_ORG_ID_KEY, "");
+    }
+    if (clearDesktopBoundFlag) {
+      writeWebSessionValue("@orghub_desktop_org_bound_v1", "");
+      writeWebLocalValue("@orghub_desktop_org_bound_v1", "");
+    }
+    if (clearOrgConnectOverride) {
+      writeWebSessionValue("@orghub_org_connect_override", "");
+      writeWebLocalValue("@orghub_org_connect_override", "");
+    }
+    if (clearForceReloadFlag) {
+      writeWebSessionValue("@orghub_force_org_reload", "");
+      writeWebLocalValue("@orghub_force_org_reload", "");
+    }
+    return;
+  }
+
+  try {
+    const keys = [ACTIVE_ORG_ID_KEY, ACTIVE_ORG_EMAIL_KEY];
+    if (clearLastConnected) {
+      keys.push(LAST_CONNECTED_ORG_ID_KEY);
+    }
+    await AsyncStorage.multiRemove(keys);
   } catch {
     // ignore
   }

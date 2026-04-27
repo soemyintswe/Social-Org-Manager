@@ -22,7 +22,12 @@ import { useAuth } from "../lib/AuthContext";
 import { getCurrentAppVersion } from "../lib/app-update";
 import { isCentralAdminVariant, isOrgClientVariant } from "../lib/app-variant";
 import { useData } from "../lib/DataContext";
-import { persistOrgStorageContext, restoreOrgStorageContext } from "../lib/org-storage";
+import {
+  clearOrgScopedStorage,
+  clearPersistedOrgStorageContext,
+  persistOrgStorageContext,
+  restoreOrgStorageContext,
+} from "../lib/org-storage";
 import { prewarmOrgScopedRemoteConfig, setActiveOrgId } from "../lib/remote-config";
 import {
   ensureChairAccountFromRegistry,
@@ -83,6 +88,7 @@ export default function SignInScreen() {
   const [orgHydrating, setOrgHydrating] = useState(false);
   const [orgBindingRequired, setOrgBindingRequired] = useState(false);
   const [boundOrgId, setBoundOrgId] = useState("");
+  const [disconnectingOrg, setDisconnectingOrg] = useState(false);
   const passwordInputRef = useRef<TextInput>(null);
 
   const canSubmit = useMemo(() => {
@@ -308,6 +314,79 @@ export default function SignInScreen() {
     };
   }, [params?.orgConnect, params?.orgId, refreshData]);
 
+  const runDisconnectOrg = async () => {
+    if (disconnectingOrg) return;
+    setDisconnectingOrg(true);
+    try {
+      const restored = await restoreOrgStorageContext();
+      const settings = await getAccountSettings();
+      const targetOrgId = normalizeOrgIdInput(boundOrgId || restored?.orgId || settings?.orgId || "");
+
+      if (targetOrgId) {
+        await clearOrgScopedStorage(targetOrgId);
+      }
+
+      await clearPersistedOrgStorageContext({
+        clearLastConnected: true,
+        clearDesktopBoundFlag: true,
+        clearOrgConnectOverride: true,
+        clearForceReloadFlag: true,
+      });
+      setActiveOrgId(null);
+      prewarmOrgScopedRemoteConfig(null);
+
+      try {
+        await saveAccountSettings({
+          ...settings,
+          orgId: "",
+          orgEmail: "",
+          orgPhone: "",
+          orgSetupCompleted: false,
+          orgSetupAt: "",
+        });
+      } catch {
+        // ignore: scoped data may already be cleared
+      }
+
+      try {
+        await refreshData({ skipPull: true, markLocalMutation: false });
+      } catch {
+        // ignore refresh errors during disconnect
+      }
+
+      setBoundOrgId("");
+      setOrgBindingRequired(true);
+      setUsername("");
+      setPassword("");
+
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        window.location.href = "/org-connect?orgConnect=1";
+        return;
+      }
+      router.replace("/org-connect" as any);
+    } catch {
+      Alert.alert("Disconnect မအောင်မြင်ပါ", "Org Disconnect လုပ်ရာတွင် အဆင်မပြေပါ။ ထပ်မံကြိုးစားပါ။");
+    } finally {
+      setDisconnectingOrg(false);
+    }
+  };
+
+  const handleDisconnectOrg = () => {
+    if (disconnectingOrg) return;
+    const msg =
+      "လက်ရှိ Org Connect ကိုဖြုတ်ပြီး ဤစက်ပေါ်ရှိ local data ကိုရှင်းမည်ဖြစ်ပါသည်။ Remote Database ထဲက data ကို မဖျက်ပါ။ ဆက်လုပ်မလား။";
+    if (Platform.OS === "web") {
+      if (confirm(msg)) {
+        void runDisconnectOrg();
+      }
+      return;
+    }
+    Alert.alert("Org Disconnect", msg, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Disconnect", style: "destructive", onPress: () => void runDisconnectOrg() },
+    ]);
+  };
+
   const handleSignIn = async () => {
     if (!canSubmit) return;
     if (orgBindingRequired) {
@@ -513,6 +592,18 @@ export default function SignInScreen() {
               <View style={styles.boundOrgBadge}>
                 <Text style={styles.boundOrgBadgeText}>Connected Org: {boundOrgId}</Text>
               </View>
+            ) : null}
+            {!orgHydrating && !orgBindingRequired && boundOrgId ? (
+              <TouchableOpacity
+                style={[styles.disconnectOrgBtn, disconnectingOrg && styles.disconnectOrgBtnDisabled]}
+                onPress={handleDisconnectOrg}
+                disabled={disconnectingOrg}
+              >
+                <Ionicons name="unlink-outline" size={16} color="#B91C1C" />
+                <Text style={styles.disconnectOrgBtnText}>
+                  {disconnectingOrg ? "Disconnecting..." : "Disconnect Org & Clean Local Data"}
+                </Text>
+              </TouchableOpacity>
             ) : null}
             <Text style={styles.label}>Username</Text>
             <TextInput
@@ -786,6 +877,20 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   boundOrgBadgeText: { color: "#1D4ED8", fontSize: 12, fontWeight: "700" },
+  disconnectOrgBtn: {
+    marginBottom: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    backgroundColor: "#FEF2F2",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  disconnectOrgBtnDisabled: { opacity: 0.6 },
+  disconnectOrgBtnText: { color: "#B91C1C", fontSize: 12, fontWeight: "700" },
   forgotBtn: { marginTop: 10, alignItems: "center" },
   forgotBtnText: { color: "#0F766E", fontSize: 13, fontWeight: "600" },
   adminLoginBtn: { marginTop: 8, alignItems: "center" },

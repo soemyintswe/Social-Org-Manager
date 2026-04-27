@@ -33,6 +33,7 @@ import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "
 import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription } from "../../lib/transaction-display";
 import { exportXlsxFile } from "../../lib/xlsx-export";
 import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS, normalizeFinanceCategory } from "../../lib/finance-categories";
+import { transactionBelongsToMember } from "../../lib/reporting-service";
 
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
@@ -52,6 +53,7 @@ type DeleteRequestFieldRow = {
   display?: string;
 };
 const FINANCE_PAGE_SIZE = 40;
+const ENABLE_TEMP_TREASURER_DIRECT_FINANCE_MUTATION = true;
 
 const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} KS`;
 
@@ -364,6 +366,7 @@ export default function FinanceScreen() {
     members,
     users,
     removeTransaction,
+    removeLoan,
     updateTransaction,
     createAuditChangeRequest,
     changeAuditChangeRequestStatus,
@@ -430,6 +433,8 @@ export default function FinanceScreen() {
     const [printing, setPrinting] = useState(false);
 
     const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
+    const isTreasurer = myRole === "treasurer";
+    const treasurerDirectMutationEnabled = ENABLE_TEMP_TREASURER_DIRECT_FINANCE_MUTATION && isTreasurer;
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -439,7 +444,12 @@ export default function FinanceScreen() {
   const canEditFinance = can("finance.edit") || can("finance.manage");
   const canDeleteFinance = can("finance.delete") || can("finance.manage");
   const canAuditFlagFinance = can("finance.audit_flag");
-  const canRequestDeleteFinance = canDeleteFinance || canEditFinance || canAuditFlagFinance;
+  const canRequestDeleteFinance = treasurerDirectMutationEnabled
+    ? canDeleteFinance
+    : (canDeleteFinance || canEditFinance || canAuditFlagFinance);
+  const canOpenAuditRequests = treasurerDirectMutationEnabled
+    ? canAuditFlagFinance
+    : (canAuditFlagFinance || canEditFinance || canManageFinance);
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
   const effectiveScope: FinanceViewScope = canViewFinanceDetail ? viewScope : "self";
   const startDateMs = startDate.getTime();
@@ -632,6 +642,42 @@ export default function FinanceScreen() {
     Alert.alert("ဖြုတ်ပြီးပါပြီ", "Audit Flag ကိုဖြုတ်ပြီးပါပြီ။");
   };
 
+    const confirmDirectDeleteTransaction = (txn: Transaction) => {
+      if (!canDeleteFinance) return;
+      Alert.alert(
+        "Transaction ပယ်ဖျက်မည်",
+        "ဤငွေစာရင်းမှတ်တမ်းကို တိုက်ရိုက်ဖျက်ပါမည်။ ဆက်လုပ်မလား။",
+        [
+          { text: "မလုပ်တော့ပါ", style: "cancel" },
+          {
+            text: "ဖျက်မည်",
+            style: "destructive",
+            onPress: () => {
+              void removeTransaction(txn.id);
+            },
+          },
+        ]
+      );
+    };
+
+    const confirmDirectDeleteLoan = (loan: Loan) => {
+      if (!canDeleteFinance) return;
+      Alert.alert(
+        "Loan ပယ်ဖျက်မည်",
+        "ဤချေးငွေကို ဖျက်ပါက ဆက်စပ် loan transactions များလည်း ဖယ်ရှားပါမည်။ ဆက်လုပ်မလား။",
+        [
+          { text: "မလုပ်တော့ပါ", style: "cancel" },
+          {
+            text: "ဖျက်မည်",
+            style: "destructive",
+            onPress: () => {
+              void removeLoan(loan.id);
+            },
+          },
+        ]
+      );
+    };
+
     const openDeleteRequestForTxn = (txn: Transaction) => {
       setDeleteRequestType("transaction");
       setDeleteRequestTxn(txn);
@@ -673,6 +719,9 @@ export default function FinanceScreen() {
         resetDeleteRequestModal();
       }
     };
+
+    const handleTxnLongPressAction = treasurerDirectMutationEnabled ? confirmDirectDeleteTransaction : openDeleteRequestForTxn;
+    const handleLoanLongPressAction = treasurerDirectMutationEnabled ? confirmDirectDeleteLoan : openDeleteRequestForLoan;
 
     const buildDeleteRequestDrafts = (): AuditChangeDrafts | undefined => {
       const role = myRole === "chairperson" ? "chairperson" : myRole === "auditor" ? "auditor" : myRole === "treasurer" ? "treasurer" : null;
@@ -802,6 +851,16 @@ export default function FinanceScreen() {
       return fullName || anyM.email || anyM.phone || "";
     },
     [members]
+  );
+
+  const transactionMatchesScopedMember = useCallback(
+    (txn: any, memberId: string) => {
+      const targetId = String(memberId || "").trim();
+      if (!targetId) return false;
+      const memberName = getMemberName(targetId);
+      return transactionBelongsToMember(txn, targetId, memberName);
+    },
+    [getMemberName]
   );
 
   const memberOptions = useMemo(() => {
@@ -1242,8 +1301,8 @@ export default function FinanceScreen() {
 
   const visibleTxns = useMemo(() => {
     if (scopedMemberId === null) return sortedTxns;
-    return sortedTxns.filter((t: any) => t.memberId === scopedMemberId);
-  }, [sortedTxns, scopedMemberId]);
+    return sortedTxns.filter((t: any) => transactionMatchesScopedMember(t, scopedMemberId));
+  }, [sortedTxns, scopedMemberId, transactionMatchesScopedMember]);
 
   const sortedLoans = useMemo(
     () => [...computeLoans].sort((a, b) => {
@@ -1261,8 +1320,8 @@ export default function FinanceScreen() {
 
   const balanceSourceTransactions = useMemo(() => {
     if (scopedMemberId === null) return computeTransactions;
-    return computeTransactions.filter((t: any) => t.memberId === scopedMemberId);
-  }, [computeTransactions, scopedMemberId]);
+    return computeTransactions.filter((t: any) => transactionMatchesScopedMember(t, scopedMemberId));
+  }, [computeTransactions, scopedMemberId, transactionMatchesScopedMember]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -2019,7 +2078,7 @@ export default function FinanceScreen() {
           </View>
         </View>
         <View style={styles.headerClaimRow}>
-          {(canAuditFlagFinance || canEditFinance || canManageFinance) && (
+          {canOpenAuditRequests && (
             <Pressable
               style={styles.auditRequestBtn}
               onPress={() => router.push("/audit-change-requests" as any)}
@@ -2381,7 +2440,7 @@ export default function FinanceScreen() {
                         canAuditFlag={canAuditFlagFinance}
                         onAuditPress={openAuditModal}
                         canRequestDelete={canRequestDeleteFinance}
-                        onDeleteRequestPress={openDeleteRequestForTxn}
+                        onDeleteRequestPress={handleTxnLongPressAction}
                         amountView="loan_columns"
                       />
                     );
@@ -2428,7 +2487,7 @@ export default function FinanceScreen() {
                     canAuditFlag={canAuditFlagFinance}
                     onAuditPress={openAuditModal}
                     canRequestDelete={canRequestDeleteFinance}
-                    onDeleteRequestPress={openDeleteRequestForTxn}
+                    onDeleteRequestPress={handleTxnLongPressAction}
                     amountView={amountView}
                   />
                 );
@@ -2445,7 +2504,7 @@ export default function FinanceScreen() {
                   outstanding={getLoanOutstanding(loan.id)}
                   metrics={metrics}
                   canRequestDelete={canRequestDeleteFinance}
-                  onDeleteRequestPress={openDeleteRequestForLoan}
+                  onDeleteRequestPress={handleLoanLongPressAction}
                 />
               );
             })

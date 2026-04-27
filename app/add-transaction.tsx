@@ -60,6 +60,67 @@ const formatDateDisplay = (date: Date) => {
   return `${day}/${month}/${year}`;
 };
 
+const parseStoredDate = (value: unknown): Date => {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (raw.includes("/")) {
+      const [day, month, year] = raw.split("/");
+      const d = Number(day);
+      const m = Number(month);
+      const y = Number(year);
+      if (Number.isFinite(d) && Number.isFinite(m) && Number.isFinite(y)) {
+        const parsed = new Date(y, m - 1, d);
+        if (!Number.isNaN(parsed.getTime())) return parsed;
+      }
+    }
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+};
+
+const stripKnownReceiptPrefix = (value: string) => {
+  const knownPrefixes = ["BI-", "BO-", "I-", "O-", "B-", "TR-"];
+  for (const prefix of knownPrefixes) {
+    if (value.startsWith(prefix)) return value.slice(prefix.length);
+  }
+  return value;
+};
+
+const normalizeReceiptForCompare = (value: unknown) =>
+  String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
+
+const normalizeMemberLookupText = (value: unknown) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "")
+    .trim();
+
+const inferMemberIdFromPayerPayee = (value: string, members: any[]): string | null => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const direct = members.find((row: any) => String(row?.id || "").trim().toLowerCase() === raw.toLowerCase());
+  if (direct?.id) return String(direct.id);
+
+  const inBracket = raw.match(/\(([^)]+)\)/);
+  if (inBracket?.[1]) {
+    const token = String(inBracket[1]).trim().toLowerCase();
+    const found = members.find((row: any) => String(row?.id || "").trim().toLowerCase() === token);
+    if (found?.id) return String(found.id);
+  }
+
+  const textNorm = normalizeMemberLookupText(raw);
+  const nameMatches = members.filter(
+    (row: any) => normalizeMemberLookupText(row?.name || row?.fullName || row?.displayName || "") === textNorm
+  );
+  if (nameMatches.length === 1) return String(nameMatches[0]?.id || "");
+  return null;
+};
+
 const INCOME_CATEGORIES = [
   { id: "member_fees", label: "လစဉ်ကြေးရငွေ" },
   { id: "donations", label: "အလှူငွေရရှိ" },
@@ -130,14 +191,14 @@ export default function AddTransactionScreen() {
         setType(txn.type);
         setAmount(txn.amount.toString());
         setCategory(txn.category);
-        setDate(new Date(txn.date));
+        setDate(parseStoredDate(txn.date));
         setNotes(txn.notes || "");
         setSelectedMemberId(txn.memberId || null);
         setPayerPayeeName(txn.payerPayee || "");
         setPaymentMethod(txn.paymentMethod || "cash");
         setReceiptNumber(txn.receiptNumber || "");
-        if (txn.feePeriodStart) setFeeStartDate(new Date(txn.feePeriodStart));
-        if (txn.feePeriodEnd) setFeeEndDate(new Date(txn.feePeriodEnd));
+        if (txn.feePeriodStart) setFeeStartDate(parseStoredDate(txn.feePeriodStart));
+        if (txn.feePeriodEnd) setFeeEndDate(parseStoredDate(txn.feePeriodEnd));
       }
     }
   }, [editId, transactions]);
@@ -148,9 +209,10 @@ export default function AddTransactionScreen() {
       const end = new Date(feeEndDate); end.setHours(23,59,59,999);
 
       const hasOverlap = transactions.some((t: any) => {
+        if (editId && t.id === editId) return false;
         if (t.memberId !== selectedMemberId || t.category !== 'member_fees' || !t.feePeriodStart || !t.feePeriodEnd) return false;
-        const tStart = new Date(t.feePeriodStart); tStart.setHours(0,0,0,0);
-        const tEnd = new Date(t.feePeriodEnd); tEnd.setHours(23,59,59,999);
+        const tStart = parseStoredDate(t.feePeriodStart); tStart.setHours(0,0,0,0);
+        const tEnd = parseStoredDate(t.feePeriodEnd); tEnd.setHours(23,59,59,999);
         return start <= tEnd && end >= tStart;
       });
 
@@ -158,7 +220,7 @@ export default function AddTransactionScreen() {
     } else {
       setFeeWarning("");
     }
-  }, [selectedMemberId, category, type, feeStartDate, feeEndDate, transactions]);
+  }, [selectedMemberId, category, type, feeStartDate, feeEndDate, transactions, editId]);
 
   useEffect(() => {
     if (!(type === "income" && category === "member_fees")) return;
@@ -181,18 +243,11 @@ export default function AddTransactionScreen() {
     } else if (category === "bank_charges" && type === "expense") {
       prefix = "BO-";
     } else if (type === "transfer") {
-      prefix = "TR-";
+      prefix = "B-";
     }
 
     setReceiptNumber((prev) => {
-      const knownPrefixes = ["BI-", "BO-", "I-", "O-"];
-      let numberPart = prev;
-      for (const p of knownPrefixes) {
-        if (prev.startsWith(p)) {
-          numberPart = prev.slice(p.length);
-          break;
-        }
-      }
+      const numberPart = stripKnownReceiptPrefix(prev);
       return prefix + numberPart;
     });
   }, [type, category]);
@@ -271,13 +326,28 @@ export default function AddTransactionScreen() {
       Alert.alert("လိုအပ်ချက်", "အမျိုးအစားကို ရွေးချယ်ပေးပါ။");
       return;
     }
+    const receipt = String(receiptNumber || "").trim();
+    if (!receipt) {
+      Alert.alert("လိုအပ်ချက်", "ပြေစာအမှတ်ကို ထည့်သွင်းပေးပါ။");
+      return;
+    }
+    const receiptToken = normalizeReceiptForCompare(receipt);
+    const duplicate = (transactions || []).some((row: any) => {
+      if (editId && String(row?.id || "") === String(editId || "")) return false;
+      return normalizeReceiptForCompare(row?.receiptNumber) === receiptToken;
+    });
+    if (duplicate) {
+      Alert.alert("ပြေစာအမှတ် ထပ်နေပါသည်", "ပြေစာအမှတ်သည် တစ်ခုနှင့်တစ်ခု မတူညီရပါ။");
+      return;
+    }
 
     setSaving(true);
     try {
       const isFee = type === 'income' && category === 'member_fees';
+      const resolvedMemberId = selectedMemberId || inferMemberIdFromPayerPayee(payerPayeeName, members);
 
       const transactionData = {
-        memberId: selectedMemberId || undefined,
+        memberId: resolvedMemberId || undefined,
         payerPayee: payerPayeeName.trim(),
         amount: parseFloat(amount),
         type: type,
@@ -285,7 +355,7 @@ export default function AddTransactionScreen() {
         paymentMethod: type === 'transfer' ? (category === 'bank_deposit' ? 'cash' : 'bank') : paymentMethod,
         date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
         notes: notes,
-        receiptNumber: receiptNumber,
+        receiptNumber: receipt,
         categoryLabel: getCategoryLabel(category),
         feePeriodStart: isFee ? `${feeStartDate.getFullYear()}-${String(feeStartDate.getMonth() + 1).padStart(2, '0')}-${String(feeStartDate.getDate()).padStart(2, '0')}` : undefined,
         feePeriodEnd: isFee ? `${feeEndDate.getFullYear()}-${String(feeEndDate.getMonth() + 1).padStart(2, '0')}-${String(feeEndDate.getDate()).padStart(2, '0')}` : undefined,
@@ -297,7 +367,12 @@ export default function AddTransactionScreen() {
       }
       Alert.alert("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
-    } catch {
+    } catch (error: any) {
+      const reason = String(error?.message || "");
+      if (reason.includes("duplicate_receipt")) {
+        Alert.alert("ပြေစာအမှတ် ထပ်နေပါသည်", "ပြေစာအမှတ်သည် တစ်ခုနှင့်တစ်ခု မတူညီရပါ။");
+        return;
+      }
       Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);

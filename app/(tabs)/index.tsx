@@ -39,6 +39,7 @@ import { parseGregorianDate, splitPhoneNumbers } from "../../lib/member-utils";
 import { DEFAULT_LAN_SYNC_URL } from "../../lib/sync-defaults";
 import { resolveNotificationRoute } from "../../lib/notification-routing";
 import { isOrgClientVariant } from "../../lib/app-variant";
+import { transactionBelongsToMember } from "../../lib/reporting-service";
 
 const AsyncStorage = orgStorage;
 
@@ -542,7 +543,9 @@ export default function DashboardScreen() {
   const personalFinanceStats = useMemo(() => {
     const myMemberId = String(currentUser?.memberId || "");
     if (!myMemberId) return { income: 0, expense: 0, net: 0 };
-    const rows = (transactions || []).filter((t: any) => String(t.memberId || "") === myMemberId);
+    const myMemberName =
+      String((members || []).find((member: any) => String(member?.id || "") === myMemberId)?.name || "");
+    const rows = (transactions || []).filter((t: any) => transactionBelongsToMember(t, myMemberId, myMemberName));
     const income = rows
       .filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
       .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
@@ -550,7 +553,7 @@ export default function DashboardScreen() {
       .filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
       .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
     return { income, expense, net: income - expense };
-  }, [transactions, currentUser?.memberId]);
+  }, [transactions, currentUser?.memberId, members]);
 
   const unreadEventCount = useMemo(() => {
     if (!currentUser?.id) return 0;

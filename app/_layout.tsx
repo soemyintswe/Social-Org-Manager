@@ -361,7 +361,7 @@ function RootLayoutNav() {
               return false;
             }
           })();
-        const requireDesktopDesktopOrgConnect = isDesktopElectronWeb && orgClientVariant && !desktopOrgBound;
+        const requiresDesktopRebind = isDesktopElectronWeb && orgClientVariant && !desktopOrgBound;
         if (!String(settings.orgId || "").trim()) {
           let hintedOrgId = "";
           try {
@@ -382,7 +382,7 @@ function RootLayoutNav() {
             } catch {}
           }
 
-          if (hintedOrgId && !requireDesktopDesktopOrgConnect) {
+          if (hintedOrgId) {
             const nextSettings = {
               ...settings,
               orgId: hintedOrgId,
@@ -391,6 +391,12 @@ function RootLayoutNav() {
             };
             await saveAccountSettings(nextSettings);
             settings = nextSettings;
+            if (requiresDesktopRebind && Platform.OS === "web" && typeof window !== "undefined") {
+              try {
+                window.sessionStorage?.setItem("@orghub_desktop_org_bound_v1", "1");
+                window.localStorage?.setItem("@orghub_desktop_org_bound_v1", "1");
+              } catch {}
+            }
           } else {
             const legacyMembers = await getMembers().catch(() => [] as any[]);
             if (Array.isArray(legacyMembers) && legacyMembers.length > 0) {
@@ -414,7 +420,7 @@ function RootLayoutNav() {
           } catch {}
         }
         const orgId = resolvedOrgId;
-        const hasOrgId = Boolean(orgId) && !requireDesktopDesktopOrgConnect;
+        const hasOrgId = Boolean(orgId);
         // Org ID exists means setup is complete for current route gating.
         // Contact fields can be completed later in Account Settings.
         if (!active) return;

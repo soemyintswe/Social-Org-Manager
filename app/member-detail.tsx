@@ -28,6 +28,7 @@ import { isCommitteePosition } from "../lib/access-control";
 import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "../lib/relation-options";
 import { useKeyboardInset } from "../lib/use-keyboard-inset";
 import { secureRandomToken } from "../lib/secure-random";
+import { transactionBelongsToMember } from "../lib/reporting-service";
 import {
   CATEGORY_LABELS,
   ORG_POSITION_LABELS,
@@ -328,7 +329,10 @@ export default function MemberDetailScreen() {
   }, []);
 
   // Financial Calculations
-  const memberTxns = useMemo(() => transactions?.filter((t: any) => t.memberId === memberId) || [], [transactions, memberId]);
+  const memberTxns = useMemo(
+    () => (transactions || []).filter((t: any) => transactionBelongsToMember(t, memberId, String(member?.name || ""))),
+    [transactions, memberId, member?.name]
+  );
   const memberLoans = useMemo(() => loans?.filter((l: any) => l.memberId === memberId) || [], [loans, memberId]);
 
   const stats = useMemo(() => {
