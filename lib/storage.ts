@@ -4490,6 +4490,47 @@ function normalizeReceiptForCompare(value: unknown): string {
     .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
 }
 
+function scoreTransactionForDuplicateKeep(txn: any): number {
+  let score = 0;
+  if (String(txn?.memberId || "").trim()) score += 2;
+  if (String(txn?.payerPayee || "").trim()) score += 2;
+  if (String(txn?.notes || txn?.description || "").trim()) score += 1;
+  if (String(txn?.feePeriodStart || "").trim()) score += 1;
+  if (String(txn?.feePeriodEnd || "").trim()) score += 1;
+  if (String(txn?.receiptNumber || "").trim()) score += 1;
+  return score;
+}
+
+function isEmptyDuplicateMergeValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+function mergeDuplicateTransactionGroup(primary: any, group: any[]): any {
+  const merged = { ...primary };
+  group.forEach((row) => {
+    if (!row || row === primary) return;
+    Object.entries(row).forEach(([key, value]) => {
+      if (key === "id") return;
+      if (Array.isArray(value)) {
+        if (!Array.isArray(merged[key]) || (merged[key] as any[]).length === 0) {
+          merged[key] = [...value];
+        } else {
+          const combined = new Set([...(merged[key] as any[]), ...value]);
+          merged[key] = Array.from(combined);
+        }
+        return;
+      }
+      if (isEmptyDuplicateMergeValue(merged[key]) && !isEmptyDuplicateMergeValue(value)) {
+        merged[key] = value;
+      }
+    });
+  });
+  return merged;
+}
+
 function ensureUniqueTransactionReceipt(rows: any[], receiptNumber: unknown, excludeId?: string): void {
   const receiptToken = normalizeReceiptForCompare(receiptNumber);
   if (!receiptToken) return;
@@ -4583,6 +4624,252 @@ export async function saveTransactions(
     }
   }
   await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(rows));
+}
+
+function normalizeTransactionIdForMap(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function remapTransactionIdValue(
+  raw: unknown,
+  removedToKeep: Map<string, string>,
+  removedIdSet: Set<string>
+): string | undefined {
+  const normalized = normalizeTransactionIdForMap(raw);
+  if (!normalized) return undefined;
+  const mapped = removedToKeep.get(normalized);
+  if (mapped) return mapped;
+  if (removedIdSet.has(normalized)) return undefined;
+  return normalized;
+}
+
+function remapTransactionIdArray(
+  raw: unknown,
+  removedToKeep: Map<string, string>,
+  removedIdSet: Set<string>
+): string[] {
+  if (!Array.isArray(raw)) return [];
+  const next: string[] = [];
+  const seen = new Set<string>();
+  raw.forEach((value: unknown) => {
+    const mapped = remapTransactionIdValue(value, removedToKeep, removedIdSet);
+    if (!mapped || seen.has(mapped)) return;
+    seen.add(mapped);
+    next.push(mapped);
+  });
+  return next;
+}
+
+async function remapDuplicateLinkedReferences(removedToKeep: Map<string, string>): Promise<void> {
+  if (!removedToKeep.size) return;
+  const removedIdSet = new Set<string>(Array.from(removedToKeep.keys()));
+  const writes: [string, string][] = [];
+
+  const paymentRequests = await getMemberPaymentRequests();
+  const nextPaymentRequests = paymentRequests.map((row: any) => {
+    const mapped = remapTransactionIdValue(row?.linkedTransactionId, removedToKeep, removedIdSet);
+    if (mapped === String(row?.linkedTransactionId || "").trim()) return row;
+    return {
+      ...row,
+      linkedTransactionId: mapped || undefined,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (JSON.stringify(nextPaymentRequests) !== JSON.stringify(paymentRequests)) {
+    writes.push([KEYS.MEMBER_PAYMENT_REQUESTS, JSON.stringify(nextPaymentRequests)]);
+  }
+
+  const expenseClaims = await getExpenseClaims();
+  const nextExpenseClaims = expenseClaims.map((row: any) => {
+    const mapped = remapTransactionIdValue(row?.linkedTransactionId, removedToKeep, removedIdSet);
+    if (mapped === String(row?.linkedTransactionId || "").trim()) return row;
+    return {
+      ...row,
+      linkedTransactionId: mapped || undefined,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (JSON.stringify(nextExpenseClaims) !== JSON.stringify(expenseClaims)) {
+    writes.push([KEYS.EXPENSE_CLAIMS, JSON.stringify(nextExpenseClaims)]);
+  }
+
+  const auditRequests = await getAuditChangeRequests();
+  const nextAuditRequests = auditRequests.map((row: any) => {
+    const next: any = { ...row };
+    let changed = false;
+
+    if (String(next?.targetType || "") === "transaction") {
+      const mappedTarget = remapTransactionIdValue(next?.targetId, removedToKeep, removedIdSet);
+      if (mappedTarget && mappedTarget !== String(next?.targetId || "").trim()) {
+        next.targetId = mappedTarget;
+        changed = true;
+      }
+    }
+
+    const mappedTxnId = remapTransactionIdValue(next?.transactionId, removedToKeep, removedIdSet);
+    if ((mappedTxnId || "") !== String(next?.transactionId || "").trim()) {
+      next.transactionId = mappedTxnId || undefined;
+      changed = true;
+    }
+
+    const mappedResolvedTxnId = remapTransactionIdValue(next?.resolvedTransactionId, removedToKeep, removedIdSet);
+    if ((mappedResolvedTxnId || "") !== String(next?.resolvedTransactionId || "").trim()) {
+      next.resolvedTransactionId = mappedResolvedTxnId || undefined;
+      changed = true;
+    }
+
+    if (Array.isArray(next?.relatedTransactionIds)) {
+      const mappedRelated = remapTransactionIdArray(next.relatedTransactionIds, removedToKeep, removedIdSet);
+      if (JSON.stringify(mappedRelated) !== JSON.stringify(next.relatedTransactionIds)) {
+        next.relatedTransactionIds = mappedRelated;
+        changed = true;
+      }
+    }
+
+    if (Array.isArray(next?.revisions)) {
+      const mappedRevisions = next.revisions.map((rev: any) => {
+        const mappedRevTxnId = remapTransactionIdValue(rev?.transactionId, removedToKeep, removedIdSet);
+        if ((mappedRevTxnId || "") === String(rev?.transactionId || "").trim()) return rev;
+        return { ...rev, transactionId: mappedRevTxnId || undefined };
+      });
+      if (JSON.stringify(mappedRevisions) !== JSON.stringify(next.revisions)) {
+        next.revisions = mappedRevisions;
+        changed = true;
+      }
+    }
+
+    if (!changed) return row;
+    next.updatedAt = new Date().toISOString();
+    return next;
+  });
+  if (JSON.stringify(nextAuditRequests) !== JSON.stringify(auditRequests)) {
+    writes.push([KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(nextAuditRequests)]);
+  }
+
+  const auditLogs = await getAuditExecutionLogs();
+  const nextAuditLogs = auditLogs.map((row: any) => {
+    const next: any = { ...row };
+    let changed = false;
+
+    if (String(next?.targetType || "") === "transaction") {
+      const mappedTarget = remapTransactionIdValue(next?.targetId, removedToKeep, removedIdSet);
+      if (mappedTarget && mappedTarget !== String(next?.targetId || "").trim()) {
+        next.targetId = mappedTarget;
+        changed = true;
+      }
+    }
+
+    const mappedTxnId = remapTransactionIdValue(next?.transactionId, removedToKeep, removedIdSet);
+    if ((mappedTxnId || "") !== String(next?.transactionId || "").trim()) {
+      next.transactionId = mappedTxnId || undefined;
+      changed = true;
+    }
+
+    if (Array.isArray(next?.affectedTransactionIds)) {
+      const mappedAffected = remapTransactionIdArray(next.affectedTransactionIds, removedToKeep, removedIdSet);
+      if (JSON.stringify(mappedAffected) !== JSON.stringify(next.affectedTransactionIds)) {
+        next.affectedTransactionIds = mappedAffected;
+        changed = true;
+      }
+    }
+
+    if (next?.patch && Array.isArray(next.patch.__removedLinkedTransactionIds)) {
+      const mappedPatchIds = remapTransactionIdArray(next.patch.__removedLinkedTransactionIds, removedToKeep, removedIdSet);
+      if (JSON.stringify(mappedPatchIds) !== JSON.stringify(next.patch.__removedLinkedTransactionIds)) {
+        next.patch = {
+          ...next.patch,
+          __removedLinkedTransactionIds: mappedPatchIds,
+        };
+        changed = true;
+      }
+    }
+
+    return changed ? next : row;
+  });
+  if (JSON.stringify(nextAuditLogs) !== JSON.stringify(auditLogs)) {
+    writes.push([KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(nextAuditLogs)]);
+  }
+
+  if (writes.length > 0) {
+    await AsyncStorage.multiSet(writes);
+  }
+}
+
+export async function resolveDuplicateTransactionReceipts(input?: {
+  mode?: "manual_keep" | "auto_merge";
+  selectionByReceipt?: Record<string, string>;
+}): Promise<{ duplicateGroups: number; removedRows: number; mergedRows: number }> {
+  const mode = input?.mode === "auto_merge" ? "auto_merge" : "manual_keep";
+  const selectionByReceipt = input?.selectionByReceipt || {};
+  const currentRows = await getTransactions();
+  if (!Array.isArray(currentRows) || currentRows.length === 0) {
+    return { duplicateGroups: 0, removedRows: 0, mergedRows: 0 };
+  }
+
+  const buckets = new Map<string, any[]>();
+  currentRows.forEach((row: any) => {
+    const token = normalizeReceiptForCompare(row?.receiptNumber);
+    if (!token) return;
+    if (!buckets.has(token)) buckets.set(token, []);
+    buckets.get(token)?.push(row);
+  });
+
+  const duplicateGroups = Array.from(buckets.entries()).filter(([, list]) => list.length > 1);
+  if (!duplicateGroups.length) {
+    return { duplicateGroups: 0, removedRows: 0, mergedRows: 0 };
+  }
+
+  const removeIds = new Set<string>();
+  const mergedByKeepId = new Map<string, any>();
+  const removedToKeep = new Map<string, string>();
+  let mergedRows = 0;
+
+  duplicateGroups.forEach(([receiptToken, list]) => {
+    const sortedGroup = [...list].sort((a: any, b: any) => {
+      const scoreDiff = scoreTransactionForDuplicateKeep(b) - scoreTransactionForDuplicateKeep(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      return String(a?.createdAt || "").localeCompare(String(b?.createdAt || ""));
+    });
+    let keepId = String(selectionByReceipt[sortedGroup[0]?.receiptNumber || receiptToken] || "").trim();
+    if (!keepId || !sortedGroup.some((row: any) => String(row?.id || "").trim() === keepId)) {
+      keepId = String(sortedGroup[0]?.id || "").trim();
+    }
+    if (!keepId) return;
+
+    sortedGroup.forEach((row: any) => {
+      const id = String(row?.id || "").trim();
+      if (!id || id === keepId) return;
+      removeIds.add(id);
+      removedToKeep.set(id, keepId);
+    });
+
+    if (mode === "auto_merge") {
+      const keeper = sortedGroup.find((row: any) => String(row?.id || "").trim() === keepId) || sortedGroup[0];
+      mergedByKeepId.set(keepId, mergeDuplicateTransactionGroup(keeper, sortedGroup));
+      mergedRows += 1;
+    }
+  });
+
+  if (!removeIds.size) {
+    return { duplicateGroups: duplicateGroups.length, removedRows: 0, mergedRows: 0 };
+  }
+
+  const nextRows = currentRows
+    .filter((row: any) => !removeIds.has(String(row?.id || "").trim()))
+    .map((row: any) => {
+      const id = String(row?.id || "").trim();
+      if (!id || !mergedByKeepId.has(id)) return row;
+      return mergedByKeepId.get(id);
+    });
+
+  await saveTransactions(nextRows as any[], { validateUniqueReceipt: true });
+  await remapDuplicateLinkedReferences(removedToKeep);
+
+  return {
+    duplicateGroups: duplicateGroups.length,
+    removedRows: removeIds.size,
+    mergedRows,
+  };
 }
 
 export async function importTransactions(newTransactions: Transaction[]): Promise<void> {

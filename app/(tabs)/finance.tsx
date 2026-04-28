@@ -18,7 +18,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import * as Haptics from "expo-haptics";
 
 // လမ်းကြောင်းများကို Render Build အတွက် Relative Path များဖြင့် ပြင်ဆင်ထားသည်
 import Colors from "../../constants/colors";
@@ -34,7 +33,7 @@ import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription 
 import { exportXlsxFile } from "../../lib/xlsx-export";
 import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS, normalizeFinanceCategory } from "../../lib/finance-categories";
 import { transactionBelongsToMember } from "../../lib/reporting-service";
-import { getTransactions, saveTransactions } from "../../lib/storage-service";
+import { resolveDuplicateTransactionReceipts } from "../../lib/storage-service";
 
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
@@ -77,36 +76,6 @@ const scoreTxnForMerge = (txn: any): number => {
   if (String(txn?.feePeriodEnd || "").trim()) score += 1;
   if (String(txn?.receiptNumber || "").trim()) score += 1;
   return score;
-};
-
-const isEmptyMergeValue = (v: unknown): boolean => {
-  if (v == null) return true;
-  if (typeof v === "string") return v.trim().length === 0;
-  if (Array.isArray(v)) return v.length === 0;
-  return false;
-};
-
-const mergeTxnGroup = (primary: any, group: any[]): any => {
-  const merged = { ...primary };
-  group.forEach((row) => {
-    if (!row || row === primary) return;
-    Object.entries(row).forEach(([key, value]) => {
-      if (key === "id") return;
-      if (Array.isArray(value)) {
-        if (!Array.isArray(merged[key]) || (merged[key] as any[]).length === 0) {
-          merged[key] = [...value];
-        } else {
-          const combined = new Set([...(merged[key] as any[]), ...value]);
-          merged[key] = Array.from(combined);
-        }
-        return;
-      }
-      if (isEmptyMergeValue(merged[key]) && !isEmptyMergeValue(value)) {
-        merged[key] = value;
-      }
-    });
-  });
-  return merged;
 };
 
 function escapeHtml(text: unknown): string {
@@ -280,7 +249,13 @@ function TransactionRow({
           </Pressable>
         ) : null}
         {showQuickDeleteButton && canRequestDelete && onDeleteRequestPress ? (
-          <Pressable style={styles.quickDeleteBtn} onPress={() => onDeleteRequestPress(txn)}>
+          <Pressable
+            style={styles.quickDeleteBtn}
+            onPress={(event: any) => {
+              event?.stopPropagation?.();
+              onDeleteRequestPress(txn);
+            }}
+          >
             <Ionicons name="trash-outline" size={16} color="#B91C1C" />
           </Pressable>
         ) : null}
@@ -429,7 +404,13 @@ function LoanRow({
       </View>
       <View style={styles.loanRight}>
         {showQuickDeleteButton && canRequestDelete && onDeleteRequestPress ? (
-          <Pressable style={styles.quickDeleteBtn} onPress={() => onDeleteRequestPress(loan)}>
+          <Pressable
+            style={styles.quickDeleteBtn}
+            onPress={(event: any) => {
+              event?.stopPropagation?.();
+              onDeleteRequestPress(loan);
+            }}
+          >
             <Ionicons name="trash-outline" size={16} color="#B91C1C" />
           </Pressable>
         ) : null}
@@ -736,37 +717,23 @@ export default function FinanceScreen() {
 
     const confirmDirectDeleteTransaction = (txn: Transaction) => {
       if (!canDeleteFinance) return;
-      Alert.alert(
+      confirmAction(
         "Transaction ပယ်ဖျက်မည်",
         "ဤငွေစာရင်းမှတ်တမ်းကို တိုက်ရိုက်ဖျက်ပါမည်။ ဆက်လုပ်မလား။",
-        [
-          { text: "မလုပ်တော့ပါ", style: "cancel" },
-          {
-            text: "ဖျက်မည်",
-            style: "destructive",
-            onPress: () => {
-              void removeTransaction(txn.id);
-            },
-          },
-        ]
+        () => {
+          void removeTransaction(txn.id);
+        }
       );
     };
 
     const confirmDirectDeleteLoan = (loan: Loan) => {
       if (!canDeleteFinance) return;
-      Alert.alert(
+      confirmAction(
         "Loan ပယ်ဖျက်မည်",
         "ဤချေးငွေကို ဖျက်ပါက ဆက်စပ် loan transactions များလည်း ဖယ်ရှားပါမည်။ ဆက်လုပ်မလား။",
-        [
-          { text: "မလုပ်တော့ပါ", style: "cancel" },
-          {
-            text: "ဖျက်မည်",
-            style: "destructive",
-            onPress: () => {
-              void removeLoan(loan.id);
-            },
-          },
-        ]
+        () => {
+          void removeLoan(loan.id);
+        }
       );
     };
 
@@ -1120,6 +1087,26 @@ export default function FinanceScreen() {
       return false;
     };
 
+    const confirmAction = (title: string, message: string, onConfirm: () => void) => {
+      if (Platform.OS === "web") {
+        const confirmFn = (globalThis as any)?.confirm;
+        if (typeof confirmFn === "function") {
+          const ok = Boolean(confirmFn(`${title}\n\n${message}`));
+          if (ok) onConfirm();
+          return;
+        }
+        if (!showWebAlert(`${title}\n\n${message}\n\n(Confirm dialog unavailable)`)) {
+          return;
+        }
+        onConfirm();
+        return;
+      }
+      Alert.alert(title, message, [
+        { text: "မလုပ်တော့ပါ", style: "cancel" },
+        { text: "ဖျက်မည်", style: "destructive", onPress: onConfirm },
+      ]);
+    };
+
     const openDeleteRequestDatePicker = (fieldKey: string) => {
       setDeleteRequestActiveDateField(fieldKey);
     };
@@ -1457,51 +1444,23 @@ export default function FinanceScreen() {
     if (duplicateResolving) return;
     setDuplicateResolving(true);
     try {
-      const currentRows = await getTransactions();
-      if (!Array.isArray(currentRows) || currentRows.length === 0) return;
-      const byId = new Map<string, any>(currentRows.map((row: any) => [String(row?.id || ""), row]));
-      const removeIds = new Set<string>();
-      const mergedByKeepId = new Map<string, any>();
-
-      duplicateReceiptGroups.forEach((group) => {
-        const groupRows = group.txns
-          .map((txn) => byId.get(String(txn?.id || "")))
-          .filter(Boolean) as any[];
-        if (groupRows.length < 2) return;
-        let keepId = String(duplicateSelectionByReceipt[group.receiptNumber] || "").trim();
-        if (!keepId || !groupRows.some((row) => String(row?.id || "").trim() === keepId)) {
-          keepId = String(groupRows[0]?.id || "").trim();
-        }
-        if (!keepId) return;
-        groupRows.forEach((row) => {
-          const id = String(row?.id || "").trim();
-          if (!id || id === keepId) return;
-          removeIds.add(id);
-        });
-        if (mode === "auto_merge") {
-          const keeper = groupRows.find((row) => String(row?.id || "").trim() === keepId) || groupRows[0];
-          mergedByKeepId.set(keepId, mergeTxnGroup(keeper, groupRows));
-        }
+      const result = await resolveDuplicateTransactionReceipts({
+        mode,
+        selectionByReceipt: duplicateSelectionByReceipt,
       });
-
-      const nextRows = currentRows
-        .filter((row: any) => !removeIds.has(String(row?.id || "").trim()))
-        .map((row: any) => {
-          const id = String(row?.id || "").trim();
-          if (!id || !mergedByKeepId.has(id)) return row;
-          return mergedByKeepId.get(id);
-        });
-
-      await saveTransactions(nextRows as any[], { validateUniqueReceipt: true });
       if (refreshData) {
         await refreshData({ skipPull: true, markLocalMutation: true });
+      }
+      if ((result?.removedRows || 0) <= 0) {
+        Alert.alert("အသိပေးချက်", "ပြေစာအမှတ် ထပ်နေသောစာရင်း မတွေ့ပါ။");
+        return;
       }
       setShowDuplicateReceiptModal(false);
       Alert.alert(
         "ပြီးပါပြီ",
         mode === "auto_merge"
-          ? `Duplicate receipt စုစုပေါင်း ${duplicateReceiptExtraCount} ခုကို merge + cleanup လုပ်ပြီးပါပြီ။`
-          : `Duplicate receipt စုစုပေါင်း ${duplicateReceiptExtraCount} ခုကိုရွေးချယ်ထားသောစာရင်းတစ်ခုချင်း ထိန်းပြီး ဖယ်ရှားပြီးပါပြီ။`
+          ? `Duplicate receipt group ${result.duplicateGroups} ခုမှ row ${result.removedRows} ခုကို merge + cleanup လုပ်ပြီးပါပြီ။`
+          : `Duplicate receipt group ${result.duplicateGroups} ခုမှ row ${result.removedRows} ခုကို keep-one နဲ့ ဖယ်ရှားပြီးပါပြီ။`
       );
     } catch (error: any) {
       const reason = String(error?.message || "");

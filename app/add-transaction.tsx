@@ -23,6 +23,7 @@ import { useData } from "../lib/DataContext";
 import { useAuth } from "../lib/AuthContext";
 import AccessDenied from "../components/AccessDenied";
 import { CATEGORY_LABELS, TransactionCategory } from "../lib/types";
+import { splitTransactionNoteForEditing } from "../lib/transaction-display";
 
 const AsyncStorage = orgStorage;
 
@@ -94,6 +95,14 @@ const normalizeReceiptForCompare = (value: unknown) =>
     .toUpperCase()
     .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
 
+const showAlertMessage = (title: string, message: string) => {
+  if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.alert === "function") {
+    window.alert(`${title}\n\n${message}`);
+    return;
+  }
+  Alert.alert(title, message);
+};
+
 const normalizeMemberLookupText = (value: unknown) =>
   String(value || "")
     .toLowerCase()
@@ -161,6 +170,7 @@ export default function AddTransactionScreen() {
   const [category, setCategory] = useState<string | null>(null);
   const [date, setDate] = useState(new Date());
   const [notes, setNotes] = useState("");
+  const [noteTechnicalTokens, setNoteTechnicalTokens] = useState<string[]>([]);
   const [receiptNumber, setReceiptNumber] = useState("");
 
   const [isMemberModalVisible, setMemberModalVisible] = useState(false);
@@ -185,21 +195,26 @@ export default function AddTransactionScreen() {
   }, [standardAmountRules]);
 
   useEffect(() => {
-    if (editId && transactions.length > 0) {
+    if (!editId) {
+      setNoteTechnicalTokens([]);
+      return;
+    }
+    if (transactions.length > 0) {
       const txn = transactions.find((t: any) => t.id === editId);
-      if (txn) {
-        setType(txn.type);
-        setAmount(txn.amount.toString());
-        setCategory(txn.category);
-        setDate(parseStoredDate(txn.date));
-        setNotes(txn.notes || "");
-        setSelectedMemberId(txn.memberId || null);
-        setPayerPayeeName(txn.payerPayee || "");
-        setPaymentMethod(txn.paymentMethod || "cash");
-        setReceiptNumber(txn.receiptNumber || "");
-        if (txn.feePeriodStart) setFeeStartDate(parseStoredDate(txn.feePeriodStart));
-        if (txn.feePeriodEnd) setFeeEndDate(parseStoredDate(txn.feePeriodEnd));
-      }
+      if (!txn) return;
+      const parsedNote = splitTransactionNoteForEditing(txn.notes || txn.description || "");
+      setType(txn.type);
+      setAmount(txn.amount.toString());
+      setCategory(txn.category);
+      setDate(parseStoredDate(txn.date));
+      setNotes(parsedNote.humanNote || "");
+      setNoteTechnicalTokens(parsedNote.technicalTokens || []);
+      setSelectedMemberId(txn.memberId || null);
+      setPayerPayeeName(txn.payerPayee || "");
+      setPaymentMethod(txn.paymentMethod || "cash");
+      setReceiptNumber(txn.receiptNumber || "");
+      if (txn.feePeriodStart) setFeeStartDate(parseStoredDate(txn.feePeriodStart));
+      if (txn.feePeriodEnd) setFeeEndDate(parseStoredDate(txn.feePeriodEnd));
     }
   }, [editId, transactions]);
 
@@ -319,16 +334,16 @@ export default function AddTransactionScreen() {
 
   const handleSave = async () => {
     if (!amount || parseFloat(amount) <= 0) {
-      Alert.alert("လိုအပ်ချက်", "ငွေပမာဏကို မှန်ကန်စွာ ထည့်သွင်းပေးပါ။");
+      showAlertMessage("လိုအပ်ချက်", "ငွေပမာဏကို မှန်ကန်စွာ ထည့်သွင်းပေးပါ။");
       return;
     }
     if (!category) {
-      Alert.alert("လိုအပ်ချက်", "အမျိုးအစားကို ရွေးချယ်ပေးပါ။");
+      showAlertMessage("လိုအပ်ချက်", "အမျိုးအစားကို ရွေးချယ်ပေးပါ။");
       return;
     }
     const receipt = String(receiptNumber || "").trim();
     if (!receipt) {
-      Alert.alert("လိုအပ်ချက်", "ပြေစာအမှတ်ကို ထည့်သွင်းပေးပါ။");
+      showAlertMessage("လိုအပ်ချက်", "ပြေစာအမှတ်ကို ထည့်သွင်းပေးပါ။");
       return;
     }
     const receiptToken = normalizeReceiptForCompare(receipt);
@@ -337,7 +352,7 @@ export default function AddTransactionScreen() {
       return normalizeReceiptForCompare(row?.receiptNumber) === receiptToken;
     });
     if (duplicate) {
-      Alert.alert("ပြေစာအမှတ် ထပ်နေပါသည်", "ပြေစာအမှတ်သည် တစ်ခုနှင့်တစ်ခု မတူညီရပါ။");
+      showAlertMessage("ပြေစာအမှတ် ထပ်နေပါသည်", "ပြေစာအမှတ်သည် တစ်ခုနှင့်တစ်ခု မတူညီရပါ။");
       return;
     }
 
@@ -345,6 +360,13 @@ export default function AddTransactionScreen() {
     try {
       const isFee = type === 'income' && category === 'member_fees';
       const resolvedMemberId = selectedMemberId || inferMemberIdFromPayerPayee(payerPayeeName, members);
+
+      const noteText = String(notes || "").trim();
+      const technicalText = (noteTechnicalTokens || [])
+        .map((part) => String(part || "").trim())
+        .filter(Boolean)
+        .join(" | ");
+      const composedNote = [noteText, technicalText].filter(Boolean).join(" | ");
 
       const transactionData = {
         memberId: resolvedMemberId || undefined,
@@ -354,7 +376,7 @@ export default function AddTransactionScreen() {
         category: category,
         paymentMethod: type === 'transfer' ? (category === 'bank_deposit' ? 'cash' : 'bank') : paymentMethod,
         date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
-        notes: notes,
+        notes: composedNote,
         receiptNumber: receipt,
         categoryLabel: getCategoryLabel(category),
         feePeriodStart: isFee ? `${feeStartDate.getFullYear()}-${String(feeStartDate.getMonth() + 1).padStart(2, '0')}-${String(feeStartDate.getDate()).padStart(2, '0')}` : undefined,
@@ -365,15 +387,15 @@ export default function AddTransactionScreen() {
       } else {
         await addTransaction(transactionData);
       }
-      Alert.alert("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
+      showAlertMessage("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
     } catch (error: any) {
       const reason = String(error?.message || "");
       if (reason.includes("duplicate_receipt")) {
-        Alert.alert("ပြေစာအမှတ် ထပ်နေပါသည်", "ပြေစာအမှတ်သည် တစ်ခုနှင့်တစ်ခု မတူညီရပါ။");
+        showAlertMessage("ပြေစာအမှတ် ထပ်နေပါသည်", "ပြေစာအမှတ်သည် တစ်ခုနှင့်တစ်ခု မတူညီရပါ။");
         return;
       }
-      Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
+      showAlertMessage("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);
     }

@@ -37,6 +37,8 @@ const TECHNICAL_NOTE_KEYS = [
   "source_type",
 ];
 
+const TECHNICAL_NOTE_KEY_SET = new Set(TECHNICAL_NOTE_KEYS.map((key) => key.toLowerCase()));
+
 function compactText(value: unknown): string {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -101,6 +103,37 @@ export function stripTechnicalNoteText(value: unknown): string {
   const parts = raw.split("|").map((part) => cleanNotePart(part)).filter(Boolean);
   if (!parts.length) return "";
   return parts.join(" | ");
+}
+
+function isTechnicalNotePart(part: string): boolean {
+  const normalized = compactText(part);
+  if (!normalized) return false;
+  const matched = normalized.match(/^([a-z_][a-z0-9_]*)\s*=/i);
+  if (!matched) return false;
+  return TECHNICAL_NOTE_KEY_SET.has(String(matched[1] || "").toLowerCase());
+}
+
+export function splitTransactionNoteForEditing(value: unknown): {
+  humanNote: string;
+  technicalTokens: string[];
+} {
+  const raw = compactText(value);
+  if (!raw) return { humanNote: "", technicalTokens: [] };
+  const parts = raw.split("|").map((part) => compactText(part)).filter(Boolean);
+  const technicalTokens: string[] = [];
+  const humanParts: string[] = [];
+  parts.forEach((part) => {
+    if (isTechnicalNotePart(part)) {
+      technicalTokens.push(part);
+    } else {
+      const cleaned = cleanNotePart(part);
+      if (cleaned) humanParts.push(cleaned);
+    }
+  });
+  return {
+    humanNote: humanParts.join(" | "),
+    technicalTokens,
+  };
 }
 
 export function getHumanReadableTransactionNote(txn: any): string {

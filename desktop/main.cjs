@@ -65,7 +65,7 @@ function getDesktopInitialPath(baseUrl) {
     return `${baseUrl}/admin-sign-in?${params.toString()}`;
   }
   if (desktopIdentity.variant === "org-client") {
-    return `${baseUrl}/org-connect?${params.toString()}`;
+    return `${baseUrl}/sign-in?${params.toString()}`;
   }
   return `${baseUrl}/web/?${params.toString()}`;
 }
@@ -455,7 +455,7 @@ async function createWindow() {
             <p><button id="retry" style="margin-top:8px;padding:8px 12px;border-radius:6px;border:1px solid #cbd5f5;background:#fff;cursor:pointer">Retry Desktop UI</button></p>
             <script>
               document.getElementById('retry')?.addEventListener('click', () => {
-                location.href = '${baseUrl}/${desktopIdentity.variant === "central-admin" ? "admin-sign-in" : desktopIdentity.variant === "org-client" ? "org-connect" : "web/"}?appVariant=${desktopIdentity.variant}&desktop=1&t=' + Date.now();
+                location.href = '${baseUrl}/${desktopIdentity.variant === "central-admin" ? "admin-sign-in" : desktopIdentity.variant === "org-client" ? "sign-in" : "web/"}?appVariant=${desktopIdentity.variant}&desktop=1&t=' + Date.now();
               });
             </script>
           </body>
