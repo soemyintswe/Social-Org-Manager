@@ -20,13 +20,13 @@ Use this file to continue work in a brand-new chat without losing context.
 
 ## Current Baseline
 
-- Latest local `deploy-fix` commit before this doc refresh: `403c2bc`
+- Latest local `deploy-fix` commit before this doc refresh: `53f0380`
 - Latest Render health commit verified on production: `403c2bce1b88fff82a585ae39ce42a43b29f8504`
 - Central Admin update channel status:
   - mobile version `1.1.74` (build `75`)
   - desktop version `1.1.74` (build `74`)
-- GitHub latest release tag is still:
-  - `v1.1.73` (not yet bumped to `v1.1.74`)
+- GitHub latest release tag:
+  - `v1.1.74`
 
 ## What Is Already Live / Completed In Code
 
@@ -56,15 +56,16 @@ Use this file to continue work in a brand-new chat without losing context.
 - `48b2a70` Ignore local Gradle cache and build artifacts
 - `772c4bd` Add dedicated admin user management page and profile controls
 - `403c2bc` Refresh Central Admin APK/desktop update channels after new builds
+- `53f0380` Finance integrity fixes, org disconnect flow, and org-client v1.1.74 channel update
 
 ## Current Release Assets (Local `releases/`)
 
 - Org Client APK:
-  - `social-org-manager-org-client-v1.1.73-202604250402.apk`
+  - `social-org-manager-org-client-v1.1.74-202604280252.apk`
 - Central Admin APK (latest local):
   - `org-registry-central-admin-v1.1.74-202604270302.apk`
 - Org Client EXE:
-  - `Social-Org-Manager-Setup-v1.1.73.exe`
+  - `Social-Org-Manager-Setup-v1.1.74.exe`
 - Central Admin EXE (latest local):
   - `Org-Registry-Central-Admin-Setup-v1.1.74.exe`
 
@@ -110,10 +111,10 @@ Hard constraints:
 - keep org-client and central-admin behaviors separated
 
 Current baseline:
-- local HEAD: 403c2bc
+- local HEAD: 53f0380
 - live commit: 403c2bce1b88fff82a585ae39ce42a43b29f8504
 - central-admin update channel: 1.1.74
-- GitHub latest release tag: v1.1.73
+- GitHub latest release tag: v1.1.74
 
 Continue from:
 1) accounting record improvements requested in the new chat
@@ -123,8 +124,8 @@ Continue from:
 
 ## Immediate Next Tasks (If Continuing Now)
 
-1. Publish GitHub release/tag assets for `v1.1.74` if auto-update must resolve from `releases/latest`.
-2. Run final QA for Central Admin APK/EXE `1.1.74` on clean devices.
+1. Run final QA for Central Admin APK/EXE `1.1.74` on clean devices.
+2. Run final QA for Org Client APK/EXE `1.1.74` on clean devices.
 3. Decide whether web should stay unified or get dedicated `org-client` / `central-admin` URLs.
 
 ## Current Working Directives (2026-04-28)

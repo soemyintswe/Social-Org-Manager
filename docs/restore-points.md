@@ -1,6 +1,6 @@
 # Restore Points
 
-_Last updated: 2026-04-26 (Asia/Rangoon)_
+_Last updated: 2026-04-28 (Asia/Rangoon)_
 
 ## Stable Checkpoints
 
@@ -22,21 +22,24 @@ These later commits are important operational milestones, but they are not tagge
 - `d1c9c42` Fix desktop variant routing and admin password sync
 - `51a1692` Fix desktop admin password and org connect flow
 - `18b45ba` Fix desktop entry routes and org connect validation
+- `4c485ca` Central admin login cleanup, multi-admin support, and v1.1.74 desktop channel bump
+- `7aae921` Publish Central Admin APK v1.1.74 update channel
+- `48b2a70` Ignore local Gradle cache and build artifacts
+- `772c4bd` Add dedicated admin user management page and profile controls
+- `403c2bc` Refresh Central Admin APK/desktop update channels after new builds
 
 Latest verified deployed commit before this doc refresh:
 
-- `18b45bae78485455e2c978f63010af637d400516`
+- `403c2bce1b88fff82a585ae39ce42a43b29f8504`
 
-## How To Roll Back To A Restore Point
+## How To Roll Back To A Restore Point (Safe Path)
 
 1. Fetch latest refs:
    - `git fetch --all --tags`
 2. Create a rollback branch from restore point:
    - `git checkout -b rollback-part6-stable restore-point-2026-04-21-part6-stable`
-3. If you want `deploy-fix` to point there:
-   - `git checkout deploy-fix`
-   - `git reset --hard <target-tag-or-commit>`
-   - `git push --force-with-lease origin deploy-fix`
+3. Validate locally and deploy that rollback branch/commit in Render first.
+4. Only perform force-move/force-push operations with explicit team approval.
 
 ## Render Rollback
 
@@ -51,3 +54,5 @@ Latest verified deployed commit before this doc refresh:
 - For release-aligned rollback before split behavior, prefer:
   - `restore-point-2026-04-24-pre-variant-split`
 - For continuing split work without going all the way back, the later milestone commits above may be more practical than the older restore tags.
+- Current release note:
+  - update channels and GitHub latest release tag are aligned on `v1.1.74`
