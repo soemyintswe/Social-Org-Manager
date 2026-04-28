@@ -2,7 +2,7 @@ import Constants from "expo-constants";
 import * as Application from "expo-application";
 import { getAccountSettings } from "./storage-service";
 import { getAppUpdateJsonUrl } from "./remote-config";
-import { getAppVariant, isCentralAdminVariant } from "./app-variant";
+import { getAppVariant } from "./app-variant";
 
 export type AppUpdateInfo = {
   ok: boolean;
@@ -103,6 +103,24 @@ function getRemoteUpdateJsonCandidates(remoteUrlRaw: string): string[] {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+function isDesktopRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const query = new URLSearchParams(window.location.search || "");
+    if (query.get("desktop") === "1") return true;
+  } catch {
+    // ignore
+  }
+  try {
+    if (typeof navigator !== "undefined" && /electron/i.test(String(navigator.userAgent || ""))) {
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -160,7 +178,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = getCurrentAppVersion();
   const currentBuild = getCurrentBuildNumber();
   const variant = getAppVariant();
-  const platform = isCentralAdminVariant() ? "desktop" : "android";
+  const platform = isDesktopRuntime() ? "desktop" : "android";
   let lastReason = "update_check_failed";
   let bestInfo: AppUpdateInfo | null = null;
 

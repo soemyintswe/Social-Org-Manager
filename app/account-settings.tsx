@@ -41,12 +41,13 @@ import {
   DEFAULT_LAN_SYNC_URL,
 } from "../lib/sync-defaults";
 import { getManagedSyncLockdownEnabled } from "../lib/remote-config";
-import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "../lib/app-update";
+import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber, type AppUpdateInfo } from "../lib/app-update";
 
 const AsyncStorage = orgStorage;
 
 const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
 const LAN_QR_PREFIX = "ORGHUB_LAN:";
+const GLOBAL_UPDATE_TRIGGER_FN = "__orghub_trigger_app_update_now";
 
 const normalizeUrl = (raw: string): string => {
   const trimmed = String(raw || "").trim();
@@ -700,6 +701,14 @@ export default function AccountSettingsScreen() {
           {
             text: "Update Now",
             onPress: () => {
+              const globalAny = globalThis as any;
+              const trigger = globalAny?.[GLOBAL_UPDATE_TRIGGER_FN];
+              if (typeof trigger === "function") {
+                Promise.resolve(trigger(info as AppUpdateInfo)).catch(() => {
+                  void Linking.openURL(String(info.downloadUrl || "").trim());
+                });
+                return;
+              }
               void Linking.openURL(String(info.downloadUrl || "").trim());
             },
           },

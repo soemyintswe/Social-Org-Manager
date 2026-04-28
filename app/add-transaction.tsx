@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   StyleSheet,
   Text,
@@ -81,19 +81,45 @@ const parseStoredDate = (value: unknown): Date => {
   return new Date();
 };
 
-const stripKnownReceiptPrefix = (value: string) => {
-  const knownPrefixes = ["BI-", "BO-", "I-", "O-", "B-", "TR-"];
-  for (const prefix of knownPrefixes) {
-    if (value.startsWith(prefix)) return value.slice(prefix.length);
-  }
-  return value;
-};
-
 const normalizeReceiptForCompare = (value: unknown) =>
   String(value || "")
     .trim()
     .toUpperCase()
     .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
+
+const getReceiptPrefix = (type: "expense" | "income" | "transfer", category: string | null) => {
+  if (category === "bank_interest" && type === "income") return "BI-";
+  if (category === "bank_charges" && type === "expense") return "BO-";
+  if (type === "transfer") return "B-";
+  return type === "income" ? "I-" : "O-";
+};
+
+const getNextReceiptNumber = (
+  prefix: string,
+  rows: any[],
+  editId?: string
+): string => {
+  const canonicalPrefix = String(prefix || "").trim().toUpperCase();
+  if (!canonicalPrefix) return "";
+  const escapedPrefix = canonicalPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matcher = new RegExp(`^${escapedPrefix}(\\d+)$`, "i");
+  let maxNumber = 0;
+  let maxDigits = 0;
+
+  for (const row of rows || []) {
+    if (editId && String(row?.id || "") === String(editId || "")) continue;
+    const receipt = String(row?.receiptNumber || "").trim().toUpperCase();
+    const match = receipt.match(matcher);
+    if (!match) continue;
+    const numericPart = Number(match[1]);
+    if (!Number.isFinite(numericPart) || numericPart <= 0) continue;
+    maxNumber = Math.max(maxNumber, numericPart);
+    maxDigits = Math.max(maxDigits, String(match[1] || "").length);
+  }
+
+  const digits = Math.max(3, maxDigits || 0);
+  return `${canonicalPrefix}${String(maxNumber + 1).padStart(digits, "0")}`;
+};
 
 const showAlertMessage = (title: string, message: string) => {
   if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.alert === "function") {
@@ -180,6 +206,7 @@ export default function AddTransactionScreen() {
   const [showAddCategoryInput, setShowAddCategoryInput] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const lastSuggestedReceiptRef = useRef("");
 
   // For Member Fees Period
   const [feeStartDate, setFeeStartDate] = useState(new Date());
@@ -250,22 +277,23 @@ export default function AddTransactionScreen() {
     setAmount(String(total));
   }, [type, category, feeStartDate, feeEndDate, monthlyFeeRate]);
 
+  const suggestedReceiptNumber = useMemo(() => {
+    const prefix = getReceiptPrefix(type, category);
+    return getNextReceiptNumber(prefix, transactions || [], editId ? String(editId) : undefined);
+  }, [type, category, transactions, editId]);
+
   useEffect(() => {
-    let prefix = type === "income" ? "I-" : "O-";
-
-    if (category === "bank_interest" && type === "income") {
-      prefix = "BI-";
-    } else if (category === "bank_charges" && type === "expense") {
-      prefix = "BO-";
-    } else if (type === "transfer") {
-      prefix = "B-";
-    }
-
+    if (editId) return;
+    if (!suggestedReceiptNumber) return;
     setReceiptNumber((prev) => {
-      const numberPart = stripKnownReceiptPrefix(prev);
-      return prefix + numberPart;
+      const normalizedPrev = String(prev || "").trim();
+      if (!normalizedPrev || normalizedPrev === String(lastSuggestedReceiptRef.current || "")) {
+        return suggestedReceiptNumber;
+      }
+      return prev;
     });
-  }, [type, category]);
+    lastSuggestedReceiptRef.current = suggestedReceiptNumber;
+  }, [editId, suggestedReceiptNumber]);
 
   useEffect(() => {
     const loadCustomCategories = async () => {
@@ -616,8 +644,16 @@ export default function AddTransactionScreen() {
           </>
         )}
 
-        <Text style={styles.label}>ဘောင်ချာနံပါတ် (ရှိလျှင်)</Text>
-        <TextInput style={styles.input} placeholder="ဥပမာ- 2024-001" value={receiptNumber} onChangeText={setReceiptNumber} />
+        <Text style={styles.label}>ဘောင်ချာနံပါတ်</Text>
+        <TextInput
+          style={styles.input}
+          placeholder={suggestedReceiptNumber || "ဥပမာ- I-001"}
+          value={receiptNumber}
+          onChangeText={setReceiptNumber}
+        />
+        {!editId && suggestedReceiptNumber ? (
+          <Text style={styles.receiptHint}>အကြံပြုနံပါတ်: {suggestedReceiptNumber} (ပြင်ဆင်နိုင်သည်)</Text>
+        ) : null}
 
         <Text style={styles.label}>မှတ်ချက်</Text>
         <TextInput style={[styles.input, { height: 100, textAlignVertical: "top" }]} value={notes} onChangeText={setNotes} multiline />
@@ -738,4 +774,5 @@ const styles = StyleSheet.create({
   methodActive: { borderColor: Colors.light.tint, backgroundColor: Colors.light.tint + "15" },
   methodText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   methodTextActive: { color: Colors.light.tint },
+  receiptHint: { marginTop: 6, fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
 });

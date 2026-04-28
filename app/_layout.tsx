@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from 'expo-splash-screen';
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as Application from "expo-application";
 import * as FileSystem from "expo-file-system/legacy";
 import * as IntentLauncher from "expo-intent-launcher";
@@ -61,6 +61,7 @@ SplashScreen.preventAutoHideAsync();
 const APP_UPDATE_LAST_CHECKED_KEY = "@app_update_last_checked_at";
 const APP_UPDATE_SKIPPED_VERSION_KEY = "@app_update_skipped_version";
 const APP_UPDATE_RESUME_STATE_KEY = "@app_update_download_state";
+const GLOBAL_UPDATE_TRIGGER_FN = "__orghub_trigger_app_update_now";
 const UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const UPDATE_BACKGROUND_RECHECK_MS = 10 * 60 * 1000;
 const UPDATE_INITIAL_CHECK_DELAY_MS = 4500;
@@ -765,12 +766,13 @@ function RootLayoutNav() {
     };
   }, [isAuthenticated, recordActivity]);
 
-  const handleUpdateNow = async () => {
-    if (!updateInfo?.downloadUrl) return;
+  const handleUpdateNow = useCallback(async (overrideInfo?: AppUpdateInfo | null) => {
+    const targetInfo = overrideInfo || updateInfo;
+    if (!targetInfo?.downloadUrl) return;
     if (updatingNow) return;
     let downloadedUriForFallback = "";
     try {
-      const candidateUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
+      const candidateUrls = buildUpdateDownloadUrlCandidates(targetInfo.downloadUrl);
       if (Platform.OS !== "android") {
         if (candidateUrls[0]) await Linking.openURL(candidateUrls[0]);
         return;
@@ -782,12 +784,12 @@ function RootLayoutNav() {
       const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory || "";
       if (!baseDir) throw new Error("storage_unavailable");
 
-      const fileUri = `${baseDir}orghub-update-${String(updateInfo.latestVersion || "latest")}-${Date.now()}.apk`;
+      const fileUri = `${baseDir}orghub-update-${String(targetInfo.latestVersion || "latest")}-${Date.now()}.apk`;
       const resumeState = await loadUpdateResumeState();
       let resumeUrl = "";
       let resumeData = "";
       let resumeFileUri = "";
-      if (resumeState && String(resumeState.latestVersion || "") === String(updateInfo.latestVersion || "")) {
+      if (resumeState && String(resumeState.latestVersion || "") === String(targetInfo.latestVersion || "")) {
         const fileInfo = await FileSystem.getInfoAsync(resumeState.fileUri);
         if (fileInfo?.exists && Number(fileInfo?.size || 0) > 0) {
           resumeUrl = String(resumeState.url || "");
@@ -915,7 +917,7 @@ function RootLayoutNav() {
         }
       } catch {}
       try {
-        const fallbackUrls = buildUpdateDownloadUrlCandidates(updateInfo.downloadUrl);
+        const fallbackUrls = buildUpdateDownloadUrlCandidates(targetInfo.downloadUrl);
         if (fallbackUrls[0]) await Linking.openURL(fallbackUrls[0]);
       } catch {}
       console.log("update_now_error", errText);
@@ -927,7 +929,25 @@ function RootLayoutNav() {
       updateDownloadUrlRef.current = "";
       updateDownloadFileRef.current = "";
     }
-  };
+  }, [updateInfo, updatingNow]);
+
+  useEffect(() => {
+    const globalAny = globalThis as any;
+    const handler = (info?: AppUpdateInfo | null) => {
+      const nextInfo = info || updateInfo;
+      if (nextInfo) {
+        setUpdateInfo(nextInfo);
+        setShowUpdateModal(true);
+      }
+      return handleUpdateNow(nextInfo || null);
+    };
+    globalAny[GLOBAL_UPDATE_TRIGGER_FN] = handler;
+    return () => {
+      if (globalAny[GLOBAL_UPDATE_TRIGGER_FN] === handler) {
+        delete globalAny[GLOBAL_UPDATE_TRIGGER_FN];
+      }
+    };
+  }, [updateInfo, handleUpdateNow]);
 
   const handleUpdateLater = () => {
     setShowUpdateModal(false);
