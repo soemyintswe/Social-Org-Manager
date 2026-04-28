@@ -34,6 +34,7 @@ import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription 
 import { exportXlsxFile } from "../../lib/xlsx-export";
 import { EXPENSE_CATEGORY_FILTERS, INCOME_CATEGORY_FILTERS, TRANSFER_CATEGORY_FILTERS, normalizeFinanceCategory } from "../../lib/finance-categories";
 import { transactionBelongsToMember } from "../../lib/reporting-service";
+import { getTransactions, saveTransactions } from "../../lib/storage-service";
 
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
@@ -52,10 +53,61 @@ type DeleteRequestFieldRow = {
   value: any;
   display?: string;
 };
+type DuplicateReceiptGroup = {
+  receiptNumber: string;
+  txns: any[];
+};
 const FINANCE_PAGE_SIZE = 40;
 const ENABLE_TEMP_TREASURER_DIRECT_FINANCE_MUTATION = true;
 
 const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} KS`;
+
+const normalizeReceiptForCompare = (value: unknown) =>
+  String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
+
+const scoreTxnForMerge = (txn: any): number => {
+  let score = 0;
+  if (String(txn?.memberId || "").trim()) score += 2;
+  if (String(txn?.payerPayee || "").trim()) score += 2;
+  if (String(txn?.notes || txn?.description || "").trim()) score += 1;
+  if (String(txn?.feePeriodStart || "").trim()) score += 1;
+  if (String(txn?.feePeriodEnd || "").trim()) score += 1;
+  if (String(txn?.receiptNumber || "").trim()) score += 1;
+  return score;
+};
+
+const isEmptyMergeValue = (v: unknown): boolean => {
+  if (v == null) return true;
+  if (typeof v === "string") return v.trim().length === 0;
+  if (Array.isArray(v)) return v.length === 0;
+  return false;
+};
+
+const mergeTxnGroup = (primary: any, group: any[]): any => {
+  const merged = { ...primary };
+  group.forEach((row) => {
+    if (!row || row === primary) return;
+    Object.entries(row).forEach(([key, value]) => {
+      if (key === "id") return;
+      if (Array.isArray(value)) {
+        if (!Array.isArray(merged[key]) || (merged[key] as any[]).length === 0) {
+          merged[key] = [...value];
+        } else {
+          const combined = new Set([...(merged[key] as any[]), ...value]);
+          merged[key] = Array.from(combined);
+        }
+        return;
+      }
+      if (isEmptyMergeValue(merged[key]) && !isEmptyMergeValue(value)) {
+        merged[key] = value;
+      }
+    });
+  });
+  return merged;
+};
 
 function escapeHtml(text: unknown): string {
   return String(text ?? "")
@@ -124,6 +176,7 @@ function TransactionRow({
   onAuditPress,
   canRequestDelete = false,
   onDeleteRequestPress,
+  showQuickDeleteButton = false,
   amountView = "single",
 }: {
   txn: Transaction;
@@ -135,6 +188,7 @@ function TransactionRow({
   onAuditPress?: (txn: Transaction) => void;
   canRequestDelete?: boolean;
   onDeleteRequestPress?: (txn: Transaction) => void;
+  showQuickDeleteButton?: boolean;
   amountView?: TransactionAmountView;
 }) {
   const longPressTriggeredRef = React.useRef(false);
@@ -173,12 +227,23 @@ function TransactionRow({
     onDeleteRequestPress(txn);
   };
 
+  const webContextMenuProps =
+    Platform.OS === "web"
+      ? ({
+          onContextMenu: (event: any) => {
+            event?.preventDefault?.();
+            handleLongPress();
+          },
+        } as any)
+      : ({} as any);
+
   return (
     <Pressable
       style={styles.txnRow}
       onPress={canEdit ? handlePress : undefined}
       onLongPress={canRequestDelete ? handleLongPress : undefined}
       delayLongPress={420}
+      {...webContextMenuProps}
     >
       <View style={[styles.txnIcon, { backgroundColor: (isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")) + "15" }]}>
         <Ionicons
@@ -212,6 +277,11 @@ function TransactionRow({
         {canAuditFlag && onAuditPress ? (
           <Pressable style={styles.auditFlagBtn} onPress={() => onAuditPress(txn)}>
             <Ionicons name={txn.auditFlagged ? "flag" : "flag-outline"} size={16} color={txn.auditFlagged ? "#B91C1C" : Colors.light.textSecondary} />
+          </Pressable>
+        ) : null}
+        {showQuickDeleteButton && canRequestDelete && onDeleteRequestPress ? (
+          <Pressable style={styles.quickDeleteBtn} onPress={() => onDeleteRequestPress(txn)}>
+            <Ionicons name="trash-outline" size={16} color="#B91C1C" />
           </Pressable>
         ) : null}
         {amountView === "in_out" ? (
@@ -282,6 +352,7 @@ function LoanRow({
   metrics,
   canRequestDelete = false,
   onDeleteRequestPress,
+  showQuickDeleteButton = false,
 }: {
   loan: Loan;
   memberName?: string;
@@ -289,6 +360,7 @@ function LoanRow({
   metrics: LoanComputedMetrics;
   canRequestDelete?: boolean;
   onDeleteRequestPress?: (loan: Loan) => void;
+  showQuickDeleteButton?: boolean;
 }) {
   const longPressTriggeredRef = React.useRef(false);
   const isPaid = loan.status === "paid";
@@ -318,12 +390,23 @@ function LoanRow({
     onDeleteRequestPress(loan);
   };
 
+  const webContextMenuProps =
+    Platform.OS === "web"
+      ? ({
+          onContextMenu: (event: any) => {
+            event?.preventDefault?.();
+            handleLongPress();
+          },
+        } as any)
+      : ({} as any);
+
   return (
     <Pressable
       style={styles.loanRow}
       onPress={handlePress}
       onLongPress={canRequestDelete ? handleLongPress : undefined}
       delayLongPress={420}
+      {...webContextMenuProps}
     >
       <View style={[styles.loanIcon, { backgroundColor: (isPaid ? Colors.light.success : "#F59E0B") + "15" }]}>
         <Ionicons
@@ -345,6 +428,11 @@ function LoanRow({
         </View>
       </View>
       <View style={styles.loanRight}>
+        {showQuickDeleteButton && canRequestDelete && onDeleteRequestPress ? (
+          <Pressable style={styles.quickDeleteBtn} onPress={() => onDeleteRequestPress(loan)}>
+            <Ionicons name="trash-outline" size={16} color="#B91C1C" />
+          </Pressable>
+        ) : null}
         <Text style={styles.loanOutstanding}>{formatKs(outstanding)}</Text>
         <View style={[styles.loanStatusBadge, isPaid ? styles.loanPaid : styles.loanActive]}>
           <Text style={[styles.loanStatusText, { color: isPaid ? Colors.light.success : "#3B82F6" }]}>
@@ -373,7 +461,8 @@ export default function FinanceScreen() {
     getLoanOutstanding,
     loading,
     accountSettings,
-    updateAccountSettings
+    updateAccountSettings,
+    refreshData
   } = useData() as any;
   const { can, currentUser } = useAuth();
 
@@ -431,6 +520,9 @@ export default function FinanceScreen() {
     const [visibleLoanTxnCount, setVisibleLoanTxnCount] = useState(FINANCE_PAGE_SIZE);
     const [showPrintPicker, setShowPrintPicker] = useState(false);
     const [printing, setPrinting] = useState(false);
+    const [showDuplicateReceiptModal, setShowDuplicateReceiptModal] = useState(false);
+    const [duplicateSelectionByReceipt, setDuplicateSelectionByReceipt] = useState<Record<string, string>>({});
+    const [duplicateResolving, setDuplicateResolving] = useState(false);
 
     const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
     const isTreasurer = myRole === "treasurer";
@@ -1323,6 +1415,106 @@ export default function FinanceScreen() {
     return computeTransactions.filter((t: any) => transactionMatchesScopedMember(t, scopedMemberId));
   }, [computeTransactions, scopedMemberId, transactionMatchesScopedMember]);
 
+  const duplicateReceiptGroups = useMemo<DuplicateReceiptGroup[]>(() => {
+    const buckets = new Map<string, any[]>();
+    (computeTransactions || []).forEach((txn: any) => {
+      const token = normalizeReceiptForCompare(txn?.receiptNumber);
+      if (!token) return;
+      if (!buckets.has(token)) buckets.set(token, []);
+      buckets.get(token)?.push(txn);
+    });
+    return Array.from(buckets.entries())
+      .filter(([, list]) => list.length > 1)
+      .map(([token, list]) => ({
+        receiptNumber: list.find((row: any) => String(row?.receiptNumber || "").trim())?.receiptNumber || token,
+        txns: [...list].sort((a: any, b: any) => {
+          const scoreDiff = scoreTxnForMerge(b) - scoreTxnForMerge(a);
+          if (scoreDiff !== 0) return scoreDiff;
+          return String(a?.createdAt || "").localeCompare(String(b?.createdAt || ""));
+        }),
+      }))
+      .sort((a, b) => String(a.receiptNumber).localeCompare(String(b.receiptNumber)));
+  }, [computeTransactions]);
+
+  const duplicateReceiptExtraCount = useMemo(
+    () => duplicateReceiptGroups.reduce((sum, group) => sum + Math.max(0, group.txns.length - 1), 0),
+    [duplicateReceiptGroups]
+  );
+
+  const openDuplicateReceiptResolver = () => {
+    const initialSelection: Record<string, string> = {};
+    duplicateReceiptGroups.forEach((group) => {
+      const firstId = String(group.txns?.[0]?.id || "").trim();
+      if (firstId) {
+        initialSelection[group.receiptNumber] = firstId;
+      }
+    });
+    setDuplicateSelectionByReceipt(initialSelection);
+    setShowDuplicateReceiptModal(true);
+  };
+
+  const applyDuplicateResolution = async (mode: "manual_keep" | "auto_merge") => {
+    if (duplicateResolving) return;
+    setDuplicateResolving(true);
+    try {
+      const currentRows = await getTransactions();
+      if (!Array.isArray(currentRows) || currentRows.length === 0) return;
+      const byId = new Map<string, any>(currentRows.map((row: any) => [String(row?.id || ""), row]));
+      const removeIds = new Set<string>();
+      const mergedByKeepId = new Map<string, any>();
+
+      duplicateReceiptGroups.forEach((group) => {
+        const groupRows = group.txns
+          .map((txn) => byId.get(String(txn?.id || "")))
+          .filter(Boolean) as any[];
+        if (groupRows.length < 2) return;
+        let keepId = String(duplicateSelectionByReceipt[group.receiptNumber] || "").trim();
+        if (!keepId || !groupRows.some((row) => String(row?.id || "").trim() === keepId)) {
+          keepId = String(groupRows[0]?.id || "").trim();
+        }
+        if (!keepId) return;
+        groupRows.forEach((row) => {
+          const id = String(row?.id || "").trim();
+          if (!id || id === keepId) return;
+          removeIds.add(id);
+        });
+        if (mode === "auto_merge") {
+          const keeper = groupRows.find((row) => String(row?.id || "").trim() === keepId) || groupRows[0];
+          mergedByKeepId.set(keepId, mergeTxnGroup(keeper, groupRows));
+        }
+      });
+
+      const nextRows = currentRows
+        .filter((row: any) => !removeIds.has(String(row?.id || "").trim()))
+        .map((row: any) => {
+          const id = String(row?.id || "").trim();
+          if (!id || !mergedByKeepId.has(id)) return row;
+          return mergedByKeepId.get(id);
+        });
+
+      await saveTransactions(nextRows as any[], { validateUniqueReceipt: true });
+      if (refreshData) {
+        await refreshData({ skipPull: true, markLocalMutation: true });
+      }
+      setShowDuplicateReceiptModal(false);
+      Alert.alert(
+        "ပြီးပါပြီ",
+        mode === "auto_merge"
+          ? `Duplicate receipt စုစုပေါင်း ${duplicateReceiptExtraCount} ခုကို merge + cleanup လုပ်ပြီးပါပြီ။`
+          : `Duplicate receipt စုစုပေါင်း ${duplicateReceiptExtraCount} ခုကိုရွေးချယ်ထားသောစာရင်းတစ်ခုချင်း ထိန်းပြီး ဖယ်ရှားပြီးပါပြီ။`
+      );
+    } catch (error: any) {
+      const reason = String(error?.message || "");
+      if (reason.includes("duplicate_receipt")) {
+        Alert.alert("မပြီးသေးပါ", "ပြေစာအမှတ် ထပ်နေသေးသောကြောင့် သိမ်းမရပါ။");
+      } else {
+        Alert.alert("အမှား", "Duplicate receipt cleanup ပြုလုပ်ရာတွင် အဆင်မပြေပါ။");
+      }
+    } finally {
+      setDuplicateResolving(false);
+    }
+  };
+
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
     let cash = (accountSettings?.openingBalanceCash || 0);
@@ -2100,6 +2292,20 @@ export default function FinanceScreen() {
         </View>
       </View>
 
+      {duplicateReceiptGroups.length > 0 ? (
+        <View style={styles.duplicateWarningCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.duplicateWarningTitle}>ပြေစာအမှတ် ထပ်နေသည်</Text>
+            <Text style={styles.duplicateWarningText}>
+              ထပ်နေသော receipt group {duplicateReceiptGroups.length} ခု / ထပ်နေသောစာရင်း {duplicateReceiptExtraCount} ခု
+            </Text>
+          </View>
+          <Pressable style={styles.duplicateWarningBtn} onPress={openDuplicateReceiptResolver}>
+            <Text style={styles.duplicateWarningBtnText}>Resolve</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {canViewFinanceDetail && (
         <View style={styles.scopeCard}>
           <View style={styles.scopeTopRow}>
@@ -2440,6 +2646,7 @@ export default function FinanceScreen() {
                         canAuditFlag={canAuditFlagFinance}
                         onAuditPress={openAuditModal}
                         canRequestDelete={canRequestDeleteFinance}
+                        showQuickDeleteButton={treasurerDirectMutationEnabled && canDeleteFinance}
                         onDeleteRequestPress={handleTxnLongPressAction}
                         amountView="loan_columns"
                       />
@@ -2487,6 +2694,7 @@ export default function FinanceScreen() {
                     canAuditFlag={canAuditFlagFinance}
                     onAuditPress={openAuditModal}
                     canRequestDelete={canRequestDeleteFinance}
+                    showQuickDeleteButton={treasurerDirectMutationEnabled && canDeleteFinance}
                     onDeleteRequestPress={handleTxnLongPressAction}
                     amountView={amountView}
                   />
@@ -2504,6 +2712,7 @@ export default function FinanceScreen() {
                   outstanding={getLoanOutstanding(loan.id)}
                   metrics={metrics}
                   canRequestDelete={canRequestDeleteFinance}
+                  showQuickDeleteButton={treasurerDirectMutationEnabled && canDeleteFinance}
                   onDeleteRequestPress={handleLoanLongPressAction}
                 />
               );
@@ -2521,6 +2730,83 @@ export default function FinanceScreen() {
         </View>
       )}
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showDuplicateReceiptModal}
+        onRequestClose={() => setShowDuplicateReceiptModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDuplicateReceiptModal(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Duplicate Receipt Resolver</Text>
+            <Text style={styles.duplicateModalHint}>
+              ထပ်နေသော receipt တစ်ခုစီအတွက် သိမ်းမည့်စာရင်းကိုရွေးပါ။ Auto Merge လုပ်လျှင် အခြား row များထဲမှ လိုအပ်သော field များကို ပေါင်းစည်းပေးပါမည်။
+            </Text>
+            <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ paddingBottom: 8 }}>
+              {duplicateReceiptGroups.map((group) => (
+                <View key={`dup-${group.receiptNumber}`} style={styles.duplicateGroupCard}>
+                  <Text style={styles.duplicateGroupTitle}>Receipt: {group.receiptNumber}</Text>
+                  {group.txns.map((txn: any) => {
+                    const id = String(txn?.id || "");
+                    const selected = String(duplicateSelectionByReceipt[group.receiptNumber] || "") === id;
+                    return (
+                      <Pressable
+                        key={`dup-txn-${id}`}
+                        style={[styles.duplicateTxnRow, selected && styles.duplicateTxnRowSelected]}
+                        onPress={() =>
+                          setDuplicateSelectionByReceipt((prev) => ({
+                            ...prev,
+                            [group.receiptNumber]: id,
+                          }))
+                        }
+                      >
+                        <Ionicons
+                          name={selected ? "radio-button-on" : "radio-button-off"}
+                          size={18}
+                          color={selected ? "#0F766E" : "#94A3B8"}
+                        />
+                        <View style={{ flex: 1, marginLeft: 8 }}>
+                          <Text style={styles.duplicateTxnPrimary}>
+                            {getLocalizedTransactionCategoryLabel(txn?.category, txn?.categoryLabel)} • {Number(txn?.amount || 0).toLocaleString()} KS
+                          </Text>
+                          <Text style={styles.duplicateTxnSecondary}>
+                            ID: {id || "-"} | Date: {String(txn?.date || "-")} | Member: {String(txn?.memberId || txn?.payerPayee || "-")}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.duplicateActionRow}>
+              <Pressable
+                style={[styles.duplicateActionBtn, styles.duplicateManualBtn, duplicateResolving && styles.saveBtnDisabled]}
+                disabled={duplicateResolving}
+                onPress={() => {
+                  void applyDuplicateResolution("manual_keep");
+                }}
+              >
+                <Text style={styles.duplicateActionBtnText}>ရွေးချယ်ထားသည်ကိုပဲသိမ်း</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.duplicateActionBtn, styles.duplicateMergeBtn, duplicateResolving && styles.saveBtnDisabled]}
+                disabled={duplicateResolving}
+                onPress={() => {
+                  void applyDuplicateResolution("auto_merge");
+                }}
+              >
+                <Text style={styles.duplicateActionBtnText}>Auto Merge + Cleanup</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowDuplicateReceiptModal(false)}>
+              <Text style={styles.cancelBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="slide"
@@ -3008,6 +3294,28 @@ const styles = StyleSheet.create({
   title: { flex: 1, fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
   headerClaimRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  duplicateWarningCard: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    backgroundColor: "#FEF2F2",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  duplicateWarningTitle: { fontSize: 13, color: "#B91C1C", fontFamily: "Inter_700Bold" },
+  duplicateWarningText: { fontSize: 12, color: "#7F1D1D", fontFamily: "Inter_500Medium", marginTop: 2 },
+  duplicateWarningBtn: {
+    borderRadius: 8,
+    backgroundColor: "#DC2626",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  duplicateWarningBtnText: { color: "#fff", fontSize: 12, fontFamily: "Inter_700Bold" },
   auditRequestBtn: {
     height: 38,
     borderRadius: 12,
@@ -3315,6 +3623,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  quickDeleteBtn: {
+    padding: 4,
+    borderRadius: 8,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+  },
   txnAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
   txnDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary },
   loanRow: {
@@ -3448,6 +3763,38 @@ const styles = StyleSheet.create({
   modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
   auditModalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "85%" },
   auditModalContentBody: { padding: 20 },
+  duplicateModalHint: { fontSize: 12, color: Colors.light.textSecondary, marginBottom: 10, lineHeight: 18, fontFamily: "Inter_500Medium" },
+  duplicateGroupCard: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+    backgroundColor: "#F8FAFC",
+  },
+  duplicateGroupTitle: { fontSize: 12.5, color: Colors.light.text, fontFamily: "Inter_700Bold", marginBottom: 8 },
+  duplicateTxnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    marginBottom: 6,
+    backgroundColor: "#fff",
+  },
+  duplicateTxnRowSelected: {
+    borderColor: "#14B8A6",
+    backgroundColor: "#F0FDFA",
+  },
+  duplicateTxnPrimary: { fontSize: 12, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  duplicateTxnSecondary: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", marginTop: 1 },
+  duplicateActionRow: { flexDirection: "row", gap: 8, marginTop: 6 },
+  duplicateActionBtn: { flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: "center" },
+  duplicateManualBtn: { backgroundColor: "#0EA5A4" },
+  duplicateMergeBtn: { backgroundColor: "#D97706" },
+  duplicateActionBtnText: { color: "#fff", fontSize: 12, fontFamily: "Inter_700Bold", textAlign: "center" },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
   printSectionTitle: {
     marginTop: 2,
