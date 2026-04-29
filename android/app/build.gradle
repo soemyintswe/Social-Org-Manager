@@ -116,8 +116,8 @@ android {
         applicationId resolvedApplicationId
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 75
-        versionName "1.1.74"
+        versionCode 76
+        versionName "1.1.75"
         resValue "string", "app_name", resolvedAppName
         manifestPlaceholders = [
             appAuthScheme: resolvedAppScheme,

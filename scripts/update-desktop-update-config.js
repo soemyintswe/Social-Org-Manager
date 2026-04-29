@@ -39,7 +39,20 @@ function readAppVersion() {
   return "0.0.0";
 }
 
+function readAndroidVersionCode() {
+  const appJsonPath = path.resolve(__dirname, "..", "app.json");
+  try {
+    const appJson = readJson(appJsonPath);
+    const raw = appJson?.expo?.android?.versionCode;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return String(Math.floor(n));
+  } catch {}
+  return "";
+}
+
 function readDesktopBuildNumber(version) {
+  const androidVersionCode = readAndroidVersionCode();
+  if (androidVersionCode) return androidVersionCode;
   const parts = String(version || "")
     .split(".")
     .map((item) => Number(String(item).replace(/[^\d]/g, "")));

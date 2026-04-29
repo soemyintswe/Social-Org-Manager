@@ -135,6 +135,86 @@ function compareVersion(left, right) {
   return 0;
 }
 
+function parseBuildNumber(value) {
+  const n = Number(String(value || "").replace(/[^\d]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function getDesktopCurrentBuildNumber(version) {
+  const parsed = parseVersion(version);
+  if (parsed.length >= 3 && Number.isFinite(parsed[2]) && parsed[2] > 0) {
+    return String(parsed[2]);
+  }
+  return "";
+}
+
+function withCacheBust(url) {
+  try {
+    const target = new URL(String(url || "").trim());
+    target.searchParams.set("_ts", String(Date.now()));
+    return target.toString();
+  } catch {
+    return String(url || "").trim();
+  }
+}
+
+function buildVariantDesktopUpdateJsonCandidates(baseUrl, variant) {
+  const trimmed = String(baseUrl || "").trim();
+  if (!trimmed) return [];
+  if (!variant || variant === "unified") return [trimmed];
+  const qIndex = trimmed.indexOf("?");
+  const pathPart = qIndex >= 0 ? trimmed.slice(0, qIndex) : trimmed;
+  const queryPart = qIndex >= 0 ? trimmed.slice(qIndex) : "";
+  const suffixPath = pathPart.replace(/\.json$/i, `.${variant}.json`);
+  return Array.from(new Set([`${suffixPath}${queryPart}`, trimmed]));
+}
+
+function getDesktopRemoteUpdateJsonCandidates() {
+  const defaults = [
+    String(process.env.EXPO_PUBLIC_DESKTOP_UPDATE_JSON_URL || "").trim(),
+    "https://raw.githubusercontent.com/soemyintswe/Social-Org-Manager/main/server/config/desktop-update.json",
+  ].filter(Boolean);
+  return Array.from(
+    new Set(
+      defaults.flatMap((baseUrl) =>
+        buildVariantDesktopUpdateJsonCandidates(baseUrl, desktopIdentity.variant)
+      )
+    )
+  );
+}
+
+function mapDesktopUpdatePayload(payload, currentVersion, currentBuild) {
+  const latestVersion = String(payload?.latestVersion || "").trim();
+  const latestBuildNumber = String(payload?.latestBuildNumber || "").trim();
+  const minimumVersion = String(payload?.minimumVersion || "").trim();
+  const downloadUrl = String(payload?.downloadUrl || "").trim();
+  const hasUpdateByVersion = latestVersion ? compareVersion(latestVersion, currentVersion) > 0 : false;
+  const currentBuildNum = parseBuildNumber(currentBuild);
+  const latestBuildNum = parseBuildNumber(latestBuildNumber);
+  const hasUpdateByBuild =
+    currentBuildNum !== null && latestBuildNum !== null ? latestBuildNum > currentBuildNum : false;
+  const mustUpdateByMinimumVersion =
+    minimumVersion && currentVersion ? compareVersion(minimumVersion, currentVersion) > 0 : false;
+
+  return {
+    latestVersion,
+    latestBuildNumber,
+    minimumVersion,
+    downloadUrl,
+    notes: String(payload?.notes || "").trim(),
+    force: Boolean(payload?.force || mustUpdateByMinimumVersion),
+    hasUpdate: Boolean(
+      payload?.hasUpdate ||
+      payload?.force ||
+      hasUpdateByVersion ||
+      hasUpdateByBuild ||
+      mustUpdateByMinimumVersion
+    ),
+    publishedAt: String(payload?.publishedAt || "").trim(),
+  };
+}
+
 function getDesktopUpdateSkipFilePath() {
   try {
     return path.join(app.getPath("userData"), DESKTOP_UPDATE_SKIP_FILE);
@@ -186,37 +266,86 @@ function getDesktopUpdateToken(payload) {
 async function checkDesktopUpdate(baseUrl) {
   try {
     const currentVersion = String(app.getVersion() || "0.0.0").trim();
-    const url = `${baseUrl}/api/desktop-update?platform=desktop&variant=${encodeURIComponent(desktopIdentity.variant)}&version=${encodeURIComponent(currentVersion)}`;
-    logDesktop(`desktop update check: ${url}`);
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-    });
-    if (!res.ok) {
-      logDesktop(`desktop update check http_${res.status}`);
-      return;
-    }
-    const payload = await res.json();
-    const latestVersion = String(payload?.latestVersion || "").trim();
-    const downloadUrl = String(payload?.downloadUrl || "").trim();
-    const hasUpdateByPayload = Boolean(payload?.hasUpdate);
-    const hasUpdateByVersion = latestVersion ? compareVersion(latestVersion, currentVersion) > 0 : false;
-    const hasUpdate = hasUpdateByPayload || hasUpdateByVersion;
-    if (!latestVersion || !downloadUrl || !hasUpdate) return;
+    const currentBuild = getDesktopCurrentBuildNumber(currentVersion);
+    let bestInfo = null;
+    const pickBetter = (nextInfo) => {
+      if (!nextInfo || !nextInfo.latestVersion || !nextInfo.downloadUrl) return;
+      if (!nextInfo.hasUpdate) return;
+      if (!bestInfo) {
+        bestInfo = nextInfo;
+        return;
+      }
+      const cmpVersion = compareVersion(nextInfo.latestVersion, bestInfo.latestVersion);
+      if (cmpVersion > 0) {
+        bestInfo = nextInfo;
+        return;
+      }
+      if (cmpVersion < 0) return;
 
-    const forceUpdate = Boolean(payload?.force);
-    const token = getDesktopUpdateToken(payload);
+      const nextBuild = parseBuildNumber(nextInfo.latestBuildNumber || "");
+      const bestBuild = parseBuildNumber(bestInfo.latestBuildNumber || "");
+      if (nextBuild !== null && bestBuild !== null && nextBuild > bestBuild) {
+        bestInfo = nextInfo;
+        return;
+      }
+
+      const nextPublished = new Date(String(nextInfo.publishedAt || "")).getTime();
+      const bestPublished = new Date(String(bestInfo.publishedAt || "")).getTime();
+      if (Number.isFinite(nextPublished) && Number.isFinite(bestPublished) && nextPublished > bestPublished) {
+        bestInfo = nextInfo;
+      }
+    };
+
+    const url = `${baseUrl}/api/desktop-update?platform=desktop&variant=${encodeURIComponent(desktopIdentity.variant)}&version=${encodeURIComponent(currentVersion)}&build=${encodeURIComponent(currentBuild)}`;
+    logDesktop(`desktop update check: ${url}`);
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      });
+      if (res.ok) {
+        const payload = await res.json();
+        pickBetter(mapDesktopUpdatePayload(payload, currentVersion, currentBuild));
+      } else {
+        logDesktop(`desktop update check http_${res.status}`);
+      }
+    } catch (error) {
+      logDesktop(`desktop update local endpoint failed: ${String(error?.message || error)}`);
+    }
+
+    const remoteCandidates = getDesktopRemoteUpdateJsonCandidates();
+    for (const candidate of remoteCandidates) {
+      try {
+        const res = await fetch(withCacheBust(candidate), {
+          method: "GET",
+          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+        });
+        if (!res.ok) {
+          logDesktop(`desktop update remote ${candidate} http_${res.status}`);
+          continue;
+        }
+        const payload = await res.json();
+        pickBetter(mapDesktopUpdatePayload(payload, currentVersion, currentBuild));
+      } catch (error) {
+        logDesktop(`desktop update remote failed ${candidate}: ${String(error?.message || error)}`);
+      }
+    }
+
+    if (!bestInfo) return;
+
+    const forceUpdate = Boolean(bestInfo.force);
+    const token = getDesktopUpdateToken(bestInfo);
     const skipped = readDesktopUpdateSkipToken();
     if (!forceUpdate && token && skipped && token === skipped) {
       logDesktop(`desktop update skipped token matched: ${token}`);
       return;
     }
 
-    const latestBuild = String(payload?.latestBuildNumber || "").trim();
-    const notes = String(payload?.notes || "").trim();
+    const latestBuild = String(bestInfo.latestBuildNumber || "").trim();
+    const notes = String(bestInfo.notes || "").trim();
     const lines = [
       `Current: ${currentVersion}`,
-      `Latest: ${latestVersion}${latestBuild ? ` (${latestBuild})` : ""}`,
+      `Latest: ${bestInfo.latestVersion}${latestBuild ? ` (${latestBuild})` : ""}`,
       "",
       notes || "Desktop update is available.",
     ];
@@ -237,7 +366,7 @@ async function checkDesktopUpdate(baseUrl) {
     });
 
     if (result.response === 0) {
-      await shell.openExternal(downloadUrl);
+      await shell.openExternal(bestInfo.downloadUrl);
       return;
     }
     if (!forceUpdate && result.response === 1) {
