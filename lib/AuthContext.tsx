@@ -4,7 +4,19 @@ import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions
 import { useData } from "./DataContext";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 import { MEMBER_STATUS_LABELS, normalizeMemberStatus, normalizeOrgPosition, type Member, type UserAccount } from "./types";
-import { buildMemberUsername, changeUserPassword, getAccountSettings, resetUserPasswordByIdentifier, setSystemAdminPassword, verifyPassword, verifySystemAdminPassword } from "./storage-service";
+import {
+  buildMemberUsername,
+  changeUserPassword,
+  getAccountSettings,
+  getMembers as readMembersFromStorage,
+  getUsers as readUsersFromStorage,
+  migrateLegacyOrgDataToScopedStorage,
+  resetUserPasswordByIdentifier,
+  seedDefaultAdminUser,
+  setSystemAdminPassword,
+  verifyPassword,
+  verifySystemAdminPassword,
+} from "./storage-service";
 import { getServerApiUrlForOrg, prewarmOrgScopedRemoteConfig, setActiveOrgId } from "./remote-config";
 import orgStorage, { setOrgStorageContext, systemStorage } from "./org-storage";
 import { ensureOrgLicenseActive } from "./org-registry";
@@ -508,8 +520,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (normalizeIdentifier(username) === "admin") {
       return { exists: true, canLogin: true, memberName: "System Admin" };
     }
-    const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
-    const member = user?.memberId ? members.find((item) => item.id === user.memberId) : undefined;
+    let user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    let member = user?.memberId ? members.find((item) => item.id === user.memberId) : undefined;
+
+    if (!user && Platform.OS === "web") {
+      try {
+        // Local web may open with stale in-memory cache; recover from scoped storage and re-resolve once.
+        const settings = await getAccountSettings();
+        const orgId = String(settings?.orgId || "").trim().toUpperCase();
+        if (orgId) {
+          await migrateLegacyOrgDataToScopedStorage(orgId, {
+            allowLegacyOrg000ToOrg001: true,
+            allowLegacyUnscopedToTargetWhenScopedEmpty: true,
+            overwriteWhenScopedMembersAtMost: 1,
+            mergeWhenLegacyHasMoreMembersByAtLeast: 20,
+          });
+        }
+        await seedDefaultAdminUser({ allowDefaultDataSeed: false });
+        const [freshUsers, freshMembers] = await Promise.all([
+          readUsersFromStorage(),
+          readMembersFromStorage(),
+        ]);
+        user = resolveUserByIdentifier(freshUsers, freshMembers, username, { includeInactive: true });
+        member = user?.memberId ? freshMembers.find((item) => item.id === user.memberId) : undefined;
+      } catch {
+        // keep original resolution result
+      }
+    }
+
     return evaluateUserLoginState(user, member, username);
   }, [users, members]);
 
@@ -531,7 +569,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const attemptLogin = useCallback(async (username: string, passwordPlaintext: string): Promise<LoginResult> => {
     const normalizedUsername = normalizeIdentifier(username);
-    const user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    let user = resolveUserByIdentifier(users, members, username, { includeInactive: true });
+    let memberList = members;
+    if (!user && Platform.OS === "web") {
+      try {
+        const settings = await getAccountSettings();
+        const orgId = String(settings?.orgId || "").trim().toUpperCase();
+        if (orgId) {
+          await migrateLegacyOrgDataToScopedStorage(orgId, {
+            allowLegacyOrg000ToOrg001: true,
+            allowLegacyUnscopedToTargetWhenScopedEmpty: true,
+            overwriteWhenScopedMembersAtMost: 1,
+            mergeWhenLegacyHasMoreMembersByAtLeast: 20,
+          });
+        }
+        await seedDefaultAdminUser({ allowDefaultDataSeed: false });
+        const [freshUsers, freshMembers] = await Promise.all([
+          readUsersFromStorage(),
+          readMembersFromStorage(),
+        ]);
+        memberList = freshMembers;
+        user = resolveUserByIdentifier(freshUsers, freshMembers, username, { includeInactive: true });
+      } catch {
+        // keep original cache-based resolution result
+      }
+    }
     if (normalizedUsername === "admin" || user?.systemRole === "admin") {
       return { ok: false, reason: "admin_login_only" };
     }
@@ -568,7 +630,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    const member = user?.memberId ? members.find((item) => item.id === user.memberId) : undefined;
+    const member = user?.memberId ? memberList.find((item) => item.id === user.memberId) : undefined;
     const loginState = evaluateUserLoginState(user, member, username);
     if (!loginState.exists) {
       const nextFailed = guard.failedAttempts + 1;
