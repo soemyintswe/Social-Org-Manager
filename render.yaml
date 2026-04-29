@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     autoDeploy: true
-    buildCommand: npm ci && npm run render:build
+    buildCommand: npm ci --include=dev --no-audit --no-fund && npm run render:build
     startCommand: npm run render:start
     healthCheckPath: /api/sync/health
     envVars:
