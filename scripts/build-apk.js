@@ -199,14 +199,26 @@ try {
   const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
   
   const gradleFlags = [
+    '--no-daemon',
     '-Dkotlin.incremental=false',
     '-Dkotlin.incremental.useClasspathSnapshot=false',
     '-Dorg.gradle.caching=false'
   ];
 
+  const gradleUserHome = process.platform === 'win32'
+    ? 'C:\\g'
+    : (process.env.GRADLE_USER_HOME || path.resolve(__dirname, '../.gradle-user-home'));
+  if (!fs.existsSync(gradleUserHome)) {
+    fs.mkdirSync(gradleUserHome, { recursive: true });
+  }
+
   execSync(`${gradlew} assembleRelease ${gradleFlags.join(' ')}`, {
     cwd: androidDir,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      GRADLE_USER_HOME: gradleUserHome,
+    },
   });
 
   const sourceApk = path.resolve(androidDir, 'app/build/outputs/apk/release/app-release.apk');
