@@ -87,11 +87,39 @@ const normalizeReceiptForCompare = (value: unknown) =>
     .toUpperCase()
     .replace(/[\s\u200b\u200c\u200d\ufeff]/g, "");
 
-const getReceiptPrefix = (type: "expense" | "income" | "transfer", category: string | null) => {
-  if (category === "bank_interest" && type === "income") return "BI-";
-  if (category === "bank_charges" && type === "expense") return "BO-";
+const normalizeDigitsToAscii = (value: string) => {
+  const map: Record<string, string> = {
+    "၀": "0",
+    "၁": "1",
+    "၂": "2",
+    "၃": "3",
+    "၄": "4",
+    "၅": "5",
+    "၆": "6",
+    "၇": "7",
+    "၈": "8",
+    "၉": "9",
+  };
+  return String(value || "").replace(/[၀-၉]/g, (ch) => map[ch] || ch);
+};
+
+const parseReceiptSequence = (receiptNumber: unknown): { series: string; number: number; width: number } | null => {
+  const raw = String(receiptNumber || "").trim().toUpperCase();
+  if (!raw) return null;
+  // Accept forms like I-394, I-394 (Old), I - 394
+  const match = raw.match(/^([A-Z]+)\s*-\s*([0-9၀-၉]+)/);
+  if (!match) return null;
+  const series = String(match[1] || "").trim();
+  const digitsRaw = normalizeDigitsToAscii(String(match[2] || "").trim());
+  const number = Number(digitsRaw);
+  if (!series || !Number.isFinite(number) || number <= 0) return null;
+  return { series, number, width: digitsRaw.length };
+};
+
+const getReceiptPrefix = (type: "expense" | "income" | "transfer") => {
+  if (type === "income") return "I-";
   if (type === "transfer") return "B-";
-  return type === "income" ? "I-" : "O-";
+  return "O-";
 };
 
 const getNextReceiptNumber = (
@@ -101,20 +129,18 @@ const getNextReceiptNumber = (
 ): string => {
   const canonicalPrefix = String(prefix || "").trim().toUpperCase();
   if (!canonicalPrefix) return "";
-  const escapedPrefix = canonicalPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const matcher = new RegExp(`^${escapedPrefix}(\\d+)$`, "i");
+  const series = canonicalPrefix.endsWith("-")
+    ? canonicalPrefix.slice(0, -1).trim()
+    : canonicalPrefix.trim();
   let maxNumber = 0;
   let maxDigits = 0;
 
   for (const row of rows || []) {
     if (editId && String(row?.id || "") === String(editId || "")) continue;
-    const receipt = String(row?.receiptNumber || "").trim().toUpperCase();
-    const match = receipt.match(matcher);
-    if (!match) continue;
-    const numericPart = Number(match[1]);
-    if (!Number.isFinite(numericPart) || numericPart <= 0) continue;
-    maxNumber = Math.max(maxNumber, numericPart);
-    maxDigits = Math.max(maxDigits, String(match[1] || "").length);
+    const parsed = parseReceiptSequence(row?.receiptNumber);
+    if (!parsed || parsed.series !== series) continue;
+    maxNumber = Math.max(maxNumber, parsed.number);
+    maxDigits = Math.max(maxDigits, parsed.width);
   }
 
   const digits = Math.max(3, maxDigits || 0);
@@ -278,9 +304,9 @@ export default function AddTransactionScreen() {
   }, [type, category, feeStartDate, feeEndDate, monthlyFeeRate]);
 
   const suggestedReceiptNumber = useMemo(() => {
-    const prefix = getReceiptPrefix(type, category);
+    const prefix = getReceiptPrefix(type);
     return getNextReceiptNumber(prefix, transactions || [], editId ? String(editId) : undefined);
-  }, [type, category, transactions, editId]);
+  }, [type, transactions, editId]);
 
   useEffect(() => {
     if (editId) return;
