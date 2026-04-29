@@ -5807,6 +5807,11 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
         );
         // If proxy route does not exist on this host, continue to next candidate.
         if (res.status === 404 || res.status === 405) continue;
+        // Local Expo dev web server can return app HTML (200 text/html) for unknown routes.
+        // That response is not a valid proxy payload, so continue to next candidate.
+        const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+        const looksJson = contentType.includes("application/json") || contentType.includes("+json");
+        if (res.ok && !looksJson) continue;
         return res;
       } catch {
         // try next candidate
