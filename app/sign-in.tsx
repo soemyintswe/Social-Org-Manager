@@ -256,6 +256,7 @@ export default function SignInScreen() {
           if (orgConnectMode || !!hasParamOrgId) {
             await migrateLegacyOrgDataToScopedStorage(orgId, {
               allowLegacyOrg000ToOrg001: true,
+              allowLegacyUnscopedToTargetWhenScopedEmpty: true,
               overwriteWhenScopedMembersAtMost: 1,
               mergeWhenLegacyHasMoreMembersByAtLeast: 20,
             });

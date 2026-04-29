@@ -1972,6 +1972,7 @@ export async function migrateLegacyOrgDataToScopedStorage(
   targetOrgIdInput: string,
   options?: {
     allowLegacyOrg000ToOrg001?: boolean;
+    allowLegacyUnscopedToTargetWhenScopedEmpty?: boolean;
     overwriteWhenScopedMembersAtMost?: number;
     mergeWhenLegacyHasMoreMembersByAtLeast?: number;
   }
@@ -1995,6 +1996,7 @@ export async function migrateLegacyOrgDataToScopedStorage(
     ? Math.max(0, Number(options?.mergeWhenLegacyHasMoreMembersByAtLeast))
     : 0;
   const allowOrg000Mapping = options?.allowLegacyOrg000ToOrg001 !== false;
+  const allowUnscopedLegacyMapping = options?.allowLegacyUnscopedToTargetWhenScopedEmpty === true;
   const scopedPrefix = `${ORG_STORAGE_PREFIX}${targetOrgId}:`;
   const scopedMembersKey = `${scopedPrefix}${KEYS.MEMBERS}`;
 
@@ -2036,7 +2038,13 @@ export async function migrateLegacyOrgDataToScopedStorage(
     const orgIdMatches =
       legacyOrgId === targetOrgId ||
       (allowOrg000Mapping && legacyOrgId === "ORG000" && targetOrgId === "ORG001");
-    if (!orgIdMatches) {
+    const allowMissingLegacyOrgIdFallback =
+      !legacyOrgId &&
+      allowUnscopedLegacyMapping &&
+      scopedMembers <= overwriteThreshold &&
+      legacyMembers > 0;
+
+    if (!orgIdMatches && !allowMissingLegacyOrgIdFallback) {
       return { ok: true, migrated: false, reason: "legacy_org_mismatch", legacyMembers, scopedMembers };
     }
 
