@@ -42,6 +42,7 @@ import * as Sharing from "expo-sharing";
 
 type Tab = "transactions" | "transfers" | "loans";
 type FinanceViewScope = "all" | "self" | "member";
+type RecordSortOrder = "newest" | "oldest";
 type TransactionAmountView = "single" | "in_out" | "deposit_withdraw" | "loan_columns";
 type FinancePrintKind = "current" | "summary" | "details";
 type DeleteRequestFieldType = "text" | "date" | "amount" | "member" | "readonly" | "recordType" | "category" | "paymentMethod";
@@ -103,6 +104,20 @@ function formatDateForPrint(value: unknown): string {
   const d = parseDateForPrint(value);
   if (!d) return "-";
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+function parseRecordDateMs(value: unknown): number {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  if (raw.includes("/")) {
+    const [day, month, year] = raw.split("/");
+    const d = new Date(Number(year), Number(month) - 1, Number(day));
+    const ms = d.getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  const d = new Date(raw);
+  const ms = d.getTime();
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function BalanceCard({ label, amount, icon, color }: {
@@ -495,6 +510,7 @@ export default function FinanceScreen() {
   const [keywordSearch, setKeywordSearch] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [recordSortOrder, setRecordSortOrder] = useState<RecordSortOrder>("newest");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [computeReady, setComputeReady] = useState(false);
     const [visibleListCount, setVisibleListCount] = useState(FINANCE_PAGE_SIZE);
@@ -1349,33 +1365,40 @@ export default function FinanceScreen() {
     [getMemberName, keywordNeedle]
   );
 
+  const compareRecordsByDateAndReceipt = useCallback(
+    (a: any, b: any) => {
+      const aMs = parseRecordDateMs(a?.date || a?.issueDate);
+      const bMs = parseRecordDateMs(b?.date || b?.issueDate);
+      if (aMs !== bMs) {
+        return recordSortOrder === "newest" ? bMs - aMs : aMs - bMs;
+      }
+      const aReceipt = String(a?.receiptNumber || a?.id || "");
+      const bReceipt = String(b?.receiptNumber || b?.id || "");
+      return recordSortOrder === "newest"
+        ? bReceipt.localeCompare(aReceipt)
+        : aReceipt.localeCompare(bReceipt);
+    },
+    [recordSortOrder]
+  );
+
   // Filter transactions by date range
   const sortedTxns = useMemo(
-    () => [...computeTransactions]
-    .sort((a, b) => {
-      const getDate = (d: any) => {
-        if (!d) return 0;
-        if (typeof d === 'string' && d.includes('/')) {
-          const [day, month, year] = d.split('/');
-          return new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).getTime();
-        }
-        return new Date(d).getTime();
-      };
-      return (getDate(b.date) || 0) - (getDate(a.date) || 0);
-    })
-    .filter(t => {
-      const d = new Date(t.date);
-      // Reset times for accurate date comparison
-      const start = new Date(startDate); start.setHours(0,0,0,0);
-      const end = new Date(endDate); end.setHours(23,59,59,999);
-      const current = new Date(d);
-      if (typeof t.date === 'string' && t.date.includes('/')) {
-         const [day, month, year] = t.date.split('/');
-         current.setFullYear(parseInt(year), parseInt(month) - 1, parseInt(day));
-      }
-      return current >= start && current <= end;
-    }),
-    [computeTransactions, startDate, endDate]
+    () => {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      const startMs = start.getTime();
+      const endMs = end.getTime();
+
+      return [...computeTransactions]
+        .filter((t) => {
+          const txMs = parseRecordDateMs(t?.date);
+          return txMs >= startMs && txMs <= endMs;
+        })
+        .sort(compareRecordsByDateAndReceipt);
+    },
+    [computeTransactions, startDate, endDate, compareRecordsByDateAndReceipt]
   );
 
   const visibleTxns = useMemo(() => {
@@ -1384,12 +1407,13 @@ export default function FinanceScreen() {
   }, [sortedTxns, scopedMemberId, transactionMatchesScopedMember]);
 
   const sortedLoans = useMemo(
-    () => [...computeLoans].sort((a, b) => {
-      if (a.status === "active" && b.status !== "active") return -1;
-      if (a.status !== "active" && b.status === "active") return 1;
-      return new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime();
-    }),
-    [computeLoans]
+    () =>
+      [...computeLoans].sort((a, b) => {
+        if (a.status === "active" && b.status !== "active") return -1;
+        if (a.status !== "active" && b.status === "active") return 1;
+        return compareRecordsByDateAndReceipt({ issueDate: a.issueDate, id: a.id }, { issueDate: b.issueDate, id: b.id });
+      }),
+    [computeLoans, compareRecordsByDateAndReceipt]
   );
 
   const visibleLoans = useMemo(() => {
@@ -2394,6 +2418,27 @@ export default function FinanceScreen() {
             <Ionicons name="close-circle" size={18} color={Colors.light.textSecondary} />
           </Pressable>
         ) : null}
+      </View>
+      <View style={styles.recordSortRow}>
+        <Text style={styles.recordSortLabel}>အစီအစဉ်</Text>
+        <View style={styles.recordSortChipRow}>
+          <Pressable
+            style={[styles.recordSortChip, recordSortOrder === "newest" && styles.recordSortChipActive]}
+            onPress={() => setRecordSortOrder("newest")}
+          >
+            <Text style={[styles.recordSortChipText, recordSortOrder === "newest" && styles.recordSortChipTextActive]}>
+              နောက်ဆုံးမှစ
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.recordSortChip, recordSortOrder === "oldest" && styles.recordSortChipActive]}
+            onPress={() => setRecordSortOrder("oldest")}
+          >
+            <Text style={[styles.recordSortChipText, recordSortOrder === "oldest" && styles.recordSortChipTextActive]}>
+              အစဆုံးမှစ
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       {/* Date Pickers */}
@@ -3715,6 +3760,43 @@ const styles = StyleSheet.create({
   keywordSearchClearBtn: {
     paddingVertical: 4,
     paddingHorizontal: 2,
+  },
+  recordSortRow: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  recordSortLabel: {
+    fontSize: 12.5,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+  },
+  recordSortChipRow: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  recordSortChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  recordSortChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  recordSortChipText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
+  },
+  recordSortChipTextActive: {
+    color: "white",
   },
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
   dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
