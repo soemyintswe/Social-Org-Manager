@@ -712,11 +712,6 @@ export default function SignInScreen() {
             <Pressable style={styles.forgotBtn} onPress={() => setShowForgotModal(true)}>
               <Text style={styles.forgotBtnText}>Password မေ့နေပါသလား?</Text>
             </Pressable>
-            {!orgClientVariant && !centralAdminVariant ? (
-              <Pressable style={styles.adminLoginBtn} onPress={() => router.push("/admin-sign-in" as any)}>
-                <Text style={styles.adminLoginBtnText}>System Admin Login</Text>
-              </Pressable>
-            ) : null}
             {lockRemainingMs > 0 ? (
               <Text style={styles.lockText}>ယာယီပိတ်ထားပါသည်။ ထပ်မံကြိုးစားရန် ကျန်ချိန်: {lockMessage}</Text>
             ) : null}
@@ -933,8 +928,6 @@ const styles = StyleSheet.create({
   disconnectOrgBtnText: { color: "#B91C1C", fontSize: 12, fontWeight: "700" },
   forgotBtn: { marginTop: 10, alignItems: "center" },
   forgotBtnText: { color: "#0F766E", fontSize: 13, fontWeight: "600" },
-  adminLoginBtn: { marginTop: 8, alignItems: "center" },
-  adminLoginBtnText: { color: "#0369A1", fontSize: 13, fontWeight: "700" },
   helperText: { marginTop: 6, color: "#64748B", fontSize: 12 },
   errorText: { marginTop: 6, color: "#DC2626", fontSize: 12, fontWeight: "600" },
   successText: { marginTop: 6, color: "#059669", fontSize: 12, fontWeight: "600" },
