@@ -311,9 +311,10 @@ export default function AddTransactionScreen() {
   useEffect(() => {
     if (editId) return;
     if (!suggestedReceiptNumber) return;
+    const previousSuggested = String(lastSuggestedReceiptRef.current || "").trim();
     setReceiptNumber((prev) => {
       const normalizedPrev = String(prev || "").trim();
-      if (!normalizedPrev || normalizedPrev === String(lastSuggestedReceiptRef.current || "")) {
+      if (!normalizedPrev || normalizedPrev === previousSuggested) {
         return suggestedReceiptNumber;
       }
       return prev;
