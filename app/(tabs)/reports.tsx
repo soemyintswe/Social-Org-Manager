@@ -185,18 +185,24 @@ function escapeRegExp(value: string): string {
 }
 
 function transactionBelongsToMember(tx: any, memberId: string, memberName: string): boolean {
+  const targetId = String(memberId || "").trim();
+  if (!targetId) return false;
+
   const directId = String(tx?.memberId || "").trim();
-  if (directId && directId === memberId) return true;
+  if (directId && directId === targetId) return true;
 
   const notes = String(tx?.notes || "");
-  if (notes.includes(`(${memberId})`)) return true;
-  const memberIdRegex = new RegExp(`(?:linked_member|linked_member_id|beneficiary_member_id)\\s*=\\s*${escapeRegExp(memberId)}(?:\\b|\\s|$)`, "i");
+  if (notes.includes(`(${targetId})`)) return true;
+  const memberIdRegex = new RegExp(`(?:linked_member|linked_member_id|beneficiary_member_id)\\s*=\\s*${escapeRegExp(targetId)}(?:\\b|\\s|$)`, "i");
   if (memberIdRegex.test(notes)) return true;
+
+  const payerRaw = String(tx?.payerPayee || "").trim();
+  if (payerRaw.includes(`(${targetId})`)) return true;
 
   const nameNorm = normalizeMemberText(memberName);
   if (nameNorm.length >= 2) {
-    const payerNorm = normalizeMemberText(tx?.payerPayee);
-    if (payerNorm && (payerNorm.includes(nameNorm) || nameNorm.includes(payerNorm))) return true;
+    const payerNorm = normalizeMemberText(payerRaw);
+    if (payerNorm && payerNorm === nameNorm) return true;
   }
 
   return false;
