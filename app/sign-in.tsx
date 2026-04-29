@@ -89,6 +89,7 @@ export default function SignInScreen() {
   const [orgBindingRequired, setOrgBindingRequired] = useState(false);
   const [boundOrgId, setBoundOrgId] = useState("");
   const [disconnectingOrg, setDisconnectingOrg] = useState(false);
+  const usernameLookupRefreshTriedRef = useRef(false);
   const passwordInputRef = useRef<TextInput>(null);
 
   const canSubmit = useMemo(() => {
@@ -128,9 +129,27 @@ export default function SignInScreen() {
     }
     setCheckingUsername(true);
     try {
-      const result = await checkUsernameStatus(raw);
+      let result = await checkUsernameStatus(raw);
+      const canRetryLookupFromSync =
+        Platform.OS === "web" &&
+        !orgBindingRequired &&
+        !!boundOrgId &&
+        !usernameLookupRefreshTriedRef.current;
+
+      // Web org-connect flow may need one fresh sync pull before user rows become visible.
+      if (!result.exists && canRetryLookupFromSync) {
+        usernameLookupRefreshTriedRef.current = true;
+        try {
+          await refreshData({ skipPull: false, markLocalMutation: false });
+        } catch {
+          // ignore and keep current result
+        }
+        result = await checkUsernameStatus(raw);
+      }
+
       setUsernameValid(result.canLogin);
       if (!result.exists) return { ok: false };
+      usernameLookupRefreshTriedRef.current = false;
       if (!result.canLogin) {
         const statusLabel = String(result.memberStatusLabel || "").trim();
         const name = String(result.memberName || raw).trim();
@@ -407,7 +426,26 @@ export default function SignInScreen() {
     }
     setIsSigningIn(true);
     try {
-      const result = await attemptLogin(username.trim(), password.trim());
+      const usernameValue = username.trim();
+      const passwordValue = password.trim();
+      let result = await attemptLogin(usernameValue, passwordValue);
+      if (
+        !result.ok &&
+        result.reason === "invalid_username" &&
+        Platform.OS === "web" &&
+        !orgBindingRequired &&
+        !!boundOrgId
+      ) {
+        try {
+          await refreshData({ skipPull: false, markLocalMutation: false });
+          const retried = await attemptLogin(usernameValue, passwordValue);
+          if (retried.ok) {
+            result = retried;
+          }
+        } catch {
+          // ignore refresh/retry error and keep original result
+        }
+      }
       if (result.ok) {
         if (Platform.OS === "web" && typeof window !== "undefined") {
           try {
@@ -613,6 +651,7 @@ export default function SignInScreen() {
                 setUsernameTouched(false);
                 setUsernameValid(null);
                 setUsernameStatusMessage("");
+                usernameLookupRefreshTriedRef.current = false;
               }}
               placeholder="Username"
               autoCapitalize="none"

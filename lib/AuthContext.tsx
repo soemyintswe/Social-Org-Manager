@@ -113,7 +113,9 @@ async function clearLoginGuardState(storage = orgStorage): Promise<void> {
 }
 
 function normalizeText(input: string): string {
-  return toEnglishDigits(String(input || "")).trim();
+  return toEnglishDigits(String(input || ""))
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "")
+    .trim();
 }
 
 function normalizeIdentifier(input: string): string {
