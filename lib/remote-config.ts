@@ -82,10 +82,12 @@ let cachedManagedOrgConfigRaw = "";
 let cachedManagedOrgConfigParsed: ManagedOrgConfigMap | null = null;
 let activeOrgId: string | null = null;
 const registryManagedOrgConfigs: ManagedOrgConfigMap = {};
-const USE_MANAGED_ORG_CONFIGS =
+const EXPLICIT_USE_MANAGED_ORG_CONFIGS =
   String((process.env as any).EXPO_PUBLIC_USE_MANAGED_ORG_CONFIGS || "")
     .trim()
     .toLowerCase() === "true";
+const MANAGED_ORG_CONFIGS_ENV_RAW = String((process.env as any).EXPO_PUBLIC_MANAGED_ORG_CONFIGS || "").trim();
+const USE_MANAGED_ORG_CONFIGS = EXPLICIT_USE_MANAGED_ORG_CONFIGS || !!MANAGED_ORG_CONFIGS_ENV_RAW;
 
 function getRemoteConfigFactory(): RemoteConfigFactory | null {
   if (Platform.OS === "web") return null;
