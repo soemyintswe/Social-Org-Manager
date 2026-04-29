@@ -5771,6 +5771,9 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
   // On web/desktop, prefer proxying cloud calls via the app server to avoid CORS issues.
   if (Platform.OS === "web") {
     const candidates: string[] = [];
+    const fallbackProxyBase = normalizeSyncServerUrl(
+      String((process.env as any).EXPO_PUBLIC_SYNC_PROXY_FALLBACK || "https://social-org-manager.onrender.com")
+    );
     try {
       const origin = String((globalThis as any)?.location?.origin || "").trim().replace(/\/+$/, "");
       if (/^https?:\/\//i.test(origin)) candidates.push(origin);
@@ -5781,6 +5784,13 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
         String(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
       );
       if (configuredUrl) candidates.push(configuredUrl);
+    } catch {}
+    try {
+      const host = String((globalThis as any)?.location?.hostname || "").trim().toLowerCase();
+      const isLocalRuntime = host === "localhost" || host === "127.0.0.1";
+      if (isLocalRuntime && fallbackProxyBase) {
+        candidates.push(fallbackProxyBase);
+      }
     } catch {}
 
     const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));

@@ -9,6 +9,7 @@ import {
   changeUserPassword,
   getAccountSettings,
   getMembers as readMembersFromStorage,
+  pullCloudSnapshotToLocalDetailed,
   getUsers as readUsersFromStorage,
   migrateLegacyOrgDataToScopedStorage,
   resetUserPasswordByIdentifier,
@@ -536,6 +537,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             mergeWhenLegacyHasMoreMembersByAtLeast: 20,
           });
         }
+        await pullCloudSnapshotToLocalDetailed();
         await seedDefaultAdminUser({ allowDefaultDataSeed: false });
         const [freshUsers, freshMembers] = await Promise.all([
           readUsersFromStorage(),
@@ -583,6 +585,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             mergeWhenLegacyHasMoreMembersByAtLeast: 20,
           });
         }
+        await pullCloudSnapshotToLocalDetailed();
         await seedDefaultAdminUser({ allowDefaultDataSeed: false });
         const [freshUsers, freshMembers] = await Promise.all([
           readUsersFromStorage(),
