@@ -23,6 +23,9 @@ type MemberOption = { id: string; name: string };
 type DateFieldKey = "detailStart" | "detailEnd" | "rateStart" | "rateEnd" | "reliefStart" | "reliefEnd";
 type MonthlyFeesTab = "details" | "policy";
 type ViewScope = "all" | "self" | "member";
+type SortDirection = "asc" | "desc";
+type OutstandingSortKey = "memberName" | "memberId" | "dueTotal" | "paidTotal" | "unpaidTotal";
+type PaymentSortKey = "date" | "memberName" | "memberId" | "feePeriod" | "receiptNumber" | "amount";
 type GroupedRateRuleRow = {
   key: string;
   scope: MonthlyFeeRuleScope;
@@ -309,6 +312,14 @@ export default function MonthlyFeesScreen() {
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [detailStart, setDetailStart] = useState("2018-01-01");
   const [detailEnd, setDetailEnd] = useState(todayYmd());
+  const [outstandingSort, setOutstandingSort] = useState<{ key: OutstandingSortKey; direction: SortDirection }>({
+    key: "unpaidTotal",
+    direction: "desc",
+  });
+  const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; direction: SortDirection }>({
+    key: "date",
+    direction: "desc",
+  });
 
   const filteredRateMembers = useMemo(() => {
     const needle = rateSearch.trim().toLowerCase();
@@ -520,10 +531,77 @@ export default function MonthlyFeesScreen() {
     [monthlyFeeSummaryRows]
   );
   const outstandingRows = useMemo(
-    () => monthlyFeeSummaryRows.filter((row) => row.unpaidTotal > 0).slice(0, 40),
-    [monthlyFeeSummaryRows]
+    () => {
+      const rows = monthlyFeeSummaryRows.filter((row) => row.unpaidTotal > 0);
+      const dir = outstandingSort.direction === "asc" ? 1 : -1;
+      const sorted = [...rows].sort((a, b) => {
+        if (outstandingSort.key === "memberName") {
+          return dir * String(a.memberName || "").localeCompare(String(b.memberName || ""));
+        }
+        if (outstandingSort.key === "memberId") {
+          return dir * String(a.memberId || "").localeCompare(String(b.memberId || ""));
+        }
+        const aVal = Number((a as any)?.[outstandingSort.key] || 0);
+        const bVal = Number((b as any)?.[outstandingSort.key] || 0);
+        if (aVal !== bVal) return dir * (aVal - bVal);
+        return String(a.memberId || "").localeCompare(String(b.memberId || ""));
+      });
+      return sorted.slice(0, 40);
+    },
+    [monthlyFeeSummaryRows, outstandingSort]
   );
-  const displayTransactions = useMemo(() => detailTransactions.slice(0, 120), [detailTransactions]);
+  const displayTransactions = useMemo(() => {
+    const dir = paymentSort.direction === "asc" ? 1 : -1;
+    const sorted = [...detailTransactions].sort((a: any, b: any) => {
+      if (paymentSort.key === "date") {
+        const da = parseDateMs(String(a?.date || ""));
+        const db = parseDateMs(String(b?.date || ""));
+        if (da !== db) return dir * (da - db);
+      } else if (paymentSort.key === "memberName") {
+        const an = String(memberNameById.get(String(a?.memberId || "")) || a?.payerPayee || "");
+        const bn = String(memberNameById.get(String(b?.memberId || "")) || b?.payerPayee || "");
+        const cmp = an.localeCompare(bn);
+        if (cmp !== 0) return dir * cmp;
+      } else if (paymentSort.key === "memberId") {
+        const cmp = String(a?.memberId || "").localeCompare(String(b?.memberId || ""));
+        if (cmp !== 0) return dir * cmp;
+      } else if (paymentSort.key === "feePeriod") {
+        const aStart = parseDateMs(String(a?.feePeriodStart || a?.date || ""));
+        const bStart = parseDateMs(String(b?.feePeriodStart || b?.date || ""));
+        if (aStart !== bStart) return dir * (aStart - bStart);
+      } else if (paymentSort.key === "receiptNumber") {
+        const cmp = String(a?.receiptNumber || "").localeCompare(String(b?.receiptNumber || ""));
+        if (cmp !== 0) return dir * cmp;
+      } else if (paymentSort.key === "amount") {
+        const aa = Number(a?.amount || 0);
+        const ba = Number(b?.amount || 0);
+        if (aa !== ba) return dir * (aa - ba);
+      }
+      return String(a?.id || "").localeCompare(String(b?.id || ""));
+    });
+    return sorted.slice(0, 120);
+  }, [detailTransactions, paymentSort, memberNameById]);
+
+  const toggleOutstandingSort = useCallback((key: OutstandingSortKey) => {
+    setOutstandingSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      const defaultDirection: SortDirection = key === "memberName" || key === "memberId" ? "asc" : "desc";
+      return { key, direction: defaultDirection };
+    });
+  }, []);
+
+  const togglePaymentSort = useCallback((key: PaymentSortKey) => {
+    setPaymentSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      const defaultDirection: SortDirection =
+        key === "memberName" || key === "memberId" || key === "receiptNumber" ? "asc" : "desc";
+      return { key, direction: defaultDirection };
+    });
+  }, []);
 
   const resetRateEditor = useCallback(() => {
     setEditingRateRuleIds([]);
@@ -911,11 +989,31 @@ export default function MonthlyFeesScreen() {
                   <View style={styles.tableContainer}>
                     <View style={[styles.tableRow, styles.tableHeaderRow]}>
                       <Text style={[styles.tableHeaderText, { width: 52 }]}>စဉ်</Text>
-                      <Text style={[styles.tableHeaderText, { width: 200 }]}>အသင်းဝင်</Text>
-                      <Text style={[styles.tableHeaderText, { width: 120 }]}>အသင်းဝင် ID</Text>
-                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ကျသင့်ငွေ</Text>
-                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ပေးပြီးငွေ</Text>
-                      <Text style={[styles.tableHeaderText, { width: 140 }]}>ပေးရန်ကျန်</Text>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => toggleOutstandingSort("memberName")}>
+                        <Text style={[styles.tableHeaderText, { width: 200 }]}>
+                          အသင်းဝင်{outstandingSort.key === "memberName" ? (outstandingSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => toggleOutstandingSort("memberId")}>
+                        <Text style={[styles.tableHeaderText, { width: 120 }]}>
+                          အသင်းဝင် ID{outstandingSort.key === "memberId" ? (outstandingSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => toggleOutstandingSort("dueTotal")}>
+                        <Text style={[styles.tableHeaderText, { width: 130 }]}>
+                          ကျသင့်ငွေ{outstandingSort.key === "dueTotal" ? (outstandingSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => toggleOutstandingSort("paidTotal")}>
+                        <Text style={[styles.tableHeaderText, { width: 130 }]}>
+                          ပေးပြီးငွေ{outstandingSort.key === "paidTotal" ? (outstandingSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => toggleOutstandingSort("unpaidTotal")}>
+                        <Text style={[styles.tableHeaderText, { width: 140 }]}>
+                          ပေးရန်ကျန်{outstandingSort.key === "unpaidTotal" ? (outstandingSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
                     </View>
                     {outstandingRows.map((row, idx) => (
                       <View key={`out-${row.memberId}-${idx}`} style={[styles.tableRow, idx % 2 === 1 && styles.tableAltRow]}>
@@ -941,12 +1039,36 @@ export default function MonthlyFeesScreen() {
                   <View style={styles.tableContainer}>
                     <View style={[styles.tableRow, styles.tableHeaderRow]}>
                       <Text style={[styles.tableHeaderText, { width: 52 }]}>စဉ်</Text>
-                      <Text style={[styles.tableHeaderText, { width: 120 }]}>ရက်စွဲ</Text>
-                      <Text style={[styles.tableHeaderText, { width: 200 }]}>အသင်းဝင်</Text>
-                      <Text style={[styles.tableHeaderText, { width: 120 }]}>အသင်းဝင် ID</Text>
-                      <Text style={[styles.tableHeaderText, { width: 220 }]}>လစဉ်ကြေးကာလ</Text>
-                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ပြေစာ</Text>
-                      <Text style={[styles.tableHeaderText, { width: 130 }]}>ပမာဏ</Text>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => togglePaymentSort("date")}>
+                        <Text style={[styles.tableHeaderText, { width: 120 }]}>
+                          ရက်စွဲ{paymentSort.key === "date" ? (paymentSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => togglePaymentSort("memberName")}>
+                        <Text style={[styles.tableHeaderText, { width: 200 }]}>
+                          အသင်းဝင်{paymentSort.key === "memberName" ? (paymentSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => togglePaymentSort("memberId")}>
+                        <Text style={[styles.tableHeaderText, { width: 120 }]}>
+                          အသင်းဝင် ID{paymentSort.key === "memberId" ? (paymentSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => togglePaymentSort("feePeriod")}>
+                        <Text style={[styles.tableHeaderText, { width: 220 }]}>
+                          လစဉ်ကြေးကာလ{paymentSort.key === "feePeriod" ? (paymentSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => togglePaymentSort("receiptNumber")}>
+                        <Text style={[styles.tableHeaderText, { width: 130 }]}>
+                          ပြေစာ{paymentSort.key === "receiptNumber" ? (paymentSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.tableHeaderBtn} onPress={() => togglePaymentSort("amount")}>
+                        <Text style={[styles.tableHeaderText, { width: 130 }]}>
+                          ပမာဏ{paymentSort.key === "amount" ? (paymentSort.direction === "asc" ? " ▲" : " ▼") : ""}
+                        </Text>
+                      </Pressable>
                     </View>
                     {displayTransactions.map((t: any, idx: number) => {
                       const rowUi = (
@@ -1439,6 +1561,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#0F766E",
     borderBottomColor: "#0F766E",
     minHeight: 42,
+  },
+  tableHeaderBtn: {
+    justifyContent: "center",
   },
   tableAltRow: {
     backgroundColor: "#F8FAFC",
