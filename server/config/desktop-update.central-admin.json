@@ -1,0 +1,10 @@
+{
+  "variant": "central-admin",
+  "latestVersion": "1.1.74",
+  "latestBuildNumber": "74",
+  "minimumVersion": "1.0.0",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/Org-Registry-Central-Admin-Setup-v1.1.74.exe",
+  "notes": "Central Admin desktop update channel is active.",
+  "force": false,
+  "publishedAt": "2026-04-29T20:50:00.000Z"
+}

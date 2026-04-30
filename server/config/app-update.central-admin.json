@@ -1,0 +1,10 @@
+{
+  "variant": "central-admin",
+  "latestVersion": "1.1.74",
+  "latestBuildNumber": "75",
+  "minimumVersion": "1.0.0",
+  "downloadUrl": "https://github.com/soemyintswe/Social-Org-Manager/releases/latest/download/org-registry-central-admin-v1.1.74-202604270302.apk",
+  "notes": "Central Admin mobile update channel is active.",
+  "force": false,
+  "publishedAt": "2026-04-29T20:50:00.000Z"
+}
