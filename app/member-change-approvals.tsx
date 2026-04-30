@@ -697,6 +697,8 @@ export default function MemberChangeApprovalsScreen() {
           (tab === "pending" ? filteredPendingRequests : filteredHistoryRequests).map((item) => {
             const member = item.payload.member || {};
             const currentMember = members.find((m) => m.id === (item.targetMemberId || (member.id as string)));
+            const targetMemberId = item.targetMemberId || (member.id as string) || "-";
+            const targetMemberName = String(currentMember?.name || member.name || "").trim();
             const changeLines = buildChangeLines(item, currentMember, 8);
             const assignedToOther =
               !!item.assignedReviewerUserId &&
@@ -708,7 +710,8 @@ export default function MemberChangeApprovalsScreen() {
             return (
               <View key={item.id} style={styles.card}>
                 <Text style={styles.title}>
-                  {item.action.toUpperCase()} {item.targetMemberId || (member.id as string) || "-"}
+                  {item.action.toUpperCase()}{" "}
+                  {targetMemberName ? `${targetMemberName} (${targetMemberId})` : targetMemberId}
                 </Text>
                 <Text style={styles.meta}>By: {userDisplayById.get(item.createdByUserId || "") || item.createdByUserId}</Text>
                 <Text style={styles.meta}>At: {new Date(item.createdAt).toLocaleString()}</Text>

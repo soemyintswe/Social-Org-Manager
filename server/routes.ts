@@ -12,6 +12,7 @@ type SyncSnapshot = {
 
 type AppUpdateConfig = {
   latestVersion: string;
+  latestBuildNumber?: string | number;
   minimumVersion?: string;
   downloadUrl: string;
   notes?: string;
@@ -61,6 +62,12 @@ function compareVersion(left: string, right: string): number {
   return 0;
 }
 
+function parseBuildNumber(value: unknown): number | null {
+  const n = Number(String(value ?? "").replace(/[^\d]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 function readSnapshot(): SyncSnapshot | null {
   try {
     const filePath = getSnapshotFilePath();
@@ -81,23 +88,16 @@ function writeSnapshot(snapshot: SyncSnapshot): void {
 }
 
 function normalizeCloudProxyEndpoint(raw: string): string | null {
-  try {
-    const parsed = new URL(String(raw || "").trim());
-    if (parsed.protocol !== "https:") return null;
-    if (parsed.username || parsed.password) return null;
-    if (parsed.search || parsed.hash) return null;
-    if (parsed.port) return null;
-    // Strictly allow only Google Apps Script deployment endpoints.
-    const isAppsScriptHost = parsed.hostname.toLowerCase() === "script.google.com";
-    if (!isAppsScriptHost) return null;
-    const match = parsed.pathname.match(/^\/macros\/s\/([A-Za-z0-9_-]+)\/exec\/?$/);
-    if (!match) return null;
-    const deploymentId = match[1];
-    // Rebuild endpoint from validated parts so fetch target host/path are server-controlled.
-    return new URL(`/macros/s/${deploymentId}/exec`, "https://script.google.com").toString();
-  } catch {
-    return null;
-  }
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  // Only accept exact Google Apps Script deployment URL format.
+  const match = value.match(
+    /^https:\/\/script\.google\.com\/macros\/s\/([A-Za-z0-9_-]+)\/exec\/?$/i,
+  );
+  if (!match) return null;
+  const deploymentId = match[1];
+  // Build upstream URL from trusted constant host + validated deployment id.
+  return `https://script.google.com/macros/s/${deploymentId}/exec`;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -160,14 +160,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       delete (payload as any).endpoint;
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12000);
+      const timeout = setTimeout(() => controller.abort(), 45000);
       let upstream: Response;
       try {
         upstream = await fetch(normalizedEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-          redirect: "error",
+          redirect: "follow",
           signal: controller.signal,
         });
       } finally {
@@ -200,9 +200,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const currentVersion = String(req.query.version || "").trim();
-      const hasUpdate = currentVersion
+      const currentBuildNumber = parseBuildNumber(req.query.build);
+      const latestBuildNumber = parseBuildNumber(config.latestBuildNumber);
+
+      const hasUpdateByVersion = currentVersion
         ? compareVersion(config.latestVersion, currentVersion) > 0
         : true;
+      const hasUpdateByBuild =
+        currentBuildNumber !== null && latestBuildNumber !== null
+          ? latestBuildNumber > currentBuildNumber
+          : false;
+      const hasUpdate = hasUpdateByVersion || hasUpdateByBuild;
       const mustUpdate = !!(
         config.minimumVersion &&
         currentVersion &&
@@ -212,6 +220,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({
         ok: true,
         latestVersion: config.latestVersion,
+        latestBuildNumber: config.latestBuildNumber ? String(config.latestBuildNumber) : "",
         minimumVersion: config.minimumVersion || "",
         downloadUrl: config.downloadUrl,
         notes: config.notes || "",

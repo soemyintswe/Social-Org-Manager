@@ -1,13 +1,110 @@
 import React, { useState } from "react";
 import { StyleSheet, Text, View, Button, Pressable } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Colors from "@/constants/colors";
+import { useData } from "@/lib/DataContext";
+import { MEMBER_STATUS_LABELS, normalizeMemberStatus } from "@/lib/types";
+
+const PENDING_LAN_URL_KEY = "@orghub_pending_lan_url";
+const LAN_QR_PREFIX = "ORGHUB_LAN:";
+const LAN_QR_PREFIX_ALT = "ORGHUB_LAN|";
+
+type ParsedMemberCardPayload = {
+  memberId: string;
+  raw: string;
+  source: "plain" | "prefixed" | "json";
+  encodedName?: string;
+  encodedJoinDate?: string;
+};
+
+type VerificationStatus = "official" | "inactive" | "mismatch" | "not_found" | "invalid";
+
+type VerificationResult = {
+  status: VerificationStatus;
+  message: string;
+  member?: any;
+  payload?: ParsedMemberCardPayload;
+  mismatches?: string[];
+};
+
+type LanScanResult = {
+  status: "ok" | "invalid";
+  message: string;
+  url?: string;
+};
+
+const parseMemberCardPayload = (data: string): ParsedMemberCardPayload | null => {
+  const raw = String(data || "").trim();
+  if (!raw) return null;
+
+  const parseJsonPayload = (jsonText: string): ParsedMemberCardPayload | null => {
+    try {
+      const obj = JSON.parse(jsonText);
+      const memberId = String(obj?.memberId || obj?.id || "").trim();
+      if (!memberId) return null;
+      return {
+        memberId,
+        raw,
+        source: "json",
+        encodedName: obj?.name ? String(obj.name).trim() : "",
+        encodedJoinDate: obj?.joinDate ? String(obj.joinDate).trim() : "",
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  if (raw.startsWith("ORGHUB_MEMBER:")) {
+    const inner = raw.slice("ORGHUB_MEMBER:".length).trim();
+    if (!inner) return null;
+    if (inner.startsWith("{")) {
+      const parsed = parseJsonPayload(inner);
+      if (parsed) return { ...parsed, source: "prefixed" };
+    }
+    return { memberId: inner, raw, source: "prefixed" };
+  }
+
+  if (raw.startsWith("{")) {
+    const parsed = parseJsonPayload(raw);
+    if (parsed) return parsed;
+  }
+
+  return { memberId: raw, raw, source: "plain" };
+};
+
+const parseLanQrPayload = (data: string): string => {
+  const raw = String(data || "").trim();
+  if (!raw) return "";
+  let candidate = raw;
+  if (raw.startsWith(LAN_QR_PREFIX)) {
+    candidate = raw.slice(LAN_QR_PREFIX.length).trim();
+  } else if (raw.startsWith(LAN_QR_PREFIX_ALT)) {
+    const parts = raw.split("|");
+    candidate = parts[1] ? String(parts[1]).trim() : "";
+  }
+  if (!candidate) return "";
+  const withProtocol = /^https?:\/\//i.test(candidate) ? candidate : `http://${candidate}`;
+  try {
+    const parsed = new URL(withProtocol);
+    return parsed.href.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+};
 
 export default function QRScannerScreen() {
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const isMemberVerifyMode = String(mode || "") === "member_verify";
+  const isLanSyncMode = String(mode || "") === "lan_sync";
+  const { members = [] } = useData() as any;
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  const [lanResult, setLanResult] = useState<LanScanResult | null>(null);
   const insets = useSafeAreaInsets();
 
   if (!permission) {
@@ -28,9 +125,102 @@ export default function QRScannerScreen() {
 
   const handleBarCodeScanned = ({ data }: { data: string }) => {
     setScanned(true);
-    // QR Code ထဲမှာ Member ID ပါတယ်လို့ ယူဆပြီး Detail ကို ပို့ပါမယ်
-    router.replace({ pathname: "/member-detail", params: { id: data } } as any);
+    if (isLanSyncMode) {
+      const resolved = parseLanQrPayload(data);
+      if (!resolved) {
+        setLanResult({ status: "invalid", message: "LAN QR Data မမှန်ကန်ပါ။" });
+        return;
+      }
+      void AsyncStorage.setItem(PENDING_LAN_URL_KEY, resolved);
+      setLanResult({ status: "ok", message: "LAN URL ကိုသိမ်းပြီးပါပြီ။ Account Settings မှ Save လုပ်ပါ။", url: resolved });
+      return;
+    }
+    const payload = parseMemberCardPayload(data);
+
+    if (!payload) {
+      if (isMemberVerifyMode) {
+        setVerificationResult({
+          status: "invalid",
+          message: "QR Data မမှန်ကန်ပါ။",
+        });
+      } else {
+        setScanned(false);
+      }
+      return;
+    }
+
+    const matchedMember = members.find((member: any) => String(member?.id || "").trim() === payload.memberId);
+
+    if (!isMemberVerifyMode) {
+      if (matchedMember?.id) {
+        router.replace({ pathname: "/member-detail", params: { id: String(matchedMember.id) } } as any);
+      } else {
+        setScanned(false);
+      }
+      return;
+    }
+
+    if (!matchedMember) {
+      setVerificationResult({
+        status: "not_found",
+        message: `Member ID (${payload.memberId}) ကို system တွင် မတွေ့ပါ။`,
+        payload,
+      });
+      return;
+    }
+
+    const mismatches: string[] = [];
+    if (payload.encodedName && String(matchedMember?.name || "").trim() !== String(payload.encodedName || "").trim()) {
+      mismatches.push("အမည်");
+    }
+    if (payload.encodedJoinDate && String(matchedMember?.joinDate || "").trim() !== String(payload.encodedJoinDate || "").trim()) {
+      mismatches.push("အသင်းဝင်ရက်");
+    }
+
+    const normalizedStatus = normalizeMemberStatus(matchedMember?.status || "active");
+    if (normalizedStatus !== "active") {
+      setVerificationResult({
+        status: "inactive",
+        message: `ဤကဒ်သည် Member Status "${MEMBER_STATUS_LABELS[normalizedStatus]}" ဖြစ်နေပါသည်။`,
+        member: matchedMember,
+        payload,
+      });
+      return;
+    }
+
+    if (mismatches.length > 0) {
+      setVerificationResult({
+        status: "mismatch",
+        message: `QR Data နှင့် system data မကိုက်ညီပါ (${mismatches.join(", ")})။`,
+        member: matchedMember,
+        payload,
+        mismatches,
+      });
+      return;
+    }
+
+    setVerificationResult({
+      status: "official",
+      message: "OFFICIAL MEMBER အတည်ပြုပြီးပါပြီ။",
+      member: matchedMember,
+      payload,
+    });
   };
+
+  const resetScanner = () => {
+    setScanned(false);
+    setVerificationResult(null);
+    setLanResult(null);
+  };
+
+  const statusMeta = (() => {
+    if (!verificationResult) return { color: "#64748B", icon: "help-circle-outline" as const };
+    if (verificationResult.status === "official") return { color: "#059669", icon: "checkmark-circle-outline" as const };
+    if (verificationResult.status === "inactive") return { color: "#D97706", icon: "alert-circle-outline" as const };
+    if (verificationResult.status === "mismatch") return { color: "#DC2626", icon: "warning-outline" as const };
+    if (verificationResult.status === "not_found") return { color: "#334155", icon: "close-circle-outline" as const };
+    return { color: "#334155", icon: "help-circle-outline" as const };
+  })();
 
   return (
     <View style={styles.container}>
@@ -51,7 +241,13 @@ export default function QRScannerScreen() {
         </View>
         
         <View style={styles.scanFrameContainer}>
-            <Text style={styles.instruction}>Member Card QR Code ကို ဖတ်ပါ</Text>
+            <Text style={styles.instruction}>
+              {isLanSyncMode
+                ? "LAN Sync QR Code ကို ဖတ်ပါ"
+                : isMemberVerifyMode
+                ? "OFFICIAL MEMBER CARD QR Code ကို ဖတ်ပါ"
+                : "Member Card QR Code ကို ဖတ်ပါ"}
+            </Text>
             <View style={styles.scanFrame}>
                 <View style={styles.cornerTL} />
                 <View style={styles.cornerTR} />
@@ -61,11 +257,87 @@ export default function QRScannerScreen() {
         </View>
       </View>
 
-      {scanned && (
-        <View style={styles.rescanContainer}>
-            <Button title={"Tap to Scan Again"} onPress={() => setScanned(false)} />
-        </View>
-      )}
+      {scanned &&
+        (isLanSyncMode ? (
+          <View style={styles.resultSheet}>
+            <View style={styles.resultHeader}>
+              <Ionicons
+                name={lanResult?.status === "ok" ? "checkmark-circle-outline" : "alert-circle-outline"}
+                size={22}
+                color={lanResult?.status === "ok" ? "#059669" : "#DC2626"}
+              />
+              <Text
+                style={[
+                  styles.resultTitle,
+                  { color: lanResult?.status === "ok" ? "#059669" : "#DC2626" },
+                ]}
+              >
+                {lanResult?.status === "ok" ? "LAN URL Saved" : "Invalid QR"}
+              </Text>
+            </View>
+            <Text style={styles.resultText}>{lanResult?.message || "-"}</Text>
+            {lanResult?.url ? (
+              <View style={styles.memberInfoCard}>
+                <Text style={styles.memberInfoText}>URL: {lanResult.url}</Text>
+              </View>
+            ) : null}
+            <View style={styles.resultActions}>
+              <Pressable style={[styles.resultBtn, styles.resultBtnPrimary]} onPress={() => router.back()}>
+                <Text style={styles.resultBtnPrimaryText}>Close</Text>
+              </Pressable>
+              <Pressable style={[styles.resultBtn, styles.resultBtnGhost]} onPress={resetScanner}>
+                <Text style={styles.resultBtnGhostText}>ထပ်မံ Scan</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : isMemberVerifyMode ? (
+          <View style={styles.resultSheet}>
+            <View style={styles.resultHeader}>
+              <Ionicons name={statusMeta.icon} size={22} color={statusMeta.color} />
+              <Text style={[styles.resultTitle, { color: statusMeta.color }]}>
+                {verificationResult?.status === "official"
+                  ? "Official Member"
+                  : verificationResult?.status === "inactive"
+                    ? "Inactive Member"
+                    : verificationResult?.status === "mismatch"
+                      ? "Data Mismatch"
+                      : verificationResult?.status === "not_found"
+                        ? "Member Not Found"
+                        : "Invalid QR"}
+              </Text>
+            </View>
+            <Text style={styles.resultText}>{verificationResult?.message || "-"}</Text>
+            {verificationResult?.member ? (
+              <View style={styles.memberInfoCard}>
+                <Text style={styles.memberInfoText}>အမည်: {verificationResult.member.name || "-"}</Text>
+                <Text style={styles.memberInfoText}>ID: {verificationResult.member.id || "-"}</Text>
+                <Text style={styles.memberInfoText}>
+                  Status: {MEMBER_STATUS_LABELS[normalizeMemberStatus(verificationResult.member.status || "active")]}
+                </Text>
+                <Text style={styles.memberInfoText}>Join Date: {verificationResult.member.joinDate || "-"}</Text>
+              </View>
+            ) : null}
+            <View style={styles.resultActions}>
+              {verificationResult?.member?.id ? (
+                <Pressable
+                  style={[styles.resultBtn, styles.resultBtnPrimary]}
+                  onPress={() =>
+                    router.replace({ pathname: "/member-detail", params: { id: String(verificationResult.member.id) } } as any)
+                  }
+                >
+                  <Text style={styles.resultBtnPrimaryText}>အသေးစိတ်ကြည့်မည်</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={[styles.resultBtn, styles.resultBtnGhost]} onPress={resetScanner}>
+                <Text style={styles.resultBtnGhostText}>ထပ်မံ Scan</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.rescanContainer}>
+            <Button title={"Tap to Scan Again"} onPress={resetScanner} />
+          </View>
+        ))}
     </View>
   );
 }
@@ -125,5 +397,72 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
-  }
+  },
+  resultSheet: {
+    position: "absolute",
+    left: 14,
+    right: 14,
+    bottom: 24,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  resultHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+  },
+  resultTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  resultText: {
+    fontSize: 13,
+    color: Colors.light.text,
+    lineHeight: 19,
+  },
+  memberInfoCard: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+    gap: 2,
+  },
+  memberInfoText: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  resultActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+    marginTop: 12,
+  },
+  resultBtn: {
+    borderRadius: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+  },
+  resultBtnPrimary: {
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.tint,
+  },
+  resultBtnGhost: {
+    borderColor: Colors.light.border,
+    backgroundColor: "#fff",
+  },
+  resultBtnPrimaryText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  resultBtnGhostText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.light.text,
+  },
 });

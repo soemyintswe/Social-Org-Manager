@@ -21,11 +21,19 @@ export interface Member {
   color: string;
   role: string;
   orgPosition?: OrgPosition;
+  orgPositionHistory?: MemberOrgPositionHistoryEntry[];
   resignDate?: string;
   statusDate?: string;
   statusNote?: string;
   profileImage?: string;
   familyMembers?: MemberFamilyMember[];
+}
+
+export interface MemberOrgPositionHistoryEntry {
+  id: string;
+  position: OrgPosition;
+  effectiveDate: string;
+  note?: string;
 }
 
 export type MemberGender = "male" | "female" | "other";
@@ -57,6 +65,7 @@ export interface OrgEvent {
   createdAt: string;
   createdByUserId?: string;
   createdByMemberId?: string;
+  senderPhone?: string;
 }
 
 export type ChatThreadType = "direct" | "group";
@@ -83,6 +92,11 @@ export interface ChatMessage {
   text?: string;
   image?: string;
   createdAt: string;
+  updatedAt?: string;
+  editedAt?: string;
+  deletedAt?: string;
+  deletedByUserId?: string;
+  isDeleted?: boolean;
   replyToMessageId?: string;
   replyToUserId?: string;
   replyToDisplayName?: string;
@@ -125,10 +139,70 @@ export interface AccountSettings {
   receivingBankAccountName?: string;
   receivingKbzPayPhone?: string;
   receivingKbzPayAccountName?: string;
+  receivingKbzPayMmqr?: string;
   receivingWavePayPhone?: string;
   receivingWavePayAccountName?: string;
+  receivingWavePayMmqr?: string;
   receivingAyaPayPhone?: string;
   receivingAyaPayAccountName?: string;
+  receivingAyaPayMmqr?: string;
+  monthlyFeeRateRules?: MonthlyFeeRateRule[];
+  monthlyFeeReliefRules?: MonthlyFeeReliefRule[];
+  monthlyFeePolicyRequests?: MonthlyFeePolicyRequest[];
+}
+
+export type MonthlyFeeRuleScope = "global" | "position" | "member";
+export type MonthlyFeeReliefMode = "full" | "percent" | "fixed";
+
+export interface MonthlyFeeRateRule {
+  id: string;
+  scope: MonthlyFeeRuleScope;
+  amount: number;
+  effectiveFrom: string; // YYYY-MM-DD
+  effectiveTo?: string; // YYYY-MM-DD
+  position?: OrgPosition;
+  memberId?: string;
+  reason?: string;
+  active?: boolean;
+  updatedAt?: string;
+  updatedByUserId?: string;
+}
+
+export interface MonthlyFeeReliefRule {
+  id: string;
+  scope: MonthlyFeeRuleScope;
+  mode: MonthlyFeeReliefMode;
+  value?: number; // percent/fixed အတွက် တန်ဖိုး
+  effectiveFrom: string; // YYYY-MM-DD
+  effectiveTo?: string; // YYYY-MM-DD
+  position?: OrgPosition;
+  memberId?: string;
+  reason?: string;
+  active?: boolean;
+  updatedAt?: string;
+  updatedByUserId?: string;
+}
+
+export type MonthlyFeePolicyRequestType = "rate_rule" | "relief_rule";
+export type MonthlyFeePolicyAction = "create" | "delete";
+export type MonthlyFeePolicyRequestStatus = "pending_chair_approval" | "approved" | "rejected";
+
+export interface MonthlyFeePolicyRequest {
+  id: string;
+  policyType: MonthlyFeePolicyRequestType;
+  action: MonthlyFeePolicyAction;
+  payload: MonthlyFeeRateRule | MonthlyFeeReliefRule;
+  targetRuleId?: string;
+  status: MonthlyFeePolicyRequestStatus;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdByRole?: OrgPosition;
+  createdAt: string;
+  reviewNote?: string;
+  reviewedByUserId?: string;
+  reviewedByMemberId?: string;
+  reviewedAt?: string;
+  appliedAt?: string;
 }
 
 export type TransactionType = "income" | "expense";
@@ -197,9 +271,26 @@ export interface Loan {
   memberId: string;
   principal: number;
   interestRate: number;
+  amount?: number;
+  principalAmount?: number;
+  date?: string;
+  notes?: string;
   issueDate: string;
   dueDate?: string;
   repaymentDate?: string;
+  interestRateOverride?: number;
+  interestCalcFromDate?: string;
+  interestCalcToDate?: string;
+  interestCalcMonths?: number;
+  interestSuspensionFromDate?: string;
+  interestSuspensionToDate?: string;
+  interestSuspensionMonths?: number;
+  interestDiscountPercent?: number;
+  interestDiscountAmount?: number;
+  interestWaivedPercent?: number;
+  interestWaivedAmount?: number;
+  interestSuspended?: boolean;
+  interestAdjustmentNote?: string;
   status: "active" | "paid";
   description: string;
   createdAt: string;
@@ -259,6 +350,134 @@ export interface MemberChangeRequest {
   reviewedByUserId?: string;
   reviewedAt?: string;
   reviewNote?: string;
+}
+
+export type AuditChangeRequestStatus = "pending" | "approved" | "rejected" | "cancelled" | "suspended";
+export type AuditChangeMessageType = "note" | "reply" | "forward" | "decision" | "system";
+export type AuditChangeRequestKind = "update" | "delete";
+export type AuditChangeTargetType = "transaction" | "loan";
+export type AuditChangeWorkflowStage = "auditor_review" | "chair_approval" | "treasurer_execution" | "completed";
+
+export interface AuditChangeRequestMessage {
+  id: string;
+  requestId: string;
+  messageType: AuditChangeMessageType;
+  note: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  toRole?: OrgPosition;
+  toUserId?: string;
+  tagUserIds?: string[];
+  replyToMessageId?: string;
+  createdAt: string;
+}
+
+export interface AuditChangeRevision {
+  id: string;
+  requestId: string;
+  transactionId: string;
+  byUserId: string;
+  byMemberId?: string;
+  note?: string;
+  before: Record<string, any>;
+  patch: Record<string, any>;
+  after: Record<string, any>;
+  createdAt: string;
+}
+
+export interface AuditChangeDraft {
+  values: Record<string, any>;
+  note?: string;
+  byUserId?: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  updatedAt: string;
+}
+
+export type AuditChangeDrafts = Partial<{
+  treasurer: AuditChangeDraft;
+  auditor: AuditChangeDraft;
+  chairperson: AuditChangeDraft;
+}>;
+
+export type AuditExecutionAction = "update_applied" | "delete_executed";
+
+export interface AuditExecutionLog {
+  id: string;
+  requestId: string;
+  requestNumber?: string;
+  requestKind: AuditChangeRequestKind;
+  action: AuditExecutionAction;
+  targetType: AuditChangeTargetType;
+  targetId: string;
+  transactionId?: string;
+  relatedLoanId?: string;
+  statusAtExecution: AuditChangeRequestStatus;
+  workflowStageAtExecution?: AuditChangeWorkflowStage;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note?: string;
+  before?: Record<string, any>;
+  patch?: Record<string, any>;
+  after?: Record<string, any>;
+  affectedTransactionIds?: string[];
+  createdAt: string;
+}
+
+export interface AuditChangeRequest {
+  id: string;
+  requestNumber: string;
+  requestKind: AuditChangeRequestKind;
+  targetType: AuditChangeTargetType;
+  targetId: string;
+  transactionId?: string;
+  relatedLoanId?: string;
+  originalSnapshot?: Record<string, any>;
+  initiatedByRole?: OrgPosition;
+  status: AuditChangeRequestStatus;
+  workflowStage?: AuditChangeWorkflowStage;
+  auditNote: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdAt: string;
+  updatedAt: string;
+  assignedRole?: OrgPosition;
+  reviewedByUserId?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+  escalatedToChairAt?: string;
+  escalatedByUserId?: string;
+  chairApprovedByUserId?: string;
+  chairApprovedAt?: string;
+  treasurerConfirmedByUserId?: string;
+  treasurerConfirmedAt?: string;
+  resolvedTransactionId?: string;
+  messages: AuditChangeRequestMessage[];
+  revisions: AuditChangeRevision[];
+  drafts?: AuditChangeDrafts;
+}
+
+export type AppNotificationCategory =
+  | "audit_change"
+  | "delete_request"
+  | "payment_request"
+  | "expense_claim"
+  | "system";
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  description: string;
+  category: AppNotificationCategory;
+  createdAt: string;
+  createdByUserId?: string;
+  createdByMemberId?: string;
+  targetUserIds: string[];
+  relatedType?: string;
+  relatedId?: string;
+  readByUserIds?: string[];
 }
 
 export type ClaimantType = "SELF" | "BEHALF_MEMBER" | "BEHALF_FAMILY" | "OTHER";

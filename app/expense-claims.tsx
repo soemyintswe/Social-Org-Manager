@@ -1,16 +1,16 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AccessDenied from "@/components/AccessDenied";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { normalizeOrgPosition, type ExpenseClaim, type StandardAmountChangeRequest, type StandardAmountRule } from "@/lib/types";
 
 type Tab = "claims" | "amounts";
@@ -96,7 +96,9 @@ function eventRequiredForCategory(categoryId: string): boolean {
 }
 
 export default function ExpenseClaimsScreen() {
+  const { openCreate: openCreateParam } = useLocalSearchParams<{ openCreate?: string }>();
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const {
     members = [],
     events = [],
@@ -115,8 +117,12 @@ export default function ExpenseClaimsScreen() {
 
   const canViewFinance = can("finance.view_summary") || can("finance.view_detail") || can("finance.view_self") || can("finance.view_all");
   const role = normalizeOrgPosition(currentMember?.orgPosition || currentUser?.orgPosition || "member");
-  const canApprove = currentUser?.systemRole === "admin" || role === "patron" || role === "chairperson" || role === "vice_chairperson";
-  const canDisburse = currentUser?.systemRole === "admin" || role === "treasurer";
+  const canApprove = role === "patron" || role === "chairperson" || role === "vice_chairperson";
+  const canDisburse = role === "treasurer";
+  const shouldOpenCreateFromParam = useMemo(() => {
+    const value = String(openCreateParam || "").trim().toLowerCase();
+    return value === "1" || value === "true" || value === "yes" || value === "open";
+  }, [openCreateParam]);
 
   const [tab, setTab] = useState<Tab>("claims");
   const [customExpenseCategories, setCustomExpenseCategories] = useState<{ id: string; label: string }[]>([]);
@@ -227,14 +233,14 @@ export default function ExpenseClaimsScreen() {
     if (claimRule && claimRule.enabled && Number(claimRule.amount || 0) > 0) {
       setRequestedAmount(String(claimRule.amount));
     }
-  }, [claimRule?.key, claimRule?.amount, claimRule?.enabled]);
+  }, [claimRule]);
 
   useEffect(() => {
     if (!selectedEvent) return;
     if (normalizeText(reason)) return;
     const text = normalizeText(selectedEvent?.summary) || normalizeText(selectedEvent?.detail) || normalizeText(selectedEvent?.description);
     if (text) setReason(text);
-  }, [selectedEvent?.id]);
+  }, [selectedEvent, reason]);
 
   const visibleClaims = useMemo(() => {
     const rows: ExpenseClaim[] = [...(expenseClaims || [])].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -285,18 +291,9 @@ export default function ExpenseClaimsScreen() {
     };
   }, [
     claimantType,
-    currentMember?.name,
-    currentMember?.id,
-    currentMember?.nrc,
-    currentMember?.phone,
-    (currentMember as any)?.address,
-    currentUser?.displayName,
-    currentUser?.memberId,
-    selectedMember?.name,
-    selectedMember?.id,
-    selectedMember?.nrc,
-    selectedMember?.phone,
-    (selectedMember as any)?.address,
+    currentMember,
+    currentUser,
+    selectedMember,
     familyClaimantName,
     manualName,
     manualNrc,
@@ -368,7 +365,7 @@ export default function ExpenseClaimsScreen() {
     return ruleKey;
   };
 
-  const resetClaimForm = () => {
+  const resetClaimForm = useCallback(() => {
     setClaimDate(todayYmd());
     setClaimTime(nowHm());
     setCategoryId("health_support");
@@ -389,12 +386,17 @@ export default function ExpenseClaimsScreen() {
     setReason("");
     setRequestedAmount("");
     setSelectedEventId("");
-  };
+  }, [currentMember?.id]);
 
-  const openClaimModal = () => {
+  const openClaimModal = useCallback(() => {
     resetClaimForm();
     setShowClaimModal(true);
-  };
+  }, [resetClaimForm]);
+
+  useEffect(() => {
+    if (!shouldOpenCreateFromParam) return;
+    openClaimModal();
+  }, [shouldOpenCreateFromParam, openClaimModal]);
 
   const navigateToAddEvent = async () => {
     await saveClaimDraft();
@@ -671,17 +673,17 @@ export default function ExpenseClaimsScreen() {
   if (!canViewFinance) return <AccessDenied showBack={true} />;
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}> 
+    <KeyboardAvoidingView
+      style={[styles.container, { paddingTop: insets.top }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+    >
       <View style={styles.header}>
         <View style={styles.topRow}>
-          <Pressable style={styles.homeBtn} onPress={() => router.replace("/" as any)}>
-            <Ionicons name="home-outline" size={20} color={Colors.light.text} />
-          </Pressable>
           <Pressable style={styles.createBtn} onPress={openClaimModal}>
             <Ionicons name="add-circle-outline" size={18} color="white" />
             <Text style={styles.createBtnText}>ငွေတောင်းခံရန်</Text>
           </Pressable>
-          <View style={styles.rightSpacer} />
         </View>
         <Text style={styles.headerTitle}>ငွေတောင်းခံလွှာများ</Text>
       </View>
@@ -752,7 +754,17 @@ export default function ExpenseClaimsScreen() {
       )}
 
       <Modal visible={showClaimModal} transparent animationType="slide" onRequestClose={() => setShowClaimModal(false)}>
-        <View style={styles.modalWrap}><View style={styles.modalBox}><ScrollView keyboardShouldPersistTaps="handled">
+        <KeyboardAvoidingView
+          style={styles.modalWrap}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
+          <View style={[styles.modalBox, Platform.OS === "android" ? { marginBottom: keyboardInset } : null]}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) + (Platform.OS === "android" ? keyboardInset : 0) + 24 }}
+            >
           <Text style={styles.modalTitle}>ငွေတောင်းခံလွှာ</Text>
           <Text style={styles.label}>Claim Date / Time</Text>
           <View style={styles.dateTimeRow}>
@@ -874,7 +886,7 @@ export default function ExpenseClaimsScreen() {
           {claimRule ? <Text style={styles.meta}>Rule: {claimRule.label} ({claimRule.enabled ? "Auto" : "Manual"}) • {Number(claimRule.amount || 0).toLocaleString()} KS</Text> : null}
 
           <View style={styles.rowEnd}><Pressable onPress={() => setShowClaimModal(false)}><Text style={styles.cancel}>Cancel</Text></Pressable><Pressable style={styles.okBtn} onPress={() => void submitClaim()}><Text style={styles.okTxt}>Submit</Text></Pressable></View>
-        </ScrollView></View></View>
+        </ScrollView></View></KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={showReviewModal} transparent animationType="fade" onRequestClose={() => setShowReviewModal(false)}>
@@ -896,18 +908,14 @@ export default function ExpenseClaimsScreen() {
       <Modal visible={showPicker} transparent animationType="fade" onRequestClose={() => setShowPicker(false)}>
         <View style={styles.modalWrap}><View style={styles.pickerBox}><Text style={styles.modalTitle}>{pickerTitle}</Text><ScrollView style={{ maxHeight: 340 }}>{pickerOptions.map((opt: { id: string; label: string }) => { const active = getCurrentPickerSelected() === opt.id; return (<Pressable key={opt.id} style={[styles.pickerRow, active && styles.pickerRowActive]} onPress={() => onSelectPickerOption(opt.id)}><Text style={[styles.pickerText, active && styles.pickerTextActive]}>{opt.label}</Text></Pressable>); })}</ScrollView><View style={styles.rowEnd}><Pressable onPress={() => setShowPicker(false)}><Text style={styles.cancel}>Close</Text></Pressable></View></View></View>
       </Modal>
-
-      <FloatingTabMenu />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   header: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: "white" },
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  homeBtn: { width: 38, height: 38, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.surface },
-  rightSpacer: { width: 38, height: 38 },
+  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
   createBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 38, borderRadius: 10, backgroundColor: Colors.light.tint },
   createBtnText: { color: "white", fontSize: 13, fontFamily: "Inter_700Bold" },
   headerTitle: { marginTop: 10, fontSize: 16, color: Colors.light.text, fontFamily: "Inter_700Bold" },
@@ -965,3 +973,4 @@ const styles = StyleSheet.create({
   pickerText: { color: Colors.light.text, fontSize: 13 },
   pickerTextActive: { color: Colors.light.tint, fontFamily: "Inter_700Bold" },
 });
+

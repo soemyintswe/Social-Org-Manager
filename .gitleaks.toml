@@ -1,0 +1,6 @@
+title = "Social-Org-Manager gitleaks config"
+
+[[allowlists]]
+description = "Firebase Android google-services keys are public client config values"
+paths = ['''android/app/google-services\.json''']
+regexes = ['''AIza[0-9A-Za-z\-_]{35}''']

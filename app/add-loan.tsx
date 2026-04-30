@@ -85,20 +85,27 @@ export default function AddLoanScreen() {
     
     setSaving(true);
     try {
+      const amountNum = parseFloat(amount);
+      const issueDate = `${loanDate.getFullYear()}-${String(loanDate.getMonth() + 1).padStart(2, '0')}-${String(loanDate.getDate()).padStart(2, '0')}`;
       const loanData = {
         id: Date.now().toString(),
         memberId: selectedMemberId,
-        amount: parseFloat(amount),
+        amount: amountNum,
+        principal: amountNum,
+        principalAmount: amountNum,
         interestRate: parseFloat(interestRate) || 0,
-        date: `${loanDate.getFullYear()}-${String(loanDate.getMonth() + 1).padStart(2, '0')}-${String(loanDate.getDate()).padStart(2, '0')}`,
+        date: issueDate,
+        issueDate,
         status: 'active',
         notes: notes,
+        description: notes || "Loan issued",
+        createdAt: new Date().toISOString(),
       };
       await addLoan(loanData);
       Alert.alert("အောင်မြင်ပါသည်", "ချေးငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
 
-    } catch (error) {
+    } catch {
       Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);

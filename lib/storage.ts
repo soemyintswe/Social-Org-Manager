@@ -1,11 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as Crypto from "expo-crypto";
 import {
   Member,
   MemberFamilyMember,
+  MemberOrgPositionHistoryEntry,
   OrgEvent,
   Group,
   AttendanceRecord,
@@ -15,6 +17,16 @@ import {
   UserAccount,
   MemberChangeRequest,
   MemberChangeAction,
+  AuditChangeRequest,
+  AuditChangeRequestMessage,
+  AuditChangeRequestStatus,
+  AuditChangeMessageType,
+  AuditChangeDrafts,
+  AuditChangeRevision,
+  AuditExecutionLog,
+  AuditChangeRequestKind,
+  AuditChangeTargetType,
+  AuditChangeWorkflowStage,
   ExpenseClaim,
   MemberPaymentRequest,
   MemberPaymentRequestKind,
@@ -25,6 +37,10 @@ import {
   DisbursementMethod,
   ChatThread,
   ChatMessage,
+  AppNotification,
+  OrgPosition,
+  normalizeMemberStatus,
+  normalizeOrgPosition,
 } from "./types";
 import { splitPhoneNumbers, toEnglishDigits } from "./member-utils";
 import {
@@ -32,6 +48,20 @@ import {
   DEFAULT_CLOUD_SYNC_FOLDER_NAME,
   DEFAULT_LAN_SYNC_URL as DEFAULT_LAN_SYNC_URL_BASE,
 } from "./sync-defaults";
+import {
+  getCloudSyncAccountEmail as getRemoteCloudSyncAccountEmail,
+  getCloudSyncApiKey as getRemoteCloudSyncApiKey,
+  getCloudSyncEndpoint as getRemoteCloudSyncEndpoint,
+  getCloudSyncFolderName as getRemoteCloudSyncFolderName,
+  getManagedCloudSyncEnabled,
+  getManagedLanSyncEnabled,
+  getManagedLanSyncUrl,
+  getManagedSyncLockdownEnabled,
+  getSyncRetryBaseDelayMs,
+  getSyncRetryMaxAttempts,
+} from "./remote-config";
+import { computeSnapshotHash, verifySnapshotHash } from "./sync-integrity";
+import { runWithRetry } from "./sync-queue";
 
 const KEYS = {
   MEMBERS: "@orghub_members",
@@ -44,13 +74,20 @@ const KEYS = {
   USERS: "@orghub_users",
   USER_PASSWORDS: "@orghub_user_passwords",
   MEMBER_CHANGE_REQUESTS: "@orghub_member_change_requests",
+  AUDIT_CHANGE_REQUESTS: "@orghub_audit_change_requests",
+  AUDIT_EXECUTION_LOGS: "@orghub_audit_execution_logs",
   EXPENSE_CLAIMS: "@orghub_expense_claims",
   MEMBER_PAYMENT_REQUESTS: "@orghub_member_payment_requests",
   STANDARD_AMOUNTS: "@orghub_standard_amounts",
   STANDARD_AMOUNT_CHANGE_REQUESTS: "@orghub_standard_amount_change_requests",
   CHAT_THREADS: "@orghub_chat_threads",
   CHAT_MESSAGES: "@orghub_chat_messages",
+  NOTIFICATIONS: "@orghub_notifications",
 };
+
+const MEMBER_JOIN_DATE_FALLBACK_DMY = "01/01/2018";
+const MEMBER_JOIN_DATE_MIGRATION_V1_KEY = "@orghub_member_join_date_migration_v1";
+const AUDIT_REQUEST_CLEANUP_V4_KEY = "@orghub_audit_request_cleanup_v4";
 
 const EXTRA_SHARED_KEYS = [
   "@custom_categories",
@@ -59,27 +96,70 @@ const EXTRA_SHARED_KEYS = [
   "@org_notice_custom_conditions",
 ] as const;
 
+const APP_STORAGE_PREFIX = "@orghub_";
+const SHARED_EXTRA_KEY_PREFIXES = ["@org_notice_custom_"] as const;
+
 const BACKUP_EXCLUDED_KEYS = new Set<string>([
   "@orghub_auth_session",
+  "@orghub_auth_background_marked",
   "@orghub_login_guard",
   "@orghub_sync_last_server_updated_at",
   "@orghub_expense_claim_draft",
+  MEMBER_JOIN_DATE_MIGRATION_V1_KEY,
   "@member_change_last_seen_at",
   "@auto_backup_enabled",
   "@last_birthday_notification",
   "@app_update_last_checked_at",
   "@app_update_skipped_version",
   "@orghub_cloud_sync_last_remote_updated_at",
+  "@orghub_cloud_sync_last_remote_hash",
 ]);
+
+const RESET_ONLY_PREFIXES = [
+  "@event_notification_seen_ids_",
+  "@comment_notification_seen_ids_",
+  "@chat_notification_seen_ids_",
+  "@request_notification_seen_ids_",
+  "@app_update_",
+] as const;
+
+const RESET_ONLY_KEYS = new Set<string>([
+  ...Array.from(BACKUP_EXCLUDED_KEYS),
+  "@orghub_auth_background_marked",
+  MEMBER_JOIN_DATE_MIGRATION_V1_KEY,
+]);
+const EMPTY_ORG_STATE_KEY = "@orghub_empty_org_state_v1";
+
+function hasAnyPrefix(key: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => key.startsWith(prefix));
+}
+
+function isNotificationSeenKey(key: string): boolean {
+  return hasAnyPrefix(key, [
+    "@event_notification_seen_ids_",
+    "@comment_notification_seen_ids_",
+    "@chat_notification_seen_ids_",
+    "@request_notification_seen_ids_",
+  ]);
+}
+
+function isOrgOwnedStorageKey(key: string): boolean {
+  if (!key) return false;
+  if (key.startsWith(APP_STORAGE_PREFIX)) return true;
+  if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
+  if (hasAnyPrefix(key, SHARED_EXTRA_KEY_PREFIXES)) return true;
+  if (hasAnyPrefix(key, RESET_ONLY_PREFIXES)) return true;
+  if (RESET_ONLY_KEYS.has(key)) return true;
+  return false;
+}
 
 function isSharedBackupKey(key: string): boolean {
   if (!key) return false;
   if (BACKUP_EXCLUDED_KEYS.has(key)) return false;
-  if (key.startsWith("@event_notification_seen_ids_")) return false;
-  if (key.startsWith("@comment_notification_seen_ids_")) return false;
-  if (key.startsWith("@chat_notification_seen_ids_")) return false;
-  if (Object.values(KEYS).includes(key as any)) return true;
+  if (isNotificationSeenKey(key)) return false;
+  if (key.startsWith(APP_STORAGE_PREFIX)) return true;
   if (EXTRA_SHARED_KEYS.includes(key as any)) return true;
+  if (hasAnyPrefix(key, SHARED_EXTRA_KEY_PREFIXES)) return true;
   return false;
 }
 
@@ -94,6 +174,8 @@ async function getAllSharedBackupKeys(): Promise<string[]> {
 
 const SYNC_LAST_SERVER_UPDATED_AT_KEY = "@orghub_sync_last_server_updated_at";
 const CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY = "@orghub_cloud_sync_last_remote_updated_at";
+const CLOUD_SYNC_LAST_REMOTE_HASH_KEY = "@orghub_cloud_sync_last_remote_hash";
+const AUDIT_TEST_CLEANUP_TOMBSTONES_KEY = "@orghub_audit_test_cleanup_tombstones_v1";
 const DEFAULT_SYNC_SERVER_URL = String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || DEFAULT_LAN_SYNC_URL_BASE);
 const DEFAULT_CLOUD_SYNC_ENDPOINT = String((process.env as any).EXPO_PUBLIC_CLOUD_SYNC_ENDPOINT || DEFAULT_CLOUD_SYNC_ENDPOINT_BASE);
 
@@ -174,6 +256,174 @@ function normalizeFamilyMembers(input: unknown): MemberFamilyMember[] | undefine
   return rows.length > 0 ? rows : [];
 }
 
+function parseFlexibleDateMs(value: unknown): number {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+
+  const ymd = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (ymd) {
+    const year = Number(ymd[1]);
+    const month = Number(ymd[2]);
+    const day = Number(ymd[3]);
+    const parsed = new Date(year, month - 1, day).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const dmy = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3]);
+    const parsed = new Date(year, month - 1, day).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const parsed = new Date(raw).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toYmdString(value: unknown, fallback?: string): string {
+  const ms = parseFlexibleDateMs(value);
+  if (ms > 0) {
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  if (fallback) return fallback;
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function hasMemberExitStatus(status: unknown): boolean {
+  const normalized = normalizeMemberStatus(status);
+  return normalized === "resigned" || normalized === "deceased" || normalized === "expelled" || normalized === "suspended";
+}
+
+function getMemberDefaultPosition(member: any): OrgPosition {
+  const status = String(member?.status || "").toLowerCase();
+  return normalizeOrgPosition(member?.orgPosition || (status.includes("applicant") ? "applicant" : "member"));
+}
+
+function normalizeOrgPositionHistory(input: unknown): MemberOrgPositionHistoryEntry[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const rows = input
+    .map((row) => {
+      const obj = (row || {}) as any;
+      const position = normalizeOrgPosition(obj.position || "member");
+      const effectiveDate = toYmdString(obj.effectiveDate || obj.assignedAt || obj.date, "");
+      if (!effectiveDate) return null;
+      return {
+        id: obj.id ? String(obj.id) : generateId(),
+        position,
+        effectiveDate,
+        note: obj.note ? String(obj.note).trim() : undefined,
+      } as MemberOrgPositionHistoryEntry;
+    })
+    .filter(Boolean) as MemberOrgPositionHistoryEntry[];
+  return rows.length > 0 ? rows : [];
+}
+
+function collapseOrgPositionHistory(entries: MemberOrgPositionHistoryEntry[]): MemberOrgPositionHistoryEntry[] {
+  const sorted = [...entries].sort((a, b) => {
+    const aMs = parseFlexibleDateMs(a.effectiveDate);
+    const bMs = parseFlexibleDateMs(b.effectiveDate);
+    if (aMs !== bMs) return aMs - bMs;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+  const collapsed: MemberOrgPositionHistoryEntry[] = [];
+  for (const row of sorted) {
+    const last = collapsed[collapsed.length - 1];
+    if (!last) {
+      collapsed.push(row);
+      continue;
+    }
+    if (last.effectiveDate === row.effectiveDate) {
+      collapsed[collapsed.length - 1] = row;
+      continue;
+    }
+    if (last.position === row.position) continue;
+    collapsed.push(row);
+  }
+  return collapsed;
+}
+
+function addPositionHistoryEvent(
+  history: MemberOrgPositionHistoryEntry[],
+  position: OrgPosition,
+  effectiveDate: string,
+  note?: string
+): MemberOrgPositionHistoryEntry[] {
+  const next = [...history];
+  next.push({
+    id: generateId(),
+    position,
+    effectiveDate: toYmdString(effectiveDate),
+    note: note?.trim() || undefined,
+  });
+  return collapseOrgPositionHistory(next);
+}
+
+function ensureMemberPositionHistoryShape(member: any, previousMember?: Member, patch?: any): MemberOrgPositionHistoryEntry[] {
+  const joinDate = toYmdString(member?.joinDate || member?.createdAt);
+  const basePosition = getMemberDefaultPosition(member);
+
+  const fromMember = normalizeOrgPositionHistory(member?.orgPositionHistory);
+  const fromPrevious = normalizeOrgPositionHistory(previousMember?.orgPositionHistory);
+  let history = collapseOrgPositionHistory((fromMember && fromMember.length > 0 ? fromMember : fromPrevious) || []);
+
+  if (history.length === 0) {
+    history = [
+      {
+        id: generateId(),
+        position: previousMember ? getMemberDefaultPosition(previousMember) : basePosition,
+        effectiveDate: joinDate,
+      },
+    ];
+  }
+
+  const previousPosition = previousMember ? getMemberDefaultPosition(previousMember) : undefined;
+  const hasExplicitPositionChange =
+    !!patch && Object.prototype.hasOwnProperty.call(patch, "orgPosition") && previousPosition !== undefined && previousPosition !== basePosition;
+
+  if (hasExplicitPositionChange) {
+    const effectiveDate = toYmdString(
+      patch?.orgPositionEffectiveDate || patch?.positionEffectiveDate || patch?.statusDate || member?.statusDate || new Date()
+    );
+    history = addPositionHistoryEvent(history, basePosition, effectiveDate, patch?.orgPositionNote);
+  } else {
+    const last = history[history.length - 1];
+    if (!last || normalizeOrgPosition(last.position) !== basePosition) {
+      const fallbackDate = toYmdString(member?.statusDate || member?.updatedAt || new Date());
+      history = addPositionHistoryEvent(history, basePosition, fallbackDate);
+    }
+  }
+
+  const exitDate = hasMemberExitStatus(member?.status) ? toYmdString(member?.statusDate || member?.resignDate || member?.updatedAt || new Date()) : "";
+  if (exitDate) {
+    const last = history[history.length - 1];
+    if (last && parseFlexibleDateMs(last.effectiveDate) > parseFlexibleDateMs(exitDate)) {
+      history = addPositionHistoryEvent(history, last.position, exitDate);
+    }
+  }
+
+  return collapseOrgPositionHistory(history);
+}
+
+function normalizeMemberRecord(member: any, previousMember?: Member, patch?: any): Member {
+  const normalized = normalizeMemberPatch(member) as any;
+  normalized.orgPosition = getMemberDefaultPosition(normalized);
+  normalized.orgPositionHistory = ensureMemberPositionHistoryShape(normalized, previousMember, patch);
+  delete normalized.orgPositionEffectiveDate;
+  delete normalized.positionEffectiveDate;
+  delete normalized.orgPositionNote;
+  return normalized as Member;
+}
+
 function normalizeMemberPatch(updates: any): Partial<Member> {
   const next: any = { ...(updates || {}) };
   if ("occupation" in next) {
@@ -184,6 +434,9 @@ function normalizeMemberPatch(updates: any): Partial<Member> {
   }
   if ("familyMembers" in next) {
     next.familyMembers = normalizeFamilyMembers(next.familyMembers);
+  }
+  if ("orgPositionHistory" in next) {
+    next.orgPositionHistory = normalizeOrgPositionHistory(next.orgPositionHistory);
   }
   return next;
 }
@@ -376,8 +629,248 @@ async function safeGet<T>(key: string, defaultValue: T): Promise<T> {
   }
 }
 
+export async function runAuditRequestCleanupOnce(): Promise<boolean> {
+  try {
+    const flag = await AsyncStorage.getItem(AUDIT_REQUEST_CLEANUP_V4_KEY);
+    if (flag === "1") return false;
+
+    const [notifications, transactions] = await Promise.all([
+      safeGet<AppNotification[]>(KEYS.NOTIFICATIONS, []),
+      safeGet<Transaction[]>(KEYS.TRANSACTIONS, []),
+    ]);
+    const filteredNotifications = Array.isArray(notifications)
+      ? notifications.filter((row: any) => {
+          const category = String(row?.category || "");
+          const relatedType = String(row?.relatedType || "");
+          return !(
+            category === "audit_change" ||
+            category === "delete_request" ||
+            relatedType === "audit_change_request"
+          );
+        })
+      : [];
+    let txnsChanged = false;
+    const cleanedTransactions = Array.isArray(transactions)
+      ? transactions.map((txn: any) => {
+          if (!txn?.auditFlagged && !txn?.auditNote && !txn?.auditFlaggedByUserId && !txn?.auditFlaggedAt) {
+            return txn;
+          }
+          txnsChanged = true;
+          return {
+            ...txn,
+            auditFlagged: false,
+            auditNote: "",
+            auditFlaggedByUserId: "",
+            auditFlaggedAt: "",
+          };
+        })
+      : [];
+
+    const writes = [
+      AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify([])),
+      AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(filteredNotifications)),
+      AsyncStorage.setItem(AUDIT_REQUEST_CLEANUP_V4_KEY, "1"),
+    ];
+    if (txnsChanged) {
+      writes.push(AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(cleanedTransactions)));
+    }
+    await Promise.all(writes);
+    try {
+      await pushCloudSnapshotFromLocalDetailed();
+    } catch (e) {
+      console.warn("Audit cleanup cloud push skipped:", e);
+    }
+    return true;
+  } catch (e) {
+    console.error("Audit request cleanup failed:", e);
+    return false;
+  }
+}
+
+export async function deleteAuditChangeRequestsForTesting(input: {
+  requestIds: string[];
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+}): Promise<{ removedIds: string[]; removedLogCount: number }> {
+  const ids = new Set((input.requestIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  const [requests, notifications, executionLogs, rawExecutionLogs, transactions] = await Promise.all([
+    getAuditChangeRequests(),
+    getNotifications(),
+    getAuditExecutionLogs(),
+    safeGet<AuditExecutionLog[]>(KEYS.AUDIT_EXECUTION_LOGS, []),
+    getTransactions(),
+  ]);
+
+  const shouldRemoveAll = ids.size === 0;
+  const logSource = Array.isArray(rawExecutionLogs)
+    ? rawExecutionLogs
+    : (Array.isArray(executionLogs) ? executionLogs : []);
+  const removedRequests = (Array.isArray(requests) ? requests : []).filter((row: any) => {
+    if (shouldRemoveAll) return true;
+    const rowId = String(row?.id || "").trim();
+    const rowNo = String(row?.requestNumber || "").trim();
+    return (rowId && ids.has(rowId)) || (rowNo && ids.has(rowNo));
+  });
+  const totalRequestCount = Array.isArray(requests) ? requests.length : 0;
+  const removeAllArtifacts = shouldRemoveAll || (totalRequestCount > 0 && removedRequests.length === totalRequestCount);
+
+  const removedIdSet = new Set(removedRequests.map((row: any) => String(row?.id || "").trim()).filter(Boolean));
+  const removedNoSet = new Set(removedRequests.map((row: any) => String(row?.requestNumber || "").trim()).filter(Boolean));
+  const inputIdSet = ids;
+
+  const remainingRequests = removeAllArtifacts
+    ? []
+    : (Array.isArray(requests) ? requests : []).filter((row: any) => {
+        const rowId = String(row?.id || "").trim();
+        const rowNo = String(row?.requestNumber || "").trim();
+        if (rowId && (removedIdSet.has(rowId) || inputIdSet.has(rowId))) return false;
+        if (rowNo && (removedNoSet.has(rowNo) || inputIdSet.has(rowNo))) return false;
+        return true;
+      });
+  const remainingNotifications = (Array.isArray(notifications) ? notifications : []).filter((row: any) => {
+    if (removeAllArtifacts) {
+      const category = String(row?.category || "");
+      const relatedType = String(row?.relatedType || "");
+      if (category === "audit_change" || category === "delete_request" || relatedType === "audit_change_request") {
+        return false;
+      }
+    }
+    const relatedId = String(row?.relatedId || "");
+    if (relatedId && (removedIdSet.has(relatedId) || inputIdSet.has(relatedId))) return false;
+    const title = String(row?.title || "");
+    for (const no of removedNoSet) {
+      if (no && title.includes(no)) return false;
+    }
+    for (const token of inputIdSet) {
+      if (token && title.includes(token)) return false;
+    }
+    return true;
+  });
+  const removedLogs = removeAllArtifacts
+    ? logSource
+    : logSource.filter((log: any) => {
+        const reqId = String(log?.requestId || "").trim();
+        const reqNo = String(log?.requestNumber || "").trim();
+        if (reqId && (removedIdSet.has(reqId) || inputIdSet.has(reqId))) return true;
+        if (reqNo && (removedNoSet.has(reqNo) || inputIdSet.has(reqNo))) return true;
+        return false;
+      });
+
+  const remainingLogs = removeAllArtifacts
+    ? []
+    : logSource.filter((log: any) => {
+        const reqId = String(log?.requestId || "").trim();
+        const reqNo = String(log?.requestNumber || "").trim();
+        if (reqId && (removedIdSet.has(reqId) || inputIdSet.has(reqId))) return false;
+        if (reqNo && (removedNoSet.has(reqNo) || inputIdSet.has(reqNo))) return false;
+        return true;
+      });
+
+  const targetTxnIds = new Set<string>();
+  removedRequests.forEach((req: any) => {
+    const targetId = String(req?.transactionId || req?.targetId || "").trim();
+    if (targetId) targetTxnIds.add(targetId);
+  });
+
+  let txChanged = false;
+  const cleanedTransactions = (Array.isArray(transactions) ? transactions : []).map((txn: any) => {
+    if (!targetTxnIds.has(String(txn?.id || ""))) return txn;
+    if (!txn?.auditFlagged && !txn?.auditNote && !txn?.auditFlaggedByUserId && !txn?.auditFlaggedAt) return txn;
+    txChanged = true;
+    return {
+      ...txn,
+      auditFlagged: false,
+      auditNote: "",
+      auditFlaggedByUserId: "",
+      auditFlaggedAt: "",
+    };
+  });
+
+  const writes: Promise<any>[] = [
+    AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(remainingRequests)),
+    AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(remainingNotifications)),
+    AsyncStorage.setItem(KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(remainingLogs)),
+  ];
+  const tombstonesToAdd: { id?: string; requestNumber?: string }[] = [];
+  removedRequests.forEach((row: any) => {
+    tombstonesToAdd.push({
+      id: String(row?.id || "").trim() || undefined,
+      requestNumber: String(row?.requestNumber || "").trim() || undefined,
+    });
+  });
+  if (removeAllArtifacts) {
+    logSource.forEach((log: any) => {
+      tombstonesToAdd.push({
+        id: String(log?.requestId || "").trim() || undefined,
+        requestNumber: String(log?.requestNumber || "").trim() || undefined,
+      });
+    });
+  } else {
+    logSource.forEach((log: any) => {
+      const reqId = String(log?.requestId || "").trim();
+      const reqNo = String(log?.requestNumber || "").trim();
+      if ((reqId && inputIdSet.has(reqId)) || (reqNo && inputIdSet.has(reqNo)) || removedIdSet.has(reqId) || removedNoSet.has(reqNo)) {
+        tombstonesToAdd.push({ id: reqId || undefined, requestNumber: reqNo || undefined });
+      }
+    });
+  }
+  await appendAuditTestCleanupTombstones(tombstonesToAdd);
+  if (txChanged) {
+    writes.push(AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(cleanedTransactions)));
+  }
+  await Promise.all(writes);
+
+  try {
+    await pushCloudSnapshotFromLocalDetailed();
+  } catch (e) {
+    console.warn("Test audit request cleanup cloud push skipped:", e);
+  }
+
+  return {
+    removedIds: removedRequests.map((row: any) => String(row?.id || "")).filter(Boolean),
+    removedLogCount: removedLogs.length,
+  };
+}
+
 // --- Members ---
-export const getMembers = () => safeGet<Member[]>(KEYS.MEMBERS, []);
+export const getMembers = async (): Promise<Member[]> => {
+  const rows = await safeGet<Member[]>(KEYS.MEMBERS, []);
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  const migrationFlag = await AsyncStorage.getItem(MEMBER_JOIN_DATE_MIGRATION_V1_KEY);
+  const shouldRunJoinDateMigration = migrationFlag !== "1";
+  let joinDateMigrationChanged = false;
+  const migratedRows = shouldRunJoinDateMigration
+    ? rows.map((row: any) => {
+        const joinDateText = String(row?.joinDate || "").trim();
+        if (joinDateText) return row;
+        joinDateMigrationChanged = true;
+        return { ...row, joinDate: MEMBER_JOIN_DATE_FALLBACK_DMY };
+      })
+    : rows;
+
+  let changed = false;
+  const normalized = migratedRows.map((row: any) => {
+    const next = normalizeMemberRecord(row);
+    if (!changed) {
+      try {
+        changed = JSON.stringify(next) !== JSON.stringify(row);
+      } catch {
+        changed = true;
+      }
+    }
+    return next;
+  });
+
+  if (shouldRunJoinDateMigration) {
+    await AsyncStorage.setItem(MEMBER_JOIN_DATE_MIGRATION_V1_KEY, "1");
+  }
+  if (changed || joinDateMigrationChanged) {
+    await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
+  }
+  return normalized;
+};
 
 export async function syncUsersWithMembers(members: Member[]) {
   try {
@@ -403,8 +896,9 @@ export async function syncUsersWithMembers(members: Member[]) {
 }
 
 export const saveMembers = async (data: Member[]) => {
-  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(data));
-  await syncUsersWithMembers(data);
+  const normalized = (Array.isArray(data) ? data : []).map((row: any) => normalizeMemberRecord(row));
+  await AsyncStorage.setItem(KEYS.MEMBERS, JSON.stringify(normalized));
+  await syncUsersWithMembers(normalized);
 };
 
 export const getMemberChangeRequests = () => safeGet<MemberChangeRequest[]>(KEYS.MEMBER_CHANGE_REQUESTS, []);
@@ -479,7 +973,7 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
       occupation: incoming.occupation,
       familyMembers: normalizeFamilyMembers(incoming.familyMembers),
     };
-    nextMembers = [...nextMembers, member];
+    nextMembers = [...nextMembers, normalizeMemberRecord(member, undefined, incoming)];
   } else if (request.action === "update") {
     const targetId = String(request.targetMemberId || "").trim();
     if (!targetId) throw new Error("target_missing");
@@ -487,22 +981,25 @@ export async function approveMemberChangeRequest(requestId: string, reviewerUser
     if (memberIndex === -1) throw new Error("target_not_found");
 
     const updatePayload = normalizeMemberPatch(request.payload.member || {}) as any;
+    const previousMember = { ...nextMembers[memberIndex] } as Member;
     const requestedId = String(updatePayload.id || "").trim();
     if (requestedId && requestedId !== targetId) {
       const exists = nextMembers.some((item, idx) => idx !== memberIndex && item.id === requestedId);
       if (exists) throw new Error("member_exists");
       await remapMemberIdReferences(targetId, requestedId);
-      nextMembers[memberIndex] = {
+      const merged = {
         ...nextMembers[memberIndex],
         ...updatePayload,
         id: requestedId,
       };
+      nextMembers[memberIndex] = normalizeMemberRecord(merged, previousMember, updatePayload);
     } else {
       delete (updatePayload as any).id;
-      nextMembers[memberIndex] = {
+      const merged = {
         ...nextMembers[memberIndex],
         ...updatePayload,
       };
+      nextMembers[memberIndex] = normalizeMemberRecord(merged, previousMember, updatePayload);
     }
   } else if (request.action === "delete") {
     const targetId = String(request.targetMemberId || "").trim();
@@ -637,6 +1134,11 @@ export function buildDefaultPassword(memberId?: string, isAdmin?: boolean): stri
   return digits || "member";
 }
 
+function buildDefaultStandaloneUserPassword(userId?: string): string {
+  const normalized = toEnglishDigits(String(userId || "")).trim();
+  return normalized || "orguser";
+}
+
 async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Member[]): Promise<void> {
   const passwords = await getUserPasswords();
   let changed = false;
@@ -651,6 +1153,9 @@ async function ensureDefaultPasswordsForUsers(users: UserAccount[], members: Mem
     const member = members.find((item) => item.id === user.memberId);
     if (member) {
       passwords[user.id] = buildDefaultPassword(member.id, false);
+      changed = true;
+    } else {
+      passwords[user.id] = buildDefaultStandaloneUserPassword(user.id);
       changed = true;
     }
   }
@@ -668,7 +1173,10 @@ export async function changeUserPassword(userId: string, currentPassword: string
   return true;
 }
 
-export async function resetUserPasswordByIdentifier(identifier: string): Promise<{ ok: boolean; userId?: string; reason?: string }> {
+export async function resetUserPasswordByIdentifier(
+  identifier: string,
+  nextPassword?: string
+): Promise<{ ok: boolean; userId?: string; reason?: string; displayName?: string; memberId?: string; phone?: string; password?: string }> {
   const needle = toEnglishDigits(identifier || "").trim().toLowerCase();
   if (!needle) return { ok: false, reason: "empty" };
 
@@ -677,6 +1185,10 @@ export async function resetUserPasswordByIdentifier(identifier: string): Promise
     if (!user.isActive) return false;
     if (user.systemRole === "admin") {
       return needle === "admin";
+    }
+
+    if (toEnglishDigits(String(user.id || "")).trim().toLowerCase() === needle) {
+      return true;
     }
 
     const member = members.find((item) => item.id === user.memberId);
@@ -701,16 +1213,75 @@ export async function resetUserPasswordByIdentifier(identifier: string): Promise
 
   if (!targetUser) return { ok: false, reason: "not_found" };
 
+  const chosenPassword = String(nextPassword || "").trim();
+
   if (targetUser.systemRole === "admin") {
-    await setUserPassword(targetUser.id, buildDefaultPassword(undefined, true));
-    return { ok: true, userId: targetUser.id };
+    const password = chosenPassword || buildDefaultPassword(undefined, true);
+    await setUserPassword(targetUser.id, password);
+    return { ok: true, userId: targetUser.id, displayName: targetUser.displayName || "Admin", password };
   }
 
   const member = members.find((item) => item.id === targetUser.memberId);
-  if (!member) return { ok: false, reason: "missing_member" };
+  if (!member) {
+    const password = chosenPassword || buildDefaultStandaloneUserPassword(targetUser.id);
+    await setUserPassword(targetUser.id, password);
+    return {
+      ok: true,
+      userId: targetUser.id,
+      displayName: targetUser.displayName || targetUser.id,
+      password,
+    };
+  }
 
-  await setUserPassword(targetUser.id, buildDefaultPassword(member.id));
-  return { ok: true, userId: targetUser.id };
+  const { primaryPhone, secondaryPhone } = splitPhoneNumbers(member.phone, (member as any).secondaryPhone);
+  const password = chosenPassword || buildDefaultPassword(member.id);
+  await setUserPassword(targetUser.id, password);
+  return {
+    ok: true,
+    userId: targetUser.id,
+    displayName: member.name || targetUser.displayName || targetUser.id,
+    memberId: member.id,
+    phone: primaryPhone || secondaryPhone || "",
+    password,
+  };
+}
+
+export async function createInitialOrgUserAccount(input: {
+  username: string;
+  displayName: string;
+  password: string;
+  orgPosition: OrgPosition;
+}): Promise<UserAccount> {
+  const username = toEnglishDigits(String(input.username || "")).trim();
+  const displayName = String(input.displayName || "").trim();
+  const password = String(input.password || "").trim();
+  const orgPosition = normalizeOrgPosition(input.orgPosition || "chairperson");
+
+  if (!username) throw new Error("username_required");
+  if (!displayName) throw new Error("display_name_required");
+  if (!password) throw new Error("password_required");
+
+  const users = await getUsers();
+  const normalizedUsername = username.toLowerCase();
+  const duplicate = users.find((user) => toEnglishDigits(String(user.id || "")).trim().toLowerCase() === normalizedUsername);
+  if (duplicate) throw new Error("username_exists");
+
+  const existingInitialUser = users.find((user) => user.systemRole === "org_user" && !String(user.memberId || "").trim());
+  if (existingInitialUser) throw new Error("initial_org_user_exists");
+
+  const now = new Date().toISOString();
+  const nextUser: UserAccount = {
+    id: username,
+    displayName,
+    systemRole: "org_user",
+    orgPosition,
+    isActive: true,
+    createdAt: now,
+  };
+
+  await saveUsers([...users, nextUser]);
+  await setUserPassword(nextUser.id, password);
+  return nextUser;
 }
 
 
@@ -730,12 +1301,12 @@ export async function importMembers(newMembers: Member[]): Promise<void> {
 export async function addMember(member: any): Promise<Member> {
   const members = await getMembers();
   const normalized = normalizeMemberPatch(member) as any;
-  const newMember = {
+  const newMember = normalizeMemberRecord({
     ...normalized,
     id: normalized.id || generateId(),
     avatarColor: normalized.avatarColor || randomColor(),
     createdAt: new Date().toISOString()
-  };
+  }, undefined, normalized);
 
     await saveMembers([...members, newMember]);
 
@@ -753,13 +1324,15 @@ export async function updateMember(id: string, updates: any) {
   const idx = members.findIndex(m => m.id === id);
   if (idx !== -1) {
     const normalized = normalizeMemberPatch(updates) as any;
+    const previousMember = { ...members[idx] } as Member;
     const nextId = String(normalized.id || id).trim() || id;
     if (nextId !== id) {
       const exists = members.some((m, i) => i !== idx && String(m.id || "") === nextId);
       if (exists) throw new Error("member_exists");
       await remapMemberIdReferences(id, nextId);
     }
-    members[idx] = { ...members[idx], ...normalized, id: nextId };
+    const merged = { ...members[idx], ...normalized, id: nextId };
+    members[idx] = normalizeMemberRecord(merged, previousMember, normalized);
     await saveMembers(members);
   }
 }
@@ -774,10 +1347,99 @@ export async function clearAllMembers(): Promise<void> {
 }
 
 export async function clearAllData(): Promise<void> {
-  const keys = await getAllSharedBackupKeys();
+  const [sharedKeys, allKeys] = await Promise.all([
+    getAllSharedBackupKeys(),
+    AsyncStorage.getAllKeys().catch(() => [] as string[]),
+  ]);
+  const resetKeys = (allKeys || []).filter((key) => isOrgOwnedStorageKey(String(key || "")));
+  const keys = Array.from(
+    new Set([
+      ...sharedKeys,
+      ...resetKeys,
+      ...Object.values(KEYS),
+      ...EXTRA_SHARED_KEYS,
+      ...Array.from(RESET_ONLY_KEYS),
+    ])
+  );
   if (keys.length > 0) {
     await AsyncStorage.multiRemove(keys);
   }
+}
+
+type PreservedSystemConfig = Pick<
+  AccountSettings,
+  | "orgName"
+  | "currency"
+  | "syncServerUrl"
+  | "syncEnabled"
+  | "cloudSyncEnabled"
+  | "cloudSyncProvider"
+  | "cloudSyncEndpoint"
+  | "cloudSyncApiKey"
+  | "cloudSyncGoogleAccountEmail"
+  | "cloudSyncFolderName"
+  | "receivingBankName"
+  | "receivingBankAccountNumber"
+  | "receivingBankAccountName"
+  | "receivingKbzPayPhone"
+  | "receivingKbzPayAccountName"
+  | "receivingKbzPayMmqr"
+  | "receivingWavePayPhone"
+  | "receivingWavePayAccountName"
+  | "receivingWavePayMmqr"
+  | "receivingAyaPayPhone"
+  | "receivingAyaPayAccountName"
+  | "receivingAyaPayMmqr"
+>;
+
+function pickPreservedSystemConfig(settings: AccountSettings): PreservedSystemConfig {
+  return {
+    orgName: settings.orgName,
+    currency: settings.currency,
+    syncServerUrl: settings.syncServerUrl,
+    syncEnabled: settings.syncEnabled,
+    cloudSyncEnabled: settings.cloudSyncEnabled,
+    cloudSyncProvider: settings.cloudSyncProvider,
+    cloudSyncEndpoint: settings.cloudSyncEndpoint,
+    cloudSyncApiKey: settings.cloudSyncApiKey,
+    cloudSyncGoogleAccountEmail: settings.cloudSyncGoogleAccountEmail,
+    cloudSyncFolderName: settings.cloudSyncFolderName,
+    receivingBankName: settings.receivingBankName,
+    receivingBankAccountNumber: settings.receivingBankAccountNumber,
+    receivingBankAccountName: settings.receivingBankAccountName,
+    receivingKbzPayPhone: settings.receivingKbzPayPhone,
+    receivingKbzPayAccountName: settings.receivingKbzPayAccountName,
+    receivingKbzPayMmqr: settings.receivingKbzPayMmqr,
+    receivingWavePayPhone: settings.receivingWavePayPhone,
+    receivingWavePayAccountName: settings.receivingWavePayAccountName,
+    receivingWavePayMmqr: settings.receivingWavePayMmqr,
+    receivingAyaPayPhone: settings.receivingAyaPayPhone,
+    receivingAyaPayAccountName: settings.receivingAyaPayAccountName,
+    receivingAyaPayMmqr: settings.receivingAyaPayMmqr,
+  };
+}
+
+export async function clearAllLocalDataKeepSystemConfig(): Promise<void> {
+  const currentSettings = await getAccountSettings();
+  const preserved = pickPreservedSystemConfig(currentSettings);
+  await clearAllData();
+  const defaults = await getAccountSettings();
+  await saveAccountSettings({
+    ...defaults,
+    ...preserved,
+    monthlyFeeRateRules: [],
+    monthlyFeeReliefRules: [],
+    monthlyFeePolicyRequests: [],
+  });
+  await AsyncStorage.setItem(EMPTY_ORG_STATE_KEY, "1");
+}
+
+export async function setEmptyOrgState(enabled: boolean): Promise<void> {
+  if (enabled) {
+    await AsyncStorage.setItem(EMPTY_ORG_STATE_KEY, "1");
+    return;
+  }
+  await AsyncStorage.removeItem(EMPTY_ORG_STATE_KEY);
 }
 
 function toYmd(date: Date): string {
@@ -819,6 +1481,1240 @@ function makePaymentRequestNumber(existing: MemberPaymentRequest[]): string {
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
 
+function makeAuditChangeRequestNumber(
+  existing: AuditChangeRequest[],
+  tombstones?: { numberSet: Set<string> }
+): string {
+  const today = new Date();
+  const ymd = toYmd(today).replace(/-/g, "");
+  const prefix = `AR-${ymd}-`;
+  const used = new Set<number>();
+  const capture = (value: string) => {
+    if (!value.startsWith(prefix)) return;
+    const seq = Number(value.slice(prefix.length));
+    if (Number.isFinite(seq) && seq > 0) used.add(seq);
+  };
+  for (const item of existing) {
+    capture(String(item.requestNumber || ""));
+  }
+  if (tombstones?.numberSet) {
+    tombstones.numberSet.forEach((value) => capture(String(value || "")));
+  }
+  let next = 1;
+  while (used.has(next)) next += 1;
+  return `${prefix}${String(next).padStart(4, "0")}`;
+}
+
+const AUDIT_PATCH_ALLOWED_FIELDS = [
+  "type",
+  "category",
+  "categoryLabel",
+  "memberId",
+  "payerPayee",
+  "amount",
+  "date",
+  "paymentMethod",
+  "receiptNumber",
+  "notes",
+  "description",
+  "loanId",
+  "feePeriodStart",
+  "feePeriodEnd",
+] as const;
+
+function sanitizeAuditPatch(patch: Record<string, any>): Record<string, any> {
+  const next: Record<string, any> = {};
+  for (const key of AUDIT_PATCH_ALLOWED_FIELDS) {
+    if (!(key in patch)) continue;
+    const value = patch[key];
+    if (key === "amount") {
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) next[key] = n;
+      continue;
+    }
+    if (
+      key === "type" ||
+      key === "category" ||
+      key === "categoryLabel" ||
+      key === "memberId" ||
+      key === "payerPayee" ||
+      key === "date" ||
+      key === "paymentMethod" ||
+      key === "receiptNumber" ||
+      key === "notes" ||
+      key === "description" ||
+      key === "loanId" ||
+      key === "feePeriodStart" ||
+      key === "feePeriodEnd"
+    ) {
+      const text = value == null ? "" : String(value).trim();
+      next[key] = text;
+    }
+  }
+  return next;
+}
+
+function pickTransactionAuditSnapshot(txn: Record<string, any>): Record<string, any> {
+  const snapshot: Record<string, any> = {
+    id: String(txn?.id || ""),
+    auditFlagged: Boolean(txn?.auditFlagged),
+    auditNote: String(txn?.auditNote || ""),
+  };
+  for (const key of AUDIT_PATCH_ALLOWED_FIELDS) {
+    snapshot[key] = (txn as any)?.[key];
+  }
+  return snapshot;
+}
+
+function normalizeAuditRequestKind(value: unknown): AuditChangeRequestKind {
+  return String(value || "").toLowerCase() === "delete" ? "delete" : "update";
+}
+
+function normalizeAuditTargetType(value: unknown, fallbackTargetId: string, fallbackTransactionId: string): AuditChangeTargetType {
+  const v = String(value || "").toLowerCase();
+  if (v === "loan") return "loan";
+  if (v === "transaction") return "transaction";
+  if (fallbackTargetId && !fallbackTransactionId) return "loan";
+  return "transaction";
+}
+
+function normalizeAuditWorkflowStage(value: unknown, _kind: AuditChangeRequestKind, status: AuditChangeRequestStatus): AuditChangeWorkflowStage {
+  const v = String(value || "");
+  if (v === "auditor_review" || v === "chair_approval" || v === "treasurer_execution" || v === "completed") {
+    return v;
+  }
+  if (status === "rejected" || status === "cancelled") return "completed";
+  if (status === "approved") return "treasurer_execution";
+  if (status === "suspended") return "chair_approval";
+  return "auditor_review";
+}
+
+export async function getAuditChangeRequests(): Promise<AuditChangeRequest[]> {
+  const rows = await safeGet<AuditChangeRequest[]>(KEYS.AUDIT_CHANGE_REQUESTS, []);
+  if (!Array.isArray(rows)) return [];
+  const tombstones = await getAuditTestCleanupTombstones();
+  return rows
+    .map((item: any) => ({
+      ...item,
+      requestKind: normalizeAuditRequestKind(item?.requestKind),
+      status: (item?.status || "pending") as AuditChangeRequestStatus,
+      targetType: normalizeAuditTargetType(item?.targetType, String(item?.targetId || ""), String(item?.transactionId || "")),
+      targetId: String(item?.targetId || item?.transactionId || item?.relatedLoanId || ""),
+      auditNote: String(item?.auditNote || "").trim(),
+      originalSnapshot: item?.originalSnapshot && typeof item.originalSnapshot === "object" ? item.originalSnapshot : undefined,
+      assignedRole: (item?.assignedRole ||
+        (normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus) === "treasurer_execution"
+          ? "treasurer"
+          : normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus) === "chair_approval"
+            ? "chairperson"
+            : "auditor")) as any,
+      messages: Array.isArray(item?.messages) ? item.messages : [],
+      revisions: Array.isArray(item?.revisions) ? item.revisions : [],
+      createdAt: item?.createdAt || new Date().toISOString(),
+      updatedAt: item?.updatedAt || item?.createdAt || new Date().toISOString(),
+      requestNumber: String(item?.requestNumber || ""),
+      workflowStage: normalizeAuditWorkflowStage(item?.workflowStage, normalizeAuditRequestKind(item?.requestKind), (item?.status || "pending") as AuditChangeRequestStatus),
+    }))
+    .filter((item: any) => String(item?.targetId || "").trim().length > 0)
+    .filter((item: any) => {
+      const id = String(item?.id || "").trim();
+      const requestNumber = String(item?.requestNumber || "").trim();
+      if (id && tombstones.idSet.has(id)) return false;
+      if (requestNumber && tombstones.numberSet.has(requestNumber)) return false;
+      return true;
+    })
+    .sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+}
+
+async function saveAuditChangeRequests(rows: AuditChangeRequest[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(rows));
+}
+
+export async function getAuditExecutionLogs(): Promise<AuditExecutionLog[]> {
+  const [rows, tombstones] = await Promise.all([
+    safeGet<AuditExecutionLog[]>(KEYS.AUDIT_EXECUTION_LOGS, []),
+    getAuditTestCleanupTombstones(),
+  ]);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item: any) => ({
+      ...item,
+      id: String(item?.id || generateId()),
+      requestId: String(item?.requestId || ""),
+      requestNumber: String(item?.requestNumber || "").trim() || undefined,
+      requestKind: normalizeAuditRequestKind(item?.requestKind),
+      action: String(item?.action || "") === "delete_executed" ? "delete_executed" : "update_applied",
+      targetType: normalizeAuditTargetType(item?.targetType, String(item?.targetId || ""), String(item?.transactionId || "")),
+      targetId: String(item?.targetId || item?.transactionId || item?.relatedLoanId || ""),
+      transactionId: String(item?.transactionId || "").trim() || undefined,
+      relatedLoanId: String(item?.relatedLoanId || "").trim() || undefined,
+      statusAtExecution: (item?.statusAtExecution || "approved") as AuditChangeRequestStatus,
+      workflowStageAtExecution: normalizeAuditWorkflowStage(
+        item?.workflowStageAtExecution,
+        normalizeAuditRequestKind(item?.requestKind),
+        (item?.statusAtExecution || "approved") as AuditChangeRequestStatus
+      ),
+      byUserId: String(item?.byUserId || ""),
+      byMemberId: String(item?.byMemberId || "").trim() || undefined,
+      byDisplayName: String(item?.byDisplayName || "").trim() || undefined,
+      note: String(item?.note || "").trim() || undefined,
+      before: item?.before && typeof item.before === "object" ? item.before : undefined,
+      patch: item?.patch && typeof item.patch === "object" ? item.patch : undefined,
+      after: item?.after && typeof item.after === "object" ? item.after : undefined,
+      affectedTransactionIds: Array.isArray(item?.affectedTransactionIds)
+        ? item.affectedTransactionIds.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [],
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+    }))
+    .filter((row) => String(row.requestId || "").trim().length > 0)
+    .filter((row) => {
+      const reqId = String(row.requestId || "").trim();
+      const reqNo = String(row.requestNumber || "").trim();
+      if (reqId && tombstones.idSet.has(reqId)) return false;
+      if (reqNo && tombstones.numberSet.has(reqNo)) return false;
+      return true;
+    })
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+}
+
+type DeletedTargetIndex = {
+  transactionIds: Set<string>;
+  loanIds: Set<string>;
+};
+
+function normalizeId(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function collectDeletedTargetsFromExecutionLogs(logs: AuditExecutionLog[]): DeletedTargetIndex {
+  const transactionIds = new Set<string>();
+  const loanIds = new Set<string>();
+  for (const log of logs) {
+    if (String(log?.action || "") !== "delete_executed") continue;
+    const targetType = String(log?.targetType || "");
+    const targetId = normalizeId(log?.targetId);
+    const txnId = normalizeId(log?.transactionId);
+    const relatedLoanId = normalizeId(log?.relatedLoanId);
+    if (targetType === "loan") {
+      if (targetId) loanIds.add(targetId);
+      if (relatedLoanId) loanIds.add(relatedLoanId);
+    } else {
+      if (targetId) transactionIds.add(targetId);
+      if (txnId) transactionIds.add(txnId);
+    }
+    const linkedIds = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+    for (const id of linkedIds) {
+      const normalized = normalizeId(id);
+      if (normalized) transactionIds.add(normalized);
+    }
+    const patchIds = (log as any)?.patch?.__removedLinkedTransactionIds;
+    if (Array.isArray(patchIds)) {
+      for (const id of patchIds) {
+        const normalized = normalizeId(id);
+        if (normalized) transactionIds.add(normalized);
+      }
+    }
+    const beforeLinked = (log as any)?.before?.__linkedTransactions;
+    if (Array.isArray(beforeLinked)) {
+      for (const row of beforeLinked) {
+        const id = normalizeId((row as any)?.id);
+        if (id) transactionIds.add(id);
+      }
+    }
+  }
+  return { transactionIds, loanIds };
+}
+
+function isDeletedRow(row: any): boolean {
+  return Boolean(row?.deleted || row?.deletedAt);
+}
+
+function filterTransactionsByDeletedIndex(txns: Transaction[], index: DeletedTargetIndex): Transaction[] {
+  if (!index.transactionIds.size && !index.loanIds.size) return txns;
+  return txns.filter((row: any) => {
+    const id = normalizeId(row?.id);
+    if (id && index.transactionIds.has(id)) return false;
+    const loanId = normalizeId(row?.loanId);
+    if (loanId && index.loanIds.has(loanId)) return false;
+    if (isDeletedRow(row)) return false;
+    return true;
+  });
+}
+
+function filterLoansByDeletedIndex(loans: Loan[], index: DeletedTargetIndex): Loan[] {
+  if (!index.loanIds.size) return loans;
+  return loans.filter((row: any) => {
+    const id = normalizeId(row?.id);
+    if (id && index.loanIds.has(id)) return false;
+    if (isDeletedRow(row)) return false;
+    return true;
+  });
+}
+
+async function buildDeletedTargetIndexFromStorage(): Promise<DeletedTargetIndex> {
+  const logs = await getAuditExecutionLogs();
+  return collectDeletedTargetsFromExecutionLogs(logs);
+}
+
+export async function pruneDeletedTargetsFromStorage(): Promise<boolean> {
+  const [index, txnsRaw, loansRaw] = await Promise.all([
+    buildDeletedTargetIndexFromStorage(),
+    safeGet<Transaction[]>(KEYS.TRANSACTIONS, []),
+    safeGet<Loan[]>(KEYS.LOANS, []),
+  ]);
+  if (!index.transactionIds.size && !index.loanIds.size) return false;
+  const nextTxns = filterTransactionsByDeletedIndex(Array.isArray(txnsRaw) ? txnsRaw : [], index);
+  const nextLoans = filterLoansByDeletedIndex(Array.isArray(loansRaw) ? loansRaw : [], index);
+  const changed = nextTxns.length !== (Array.isArray(txnsRaw) ? txnsRaw.length : 0) || nextLoans.length !== (Array.isArray(loansRaw) ? loansRaw.length : 0);
+  if (changed) {
+    await AsyncStorage.multiSet([
+      [KEYS.TRANSACTIONS, JSON.stringify(nextTxns)],
+      [KEYS.LOANS, JSON.stringify(nextLoans)],
+    ]);
+  }
+  return changed;
+}
+
+async function getAuditRequestTargetMemberId(req: AuditChangeRequest): Promise<string> {
+  if (String(req?.targetType || "") === "loan") {
+    const loans = await getLoans();
+    const loan = loans.find((row: any) => String(row?.id || "") === String(req?.targetId || req?.relatedLoanId || ""));
+    if (loan) return String((loan as any)?.memberId || "").trim();
+    const logs = await getAuditExecutionLogs();
+    const log = logs.find((row) => String(row?.requestId || "") === String(req?.id || ""));
+    const fallbackMemberId = normalizeId((log as any)?.before?.memberId);
+    return fallbackMemberId;
+  }
+  const txns = await getTransactions();
+  const txn = txns.find((row: any) => String(row?.id || "") === String(req?.targetId || req?.transactionId || ""));
+  if (txn) return String((txn as any)?.memberId || "").trim();
+  const logs = await getAuditExecutionLogs();
+  const log = logs.find((row) => String(row?.requestId || "") === String(req?.id || ""));
+  return normalizeId((log as any)?.before?.memberId);
+}
+
+async function resolveAuditInitiatorRole(input: {
+  createdByUserId?: string;
+  createdByMemberId?: string;
+}): Promise<OrgPosition> {
+  try {
+    const users = await getUsers();
+    const user = users.find((row: any) => String(row?.id || "") === String(input.createdByUserId || ""));
+    if (user?.orgPosition) return normalizeOrgPosition(user.orgPosition);
+    const members = await getMembers();
+    const member = members.find((row: any) => String(row?.id || "") === String(input.createdByMemberId || ""));
+    if (member?.orgPosition) return normalizeOrgPosition(member.orgPosition);
+  } catch (e) {
+    console.warn("resolveAuditInitiatorRole failed:", e);
+  }
+  return "member";
+}
+
+export async function createAuditChangeRequest(input: {
+  requestKind?: AuditChangeRequestKind;
+  targetType?: AuditChangeTargetType;
+  targetId?: string;
+  transactionId?: string;
+  relatedLoanId?: string;
+  auditNote: string;
+  createdByUserId: string;
+  createdByMemberId?: string;
+  createdByDisplayName?: string;
+  drafts?: AuditChangeDrafts;
+  tagUserIds?: string[];
+}): Promise<AuditChangeRequest> {
+  const [requests, transactions, loans, deleteIndex, initiatorRole, cleanupTombstones] = await Promise.all([
+    getAuditChangeRequests(),
+    getTransactions(),
+    getLoans(),
+    buildDeletedTargetIndexFromStorage(),
+    resolveAuditInitiatorRole({ createdByUserId: input.createdByUserId, createdByMemberId: input.createdByMemberId }),
+    getAuditTestCleanupTombstones(),
+  ]);
+  const requestKind: AuditChangeRequestKind = normalizeAuditRequestKind(input.requestKind);
+  const resolvedTargetType: AuditChangeTargetType = requestKind === "delete"
+    ? normalizeAuditTargetType(input.targetType, String(input.targetId || ""), String(input.transactionId || ""))
+    : "transaction";
+
+  const transactionId = String(input.transactionId || (resolvedTargetType === "transaction" ? input.targetId : "") || "").trim();
+  const targetId = String(input.targetId || transactionId || (resolvedTargetType === "loan" ? input.relatedLoanId : "") || "").trim();
+  if (!targetId) throw new Error("target_id_required");
+
+  const txn = transactions.find((row: any) => String(row?.id || "") === transactionId);
+  const loan = loans.find((row: any) => String(row?.id || "") === targetId);
+  if (resolvedTargetType === "transaction" && !txn) throw new Error("transaction_not_found");
+  if (resolvedTargetType === "loan" && !loan) throw new Error("loan_not_found");
+  const originalSnapshot =
+    resolvedTargetType === "loan"
+      ? (loan ? { ...loan } : undefined)
+      : (txn ? { ...txn } : undefined);
+  if (requestKind === "delete") {
+    if (resolvedTargetType === "loan") {
+      if (deleteIndex.loanIds.has(targetId)) throw new Error("already_deleted");
+    } else {
+      if (deleteIndex.transactionIds.has(targetId) || deleteIndex.transactionIds.has(transactionId)) {
+        throw new Error("already_deleted");
+      }
+      const loanId = normalizeId((txn as any)?.loanId);
+      if (loanId && deleteIndex.loanIds.has(loanId)) throw new Error("already_deleted");
+    }
+  }
+
+  const activeConflict = requests.find((row: any) => {
+    const sameTarget =
+      String(row?.targetType || "") === resolvedTargetType &&
+      String(row?.targetId || "") === targetId;
+    if (!sameTarget) return false;
+    return (
+      row?.status === "pending" ||
+      row?.status === "suspended" ||
+      (row?.status === "approved" && row?.workflowStage === "treasurer_execution")
+    );
+  });
+  if (activeConflict) {
+    throw new Error("request_conflict_in_progress");
+  }
+  const finalizedConflict = requests.find((row: any) => {
+    const sameTarget =
+      String(row?.targetType || "") === resolvedTargetType &&
+      String(row?.targetId || "") === targetId;
+    if (!sameTarget) return false;
+    return ["approved", "rejected", "cancelled"].includes(String(row?.status || ""));
+  });
+  if (finalizedConflict) {
+    throw new Error("request_finalized_locked");
+  }
+
+  const now = new Date().toISOString();
+  const requestId = generateId();
+  const noteText = String(input.auditNote || "").trim();
+  const initialStage: AuditChangeWorkflowStage =
+    initiatorRole === "auditor"
+      ? "treasurer_execution"
+      : initiatorRole === "chairperson"
+        ? "auditor_review"
+        : "auditor_review";
+  const initialAssignedRole: OrgPosition =
+    initialStage === "treasurer_execution" ? "treasurer" : initialStage === "chair_approval" ? "chairperson" : "auditor";
+  const message: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId,
+    messageType: "note",
+    note: noteText || (requestKind === "delete" ? "Delete request" : "Audit flag မှတ်ချက်"),
+    byUserId: input.createdByUserId,
+    byMemberId: input.createdByMemberId,
+    byDisplayName: input.createdByDisplayName?.trim() || undefined,
+    toRole: initialAssignedRole,
+    tagUserIds: input.tagUserIds && input.tagUserIds.length ? Array.from(new Set(input.tagUserIds)) : undefined,
+    createdAt: now,
+  };
+
+  const request: AuditChangeRequest = {
+    id: requestId,
+    requestNumber: makeAuditChangeRequestNumber(requests, cleanupTombstones),
+    requestKind,
+    targetType: resolvedTargetType,
+    targetId,
+    transactionId: transactionId || undefined,
+    relatedLoanId:
+      String(input.relatedLoanId || (resolvedTargetType === "transaction" ? (txn as any)?.loanId : targetId) || "").trim() || undefined,
+    originalSnapshot: originalSnapshot && typeof originalSnapshot === "object" ? originalSnapshot : undefined,
+    status: "pending",
+    workflowStage: initialStage,
+    auditNote: noteText || "Audit flag မှတ်ချက်",
+    initiatedByRole: initiatorRole,
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    createdAt: now,
+    updatedAt: now,
+    assignedRole: initialAssignedRole,
+    messages: [message],
+    revisions: [],
+    drafts: input.drafts && Object.keys(input.drafts).length ? input.drafts : undefined,
+  };
+
+  await saveAuditChangeRequests([request, ...requests]);
+  const targetMemberId =
+    resolvedTargetType === "loan"
+      ? String((loan as any)?.memberId || "").trim()
+      : String((txn as any)?.memberId || "").trim();
+  await pushSystemEvent({
+    title: requestKind === "delete"
+      ? `Delete Request Submitted (${request.requestNumber})`
+      : `Audit Change Request Submitted (${request.requestNumber})`,
+    description: requestKind === "delete"
+      ? `${resolvedTargetType === "loan" ? "Loan" : "Transaction"} ${targetId} ကို ပယ်ဖျက်ရန် တင်သွင်းထားပါသည်`
+      : `Transaction ${transactionId} ကို စိစစ်ပြင်ဆင်ရန် တင်သွင်းထားပါသည်`,
+    category: requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.createdByUserId,
+    createdByMemberId: input.createdByMemberId,
+    targetUserIds: input.tagUserIds && input.tagUserIds.length ? Array.from(new Set(input.tagUserIds)) : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: request.id,
+  });
+  return request;
+}
+
+export async function addAuditChangeRequestMessage(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  messageType?: AuditChangeMessageType;
+  note: string;
+  toRole?: "treasurer" | "auditor" | "chairperson" | "vice_chairperson" | "secretary" | "joint_secretary" | "committee_member" | "member" | "patron" | "applicant";
+  toUserId?: string;
+  tagUserIds?: string[];
+  replyToMessageId?: string;
+  setSuspended?: boolean;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+
+  const now = new Date().toISOString();
+  const message: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: input.messageType || "reply",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: input.toRole,
+    toUserId: input.toUserId ? String(input.toUserId).trim() : undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    replyToMessageId: input.replyToMessageId,
+    createdAt: now,
+  };
+
+  const next = {
+    ...req,
+    updatedAt: now,
+    messages: [...(req.messages || []), message],
+  } as AuditChangeRequest;
+
+  if (input.setSuspended) {
+    next.status = "suspended";
+    next.workflowStage = "chair_approval";
+    next.assignedRole = "chairperson";
+    next.escalatedToChairAt = now;
+    next.escalatedByUserId = input.byUserId;
+  }
+  requests[idx] = next;
+  await saveAuditChangeRequests(requests);
+  await pushSystemEvent({
+    title: `Audit Change Request Updated (${req.requestNumber})`,
+    description: `${note.slice(0, 80)}${note.length > 80 ? "..." : ""}`,
+    category: "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: [
+      ...(message.toUserId ? [message.toUserId] : []),
+      ...((message.tagUserIds || []) as string[]),
+      String(req.createdByUserId || "").trim(),
+    ].filter(Boolean),
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function changeAuditChangeRequestStatus(input: {
+  requestId: string;
+  status: AuditChangeRequestStatus;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note?: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  const now = new Date().toISOString();
+
+  const status = input.status;
+  if (!["pending", "approved", "rejected", "cancelled", "suspended"].includes(String(status))) {
+    throw new Error("invalid_status");
+  }
+
+  const decisionNote = String(input.note || "").trim();
+  const message: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note: decisionNote || `Status changed to ${status}`,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: status === "suspended" ? "chairperson" : undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  const nextStage: AuditChangeWorkflowStage = (() => {
+    if (status === "rejected" || status === "cancelled") return "completed";
+    if (status === "suspended") return "chair_approval";
+    if (status === "approved") {
+      if (req.workflowStage === "chair_approval") return "treasurer_execution";
+      return req.workflowStage || "treasurer_execution";
+    }
+    if (status === "pending") {
+      if (req.workflowStage && req.workflowStage !== "completed") return req.workflowStage;
+      return "auditor_review";
+    }
+    return req.workflowStage || "auditor_review";
+  })();
+  const nextAssignedRole: OrgPosition | undefined =
+    nextStage === "chair_approval"
+      ? "chairperson"
+      : nextStage === "treasurer_execution"
+        ? "treasurer"
+        : nextStage === "auditor_review"
+          ? "auditor"
+          : undefined;
+
+  requests[idx] = {
+    ...req,
+    status,
+    workflowStage: nextStage,
+    assignedRole: nextAssignedRole,
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: decisionNote || undefined,
+    updatedAt: now,
+    escalatedToChairAt: status === "suspended" ? now : req.escalatedToChairAt,
+    escalatedByUserId: status === "suspended" ? input.byUserId : req.escalatedByUserId,
+    messages: [...(req.messages || []), message],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `Audit Change Request ${status.toUpperCase()} (${req.requestNumber})`,
+    description: decisionNote || `Status: ${status}`,
+    category: "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function forwardAuditChangeRequestToChair(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.workflowStage && req.workflowStage !== "auditor_review") throw new Error("invalid_stage");
+
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "forward",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: "chairperson",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "suspended",
+    workflowStage: "chair_approval",
+    assignedRole: "chairperson",
+    escalatedToChairAt: now,
+    escalatedByUserId: input.byUserId,
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `${req.requestKind === "delete" ? "Delete Request" : "Audit Change Request"} Forwarded to Chair (${req.requestNumber})`,
+    description: `${req.targetType} ${req.targetId} - chair approval requested`,
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function sendAuditRequestBackToTreasurer(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.workflowStage === "completed") throw new Error("invalid_stage");
+  if (req.workflowStage && !["auditor_review", "chair_approval"].includes(req.workflowStage)) {
+    throw new Error("invalid_stage");
+  }
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "forward",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: "treasurer",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "pending",
+    workflowStage: "treasurer_execution",
+    assignedRole: "treasurer",
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `Audit Request Returned to Treasurer (${req.requestNumber})`,
+    description: note,
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function sendAuditRequestBackToAuditor(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.workflowStage === "completed") throw new Error("invalid_stage");
+  if (req.workflowStage && !["treasurer_execution", "chair_approval"].includes(req.workflowStage)) {
+    throw new Error("invalid_stage");
+  }
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "reply",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: "auditor",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "pending",
+    workflowStage: "auditor_review",
+    assignedRole: "auditor",
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `Audit Request Sent to Auditor (${req.requestNumber})`,
+    description: note,
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function saveAuditChangeRequestDraft(input: {
+  requestId: string;
+  role: "treasurer" | "auditor" | "chairperson";
+  values: Record<string, any>;
+  note?: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  const now = new Date().toISOString();
+  const role = input.role;
+
+  const nextDraft = {
+    values: { ...(input.values || {}) },
+    note: String(input.note || "").trim() || undefined,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    updatedAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    drafts: {
+      ...(req.drafts || {}),
+      [role]: nextDraft,
+    },
+    updatedAt: now,
+  };
+
+  await saveAuditChangeRequests(requests);
+}
+
+export async function forwardDeleteAuditRequestToChair(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note: string;
+}): Promise<void> {
+  return forwardAuditChangeRequestToChair(input);
+}
+
+export async function chairReviewAuditRequest(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  approved: boolean;
+  note: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const requests = await getAuditChangeRequests();
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.workflowStage !== "chair_approval") throw new Error("invalid_stage");
+
+  const note = String(input.note || "").trim();
+  if (!note) throw new Error("note_required");
+  const now = new Date().toISOString();
+  const approved = Boolean(input.approved);
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note,
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    toRole: approved ? "treasurer" : "auditor",
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: approved ? "approved" : "rejected",
+    workflowStage: approved ? "treasurer_execution" : "completed",
+    assignedRole: approved ? "treasurer" : "auditor",
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: note,
+    chairApprovedByUserId: approved ? input.byUserId : req.chairApprovedByUserId,
+    chairApprovedAt: approved ? now : req.chairApprovedAt,
+    updatedAt: now,
+    messages: [...(req.messages || []), msg],
+  };
+  await saveAuditChangeRequests(requests);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: approved
+      ? `${req.requestKind === "delete" ? "Delete Request" : "Audit Change Request"} Approved by Chair (${req.requestNumber})`
+      : `${req.requestKind === "delete" ? "Delete Request" : "Audit Change Request"} Rejected by Chair (${req.requestNumber})`,
+    description: note,
+    category: req.requestKind === "delete" ? "delete_request" : "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function chairReviewDeleteAuditRequest(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  approved: boolean;
+  note: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  return chairReviewAuditRequest(input);
+}
+
+export async function confirmDeleteAuditRequestExecution(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  note?: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const [requests, txns, loans, executionLogs] = await Promise.all([
+    getAuditChangeRequests(),
+    getTransactions(),
+    getLoans(),
+    getAuditExecutionLogs(),
+  ]);
+  const idx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (idx === -1) throw new Error("request_not_found");
+  const req = requests[idx];
+  if (req.requestKind !== "delete") throw new Error("not_delete_request");
+  if (req.workflowStage !== "treasurer_execution" || req.status !== "approved") throw new Error("request_not_ready_for_execution");
+
+  const now = new Date().toISOString();
+  let snapshotBefore: Record<string, any> = {};
+  let removedLinkedTransactionIds: string[] = [];
+  if (req.targetType === "loan") {
+    const loanIdx = loans.findIndex((row: any) => String(row?.id || "") === String(req.targetId || ""));
+    if (loanIdx === -1) throw new Error("loan_not_found");
+    const loanSnapshot = { ...(loans[loanIdx] as any) };
+    const linkedTransactions = txns.filter((row: any) => String(row?.loanId || "") === String(req.targetId || ""));
+    removedLinkedTransactionIds = linkedTransactions.map((row: any) => String(row?.id || "")).filter(Boolean);
+    snapshotBefore = {
+      ...loanSnapshot,
+      __linkedTransactions: linkedTransactions,
+    };
+    loans.splice(loanIdx, 1);
+    if (removedLinkedTransactionIds.length > 0) {
+      for (let i = txns.length - 1; i >= 0; i--) {
+        const row = txns[i] as any;
+        if (String(row?.loanId || "") === String(req.targetId || "")) {
+          txns.splice(i, 1);
+        }
+      }
+    }
+  } else {
+    const txnIdx = txns.findIndex((row: any) => String(row?.id || "") === String(req.targetId || req.transactionId || ""));
+    if (txnIdx === -1) throw new Error("transaction_not_found");
+    snapshotBefore = { ...(txns[txnIdx] as any) };
+    txns.splice(txnIdx, 1);
+  }
+
+  const revision: AuditChangeRevision = {
+    id: generateId(),
+    requestId: req.id,
+    transactionId: String(req.transactionId || req.targetId || ""),
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    note: String(input.note || "").trim() || "Delete confirmed by treasurer",
+    before: snapshotBefore,
+    patch: {
+      __action: "delete",
+      __removedLinkedTransactionIds: removedLinkedTransactionIds,
+    },
+    after: {
+      deleted: true,
+      deletedAt: now,
+      removedLinkedTransactionCount: removedLinkedTransactionIds.length,
+    },
+    createdAt: now,
+  };
+
+  const executionLog: AuditExecutionLog = {
+    id: generateId(),
+    requestId: req.id,
+    requestNumber: req.requestNumber,
+    requestKind: "delete",
+    action: "delete_executed",
+    targetType: req.targetType,
+    targetId: String(req.targetId || req.transactionId || ""),
+    transactionId: req.transactionId,
+    relatedLoanId: req.relatedLoanId,
+    statusAtExecution: "approved",
+    workflowStageAtExecution: "completed",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    note: String(input.note || "").trim() || "စာရင်းကို ပယ်ဖျက်ပြီး အတည်ပြုပြီးပါပြီ။",
+    before: snapshotBefore,
+    patch: {
+      __action: "delete",
+      __removedLinkedTransactionIds: removedLinkedTransactionIds,
+    },
+    after: {
+      deleted: true,
+      deletedAt: now,
+      removedLinkedTransactionCount: removedLinkedTransactionIds.length,
+    },
+    affectedTransactionIds: removedLinkedTransactionIds,
+    createdAt: now,
+  };
+
+  const msg: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note: String(input.note || "").trim() || "စာရင်းကို ပယ်ဖျက်ပြီး အတည်ပြုပြီးပါပြီ။",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  requests[idx] = {
+    ...req,
+    status: "approved",
+    workflowStage: "completed",
+    assignedRole: undefined,
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: String(input.note || "").trim() || req.reviewNote,
+    treasurerConfirmedByUserId: input.byUserId,
+    treasurerConfirmedAt: now,
+    updatedAt: now,
+    revisions: [...(req.revisions || []), revision],
+    messages: [...(req.messages || []), msg],
+  };
+
+  const nextExecutionLogs = [executionLog, ...(executionLogs || [])].slice(0, 4000);
+
+  await AsyncStorage.multiSet([
+    [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
+    [KEYS.TRANSACTIONS, JSON.stringify(txns)],
+    [KEYS.LOANS, JSON.stringify(loans)],
+    [KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(nextExecutionLogs)],
+  ]);
+  const targetMemberId = await getAuditRequestTargetMemberId(req);
+  await pushSystemEvent({
+    title: `Delete Executed (${req.requestNumber})`,
+    description:
+      req.targetType === "loan" && removedLinkedTransactionIds.length > 0
+        ? `${req.targetType} ${req.targetId} ကို ပယ်ဖျက်ပြီး linked transactions ${removedLinkedTransactionIds.length} ခု ဖယ်ရှားပြီးပါပြီ`
+        : `${req.targetType} ${req.targetId} ကို ပယ်ဖျက်ပြီးပါပြီ`,
+    category: "delete_request",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
+export async function applyAuditChangeRequestPatch(input: {
+  requestId: string;
+  byUserId: string;
+  byMemberId?: string;
+  byDisplayName?: string;
+  patch: Record<string, any>;
+  note?: string;
+  tagUserIds?: string[];
+}): Promise<void> {
+  const [requests, txns, executionLogs] = await Promise.all([
+    getAuditChangeRequests(),
+    getTransactions(),
+    getAuditExecutionLogs(),
+  ]);
+  const reqIdx = requests.findIndex((row: any) => row.id === input.requestId);
+  if (reqIdx === -1) throw new Error("request_not_found");
+  const req = requests[reqIdx];
+  if (req.requestKind === "delete") throw new Error("invalid_request_kind");
+  if (req.workflowStage !== "treasurer_execution" || String(req.status || "") !== "approved") {
+    throw new Error("request_not_ready_for_execution");
+  }
+
+  const txnIdx = txns.findIndex((row: any) => String(row?.id || "") === String(req.transactionId || ""));
+  if (txnIdx === -1) throw new Error("transaction_not_found");
+  const currentTxn = txns[txnIdx] as any;
+
+  const sanitizedPatch = sanitizeAuditPatch(input.patch || {});
+  const hasPatchChanges = Object.keys(sanitizedPatch).length > 0;
+  const nextReceipt = String(sanitizedPatch.receiptNumber || "").trim();
+  const currentReceipt = String((currentTxn as any)?.receiptNumber || "").trim();
+  if (nextReceipt && nextReceipt.toLowerCase() !== currentReceipt.toLowerCase()) {
+    const duplicate = txns.find((row: any) => {
+      if (String(row?.id || "") === String(currentTxn?.id || "")) return false;
+      const existing = String(row?.receiptNumber || "").trim();
+      return existing && existing.toLowerCase() === nextReceipt.toLowerCase();
+    });
+    if (duplicate) throw new Error("duplicate_receipt");
+  }
+
+  const before = pickTransactionAuditSnapshot(currentTxn);
+  const afterTxn = {
+    ...currentTxn,
+    ...sanitizedPatch,
+    auditFlagged: false,
+    auditNote: "",
+    auditFlaggedByUserId: "",
+    auditFlaggedAt: "",
+  };
+  txns[txnIdx] = afterTxn;
+  const after = pickTransactionAuditSnapshot(afterTxn);
+
+  const now = new Date().toISOString();
+  const revision: AuditChangeRevision = {
+    id: generateId(),
+    requestId: req.id,
+    transactionId: String(req.transactionId || ""),
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    note: String(input.note || "").trim() || undefined,
+    before,
+    patch: hasPatchChanges ? sanitizedPatch : { __noChange: true },
+    after,
+    createdAt: now,
+  };
+
+  const executionLog: AuditExecutionLog = {
+    id: generateId(),
+    requestId: req.id,
+    requestNumber: req.requestNumber,
+    requestKind: "update",
+    action: "update_applied",
+    targetType: req.targetType || "transaction",
+    targetId: String(req.targetId || req.transactionId || ""),
+    transactionId: req.transactionId,
+    relatedLoanId: req.relatedLoanId,
+    statusAtExecution: "approved",
+    workflowStageAtExecution: "completed",
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    note: String(input.note || "").trim() || (hasPatchChanges ? "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။" : "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပြီးပါပြီ။"),
+    before,
+    patch: hasPatchChanges ? sanitizedPatch : { __noChange: true },
+    after,
+    createdAt: now,
+  };
+
+  const decisionMessage: AuditChangeRequestMessage = {
+    id: generateId(),
+    requestId: req.id,
+    messageType: "decision",
+    note: String(input.note || "").trim() || (hasPatchChanges ? "စာရင်းကို ပြင်ဆင်ပြီး အတည်ပြုပြီးပါပြီ။" : "ပြင်ဆင်စရာမရှိ၍ အတည်ပြုပြီးပါပြီ။"),
+    byUserId: input.byUserId,
+    byMemberId: input.byMemberId,
+    byDisplayName: input.byDisplayName?.trim() || undefined,
+    tagUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : undefined,
+    createdAt: now,
+  };
+
+  requests[reqIdx] = {
+    ...req,
+    status: "approved",
+    workflowStage: "completed",
+    assignedRole: undefined,
+    reviewedByUserId: input.byUserId,
+    reviewedAt: now,
+    reviewNote: String(input.note || "").trim() || undefined,
+    updatedAt: now,
+    resolvedTransactionId: String(req.transactionId || ""),
+    revisions: [...(req.revisions || []), revision],
+    messages: [...(req.messages || []), decisionMessage],
+  };
+
+  const nextExecutionLogs = [executionLog, ...(executionLogs || [])].slice(0, 4000);
+
+  await AsyncStorage.multiSet([
+    [KEYS.TRANSACTIONS, JSON.stringify(txns)],
+    [KEYS.AUDIT_CHANGE_REQUESTS, JSON.stringify(requests)],
+    [KEYS.AUDIT_EXECUTION_LOGS, JSON.stringify(nextExecutionLogs)],
+  ]);
+  const targetMemberId = String((afterTxn as any)?.memberId || "").trim();
+  await pushSystemEvent({
+    title: `Audit Change Applied (${req.requestNumber})`,
+    description: hasPatchChanges
+      ? `Transaction ${req.transactionId} ကို ပြင်ဆင်ပြီး အတည်ပြုခဲ့ပါသည်`
+      : `Transaction ${req.transactionId} တွင် ပြင်ဆင်စရာမရှိ၍ အတည်ပြုခဲ့ပါသည်`,
+    category: "audit_change",
+    createdByUserId: input.byUserId,
+    createdByMemberId: input.byMemberId,
+    targetUserIds: Array.isArray(input.tagUserIds)
+      ? input.tagUserIds.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
+    targetMemberIds: targetMemberId ? [targetMemberId] : [],
+    relatedType: "audit_change_request",
+    relatedId: req.id,
+  });
+}
+
 function mapPaymentRequestKindToIncomeCategory(
   kind: MemberPaymentRequestKind
 ): { category: string; categoryLabel: string } {
@@ -828,31 +2724,219 @@ function mapPaymentRequestKindToIncomeCategory(
   return { category: "interest_income", categoryLabel: "အတိုးရငွေ" };
 }
 
+const COMMITTEE_NOTIFICATION_ROLES: OrgPosition[] = [
+  "patron",
+  "chairperson",
+  "vice_chairperson",
+  "secretary",
+  "joint_secretary",
+  "treasurer",
+  "auditor",
+  "committee_member",
+];
+
+function normalizeOrgPositionList(values: unknown[]): OrgPosition[] {
+  const set = new Set<OrgPosition>();
+  for (const row of values || []) {
+    const role = normalizeOrgPosition(row);
+    set.add(role);
+  }
+  return Array.from(set.values());
+}
+
+async function resolveNotificationTargetUserIds(input: {
+  targetUserIds?: string[];
+  targetMemberIds?: string[];
+  targetRoles?: OrgPosition[];
+  includeCommittee?: boolean;
+  includeCreator?: boolean;
+  createdByUserId?: string;
+}): Promise<string[]> {
+  const users = await getUsers();
+  const activeUsers = (users || []).filter((row) => row?.isActive !== false);
+  const activeIds = new Set(activeUsers.map((row) => String(row.id || "")).filter(Boolean));
+  const target = new Set<string>();
+
+  if (input.includeCommittee) {
+    const committeeRoleSet = new Set(COMMITTEE_NOTIFICATION_ROLES);
+    activeUsers.forEach((row: any) => {
+      const role = normalizeOrgPosition(row?.orgPosition || "member");
+      if (committeeRoleSet.has(role)) target.add(String(row?.id || ""));
+    });
+  }
+
+  const roleSet = new Set(normalizeOrgPositionList((input.targetRoles || []) as unknown[]));
+  if (roleSet.size > 0) {
+    activeUsers.forEach((row: any) => {
+      const role = normalizeOrgPosition(row?.orgPosition || "member");
+      if (roleSet.has(role)) target.add(String(row?.id || ""));
+    });
+  }
+
+  const memberSet = new Set((input.targetMemberIds || []).map((v) => String(v || "").trim()).filter(Boolean));
+  if (memberSet.size > 0) {
+    activeUsers.forEach((row: any) => {
+      const memberId = String(row?.memberId || "").trim();
+      if (memberId && memberSet.has(memberId)) target.add(String(row?.id || ""));
+    });
+  }
+
+  (input.targetUserIds || []).forEach((id) => {
+    const userId = String(id || "").trim();
+    if (userId && activeIds.has(userId)) target.add(userId);
+  });
+
+  if (input.includeCreator && input.createdByUserId) {
+    const creatorId = String(input.createdByUserId || "").trim();
+    if (creatorId && activeIds.has(creatorId)) target.add(creatorId);
+  }
+
+  return Array.from(target.values()).filter(Boolean);
+}
+
+export async function getNotifications(): Promise<AppNotification[]> {
+  const rows = await safeGet<AppNotification[]>(KEYS.NOTIFICATIONS, []);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item: any) => ({
+      id: String(item?.id || ""),
+      title: String(item?.title || ""),
+      description: String(item?.description || ""),
+      category: (item?.category || "system") as AppNotification["category"],
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+      createdByUserId: item?.createdByUserId ? String(item.createdByUserId) : undefined,
+      createdByMemberId: item?.createdByMemberId ? String(item.createdByMemberId) : undefined,
+      targetUserIds: Array.isArray(item?.targetUserIds)
+        ? item.targetUserIds.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [],
+      relatedType: item?.relatedType ? String(item.relatedType) : undefined,
+      relatedId: item?.relatedId ? String(item.relatedId) : undefined,
+      readByUserIds: Array.isArray(item?.readByUserIds)
+        ? item.readByUserIds.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [],
+    }))
+    .filter((item) => item.id && item.title && item.createdAt)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+}
+
+async function saveNotifications(rows: AppNotification[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(rows));
+}
+
+export async function markNotificationRead(notificationId: string, userId: string): Promise<void> {
+  const nId = String(notificationId || "").trim();
+  const uId = String(userId || "").trim();
+  if (!nId || !uId) return;
+  const rows = await getNotifications();
+  const idx = rows.findIndex((row) => String(row.id || "") === nId);
+  if (idx === -1) return;
+  const readSet = new Set((rows[idx].readByUserIds || []).map((v) => String(v || "").trim()).filter(Boolean));
+  readSet.add(uId);
+  rows[idx] = {
+    ...rows[idx],
+    readByUserIds: Array.from(readSet.values()),
+  };
+  await saveNotifications(rows);
+}
+
+export async function deleteNotificationsForUser(input: {
+  notificationIds: string[];
+  userId: string;
+}): Promise<{ removedIds: string[]; updatedIds: string[] }> {
+  const ids = new Set((input.notificationIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  const userId = String(input.userId || "").trim();
+  if (ids.size === 0 || !userId) return { removedIds: [], updatedIds: [] };
+
+  const rows = await getNotifications();
+  const removedIds: string[] = [];
+  const updatedIds: string[] = [];
+
+  const next = rows
+    .map((row) => {
+      const rowId = String(row?.id || "").trim();
+      if (!rowId || !ids.has(rowId)) return row;
+      const targetUserIds = Array.isArray(row?.targetUserIds) ? row.targetUserIds : [];
+      const readByUserIds = Array.isArray(row?.readByUserIds) ? row.readByUserIds : [];
+      const remainingTargets = targetUserIds.filter((id: any) => String(id || "").trim() !== userId);
+      const remainingReads = readByUserIds.filter((id: any) => String(id || "").trim() !== userId);
+      if (remainingTargets.length === 0) {
+        removedIds.push(rowId);
+        return null;
+      }
+      updatedIds.push(rowId);
+      return {
+        ...row,
+        targetUserIds: remainingTargets,
+        readByUserIds: remainingReads,
+      };
+    })
+    .filter(Boolean) as AppNotification[];
+
+  await saveNotifications(next);
+  return { removedIds, updatedIds };
+}
+
+async function pushSystemNotification(input: {
+  title: string;
+  description: string;
+  category?: AppNotification["category"];
+  createdByUserId?: string;
+  createdByMemberId?: string;
+  targetUserIds?: string[];
+  targetMemberIds?: string[];
+  targetRoles?: OrgPosition[];
+  includeCommittee?: boolean;
+  includeCreator?: boolean;
+  relatedType?: string;
+  relatedId?: string;
+}) {
+  try {
+    const targetUserIds = await resolveNotificationTargetUserIds({
+      targetUserIds: input.targetUserIds,
+      targetMemberIds: input.targetMemberIds,
+      targetRoles: input.targetRoles,
+      includeCommittee: input.includeCommittee !== false,
+      includeCreator: input.includeCreator !== false,
+      createdByUserId: input.createdByUserId,
+    });
+    if (targetUserIds.length === 0) return;
+
+    const rows = await getNotifications();
+    const item: AppNotification = {
+      id: generateId(),
+      title: String(input.title || "").trim(),
+      description: String(input.description || "").trim(),
+      category: (input.category || "system") as AppNotification["category"],
+      createdAt: new Date().toISOString(),
+      createdByUserId: input.createdByUserId,
+      createdByMemberId: input.createdByMemberId,
+      targetUserIds,
+      relatedType: input.relatedType?.trim() || undefined,
+      relatedId: input.relatedId?.trim() || undefined,
+      readByUserIds: [],
+    };
+    if (!item.title) return;
+    await saveNotifications([item, ...rows]);
+  } catch (error) {
+    console.log("pushSystemNotification failed", error);
+  }
+}
+
 async function pushSystemEvent(input: {
   title: string;
   description: string;
   createdByUserId?: string;
   createdByMemberId?: string;
+  category?: AppNotification["category"];
+  targetUserIds?: string[];
+  targetMemberIds?: string[];
+  targetRoles?: OrgPosition[];
+  includeCommittee?: boolean;
+  includeCreator?: boolean;
+  relatedType?: string;
+  relatedId?: string;
 }) {
-  try {
-    const events = await getEvents();
-    const now = new Date();
-    const event: OrgEvent = {
-      id: generateId(),
-      title: input.title,
-      description: input.description,
-      date: toYmd(now),
-      time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
-      location: "System",
-      attendeeIds: [],
-      createdAt: now.toISOString(),
-      createdByUserId: input.createdByUserId,
-      createdByMemberId: input.createdByMemberId,
-    };
-    await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify([event, ...events]));
-  } catch (error) {
-    console.log("pushSystemEvent failed", error);
-  }
+  await pushSystemNotification(input);
 }
 
 function defaultStandardRules(): StandardAmountRule[] {
@@ -1034,8 +3118,12 @@ export async function createExpenseClaim(input: Omit<ExpenseClaim, "id" | "claim
   await pushSystemEvent({
     title: `Expense Claim Submitted (${claim.claimNumber})`,
     description: `${claim.claimantName} - ${claim.requestedAmount.toLocaleString()} KS (${claim.expenseCategoryLabel})`,
+    category: "expense_claim",
     createdByUserId: claim.createdByUserId,
     createdByMemberId: claim.createdByMemberId,
+    targetMemberIds: [String(claim.claimantMemberId || claim.relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claim.id,
   });
   return claim;
 }
@@ -1063,7 +3151,11 @@ export async function approveExpenseClaim(input: {
   await pushSystemEvent({
     title: `Expense Claim Approved (${claims[idx].claimNumber})`,
     description: `${claims[idx].approvedAmount?.toLocaleString() || 0} KS approved`,
+    category: "expense_claim",
     createdByUserId: input.approverUserId,
+    targetMemberIds: [String(claims[idx].claimantMemberId || claims[idx].relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claims[idx].id,
   });
 }
 
@@ -1088,7 +3180,11 @@ export async function rejectExpenseClaim(input: {
   await pushSystemEvent({
     title: `Expense Claim Rejected (${claims[idx].claimNumber})`,
     description: claims[idx].approvalNote || "Claim rejected",
+    category: "expense_claim",
     createdByUserId: input.approverUserId,
+    targetMemberIds: [String(claims[idx].claimantMemberId || claims[idx].relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claims[idx].id,
   });
 }
 
@@ -1139,7 +3235,11 @@ export async function disburseExpenseClaim(input: {
   await pushSystemEvent({
     title: `Expense Disbursed (${claim.claimNumber})`,
     description: `${amount.toLocaleString()} KS • ${input.method.toUpperCase()}`,
+    category: "expense_claim",
     createdByUserId: input.disburserUserId,
+    targetMemberIds: [String(claim.claimantMemberId || claim.relatedMemberId || "").trim()].filter(Boolean),
+    relatedType: "expense_claim",
+    relatedId: claim.id,
   });
 }
 
@@ -1169,6 +3269,37 @@ export async function createMemberPaymentRequest(input: {
   createdByMemberId?: string;
 }): Promise<MemberPaymentRequest> {
   const requests = await getMemberPaymentRequests();
+  const pendingRequests = requests.filter((row) => String(row?.status || "") === "pending_treasurer_review");
+  const requestedKind = String(input.kind || "").trim();
+  const requestedForMemberId = String(input.forMemberId || "").trim();
+  const requestedRef = String(input.walletReference || "").trim().toLowerCase();
+  const requestedFeeStart = String(input.feePeriodStart || "").trim();
+  const requestedFeeEnd = String(input.feePeriodEnd || "").trim();
+
+  const hasPendingConflict = pendingRequests.some((row: any) => {
+    const sameKind = String(row?.kind || "") === requestedKind;
+    const sameForMember = String(row?.forMemberId || "") === requestedForMemberId;
+    if (requestedRef && String(row?.walletReference || "").trim().toLowerCase() === requestedRef) {
+      return true;
+    }
+    if (!sameKind || !sameForMember) return false;
+    if (requestedKind !== "member_fees") return true;
+    const rowStartRaw = String(row?.feePeriodStart || "").trim();
+    const rowEndRaw = String(row?.feePeriodEnd || "").trim();
+    if (!rowStartRaw || !rowEndRaw || !requestedFeeStart || !requestedFeeEnd) return true;
+    const rowStart = new Date(rowStartRaw);
+    const rowEnd = new Date(rowEndRaw);
+    const reqStart = new Date(requestedFeeStart);
+    const reqEnd = new Date(requestedFeeEnd);
+    if ([rowStart, rowEnd, reqStart, reqEnd].some((d) => Number.isNaN(d.getTime()))) return true;
+    rowStart.setHours(0, 0, 0, 0);
+    rowEnd.setHours(23, 59, 59, 999);
+    reqStart.setHours(0, 0, 0, 0);
+    reqEnd.setHours(23, 59, 59, 999);
+    return reqStart <= rowEnd && reqEnd >= rowStart;
+  });
+  if (hasPendingConflict) throw new Error("request_conflict_in_progress");
+
   const nowDate = new Date();
   const now = nowDate.toISOString();
   const mapping = mapPaymentRequestKindToIncomeCategory(input.kind);
@@ -1204,8 +3335,12 @@ export async function createMemberPaymentRequest(input: {
   await pushSystemEvent({
     title: `Payment Request Submitted (${request.requestNumber})`,
     description: `${request.payerName} • ${request.amount.toLocaleString()} KS • ${request.categoryLabel}`,
+    category: "payment_request",
     createdByUserId: request.createdByUserId,
     createdByMemberId: request.createdByMemberId,
+    targetMemberIds: [String(request.forMemberId || request.payerMemberId || "").trim()].filter(Boolean),
+    relatedType: "member_payment_request",
+    relatedId: request.id,
   });
   return request;
 }
@@ -1256,7 +3391,11 @@ export async function approveMemberPaymentRequest(input: {
   await pushSystemEvent({
     title: `Payment Request Approved (${request.requestNumber})`,
     description: `${request.amount.toLocaleString()} KS ကို ရငွေစာရင်းသို့ ထည့်သွင်းပြီးပါပြီ`,
+    category: "payment_request",
     createdByUserId: input.reviewerUserId,
+    targetMemberIds: [String(request.forMemberId || request.payerMemberId || "").trim()].filter(Boolean),
+    relatedType: "member_payment_request",
+    relatedId: request.id,
   });
 }
 
@@ -1283,7 +3422,11 @@ export async function rejectMemberPaymentRequest(input: {
   await pushSystemEvent({
     title: `Payment Request Rejected (${request.requestNumber})`,
     description: requests[idx].reviewNote || "Rejected by treasurer",
+    category: "payment_request",
     createdByUserId: input.reviewerUserId,
+    targetMemberIds: [String(request.forMemberId || request.payerMemberId || "").trim()].filter(Boolean),
+    relatedType: "member_payment_request",
+    relatedId: request.id,
   });
 }
 
@@ -1321,6 +3464,32 @@ export async function saveChatThreads(data: ChatThread[]): Promise<void> {
 
 export async function saveChatMessages(data: ChatMessage[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.CHAT_MESSAGES, JSON.stringify(data));
+}
+
+function getChatMessagePreviewText(message: ChatMessage | undefined): string {
+  if (!message) return "";
+  if (message.isDeleted) return "[Deleted]";
+  const text = String(message.text || "").trim();
+  if (text) return text;
+  if (String(message.image || "").trim()) return "[Image]";
+  return "";
+}
+
+async function refreshChatThreadLastMessage(threadId: string): Promise<void> {
+  const [threads, messages] = await Promise.all([getChatThreads(), getChatMessages()]);
+  const idx = threads.findIndex((row) => String(row.id) === String(threadId));
+  if (idx === -1) return;
+  const sorted = (messages || [])
+    .filter((row) => String(row.threadId || "") === String(threadId))
+    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+  const last = sorted.length > 0 ? sorted[sorted.length - 1] : undefined;
+  threads[idx] = {
+    ...threads[idx],
+    lastMessageAt: last?.createdAt || undefined,
+    lastMessageText: getChatMessagePreviewText(last),
+    updatedAt: new Date().toISOString(),
+  };
+  await saveChatThreads(threads);
 }
 
 function normalizeUserIdList(ids: string[]): string[] {
@@ -1428,11 +3597,79 @@ export async function sendChatMessage(input: {
   threads[idx] = {
     ...threads[idx],
     lastMessageAt: now,
-    lastMessageText: message.text || (message.image ? "[Image]" : ""),
+    lastMessageText: getChatMessagePreviewText(message),
     updatedAt: now,
   };
   await saveChatThreads(threads);
   return message;
+}
+
+export async function updateChatMessage(input: {
+  messageId: string;
+  editorUserId: string;
+  text?: string;
+  image?: string;
+}): Promise<ChatMessage> {
+  const messageId = String(input.messageId || "").trim();
+  const editorUserId = String(input.editorUserId || "").trim();
+  if (!messageId || !editorUserId) throw new Error("invalid_input");
+
+  const messages = await getChatMessages();
+  const idx = messages.findIndex((row) => String(row.id || "") === messageId);
+  if (idx === -1) throw new Error("message_not_found");
+
+  const target = messages[idx];
+  if (String(target.senderUserId || "") !== editorUserId) throw new Error("not_message_owner");
+  if (target.isDeleted) throw new Error("message_deleted");
+
+  const text = String(input.text || "").trim();
+  const image = String(input.image || "").trim();
+  if (!text && !image) throw new Error("empty_message");
+
+  const now = new Date().toISOString();
+  const updated: ChatMessage = {
+    ...target,
+    text: text || undefined,
+    image: image || undefined,
+    updatedAt: now,
+    editedAt: now,
+  };
+  messages[idx] = updated;
+  await saveChatMessages(messages);
+  await refreshChatThreadLastMessage(String(target.threadId || ""));
+  return updated;
+}
+
+export async function deleteChatMessage(input: {
+  messageId: string;
+  deleterUserId: string;
+}): Promise<ChatMessage> {
+  const messageId = String(input.messageId || "").trim();
+  const deleterUserId = String(input.deleterUserId || "").trim();
+  if (!messageId || !deleterUserId) throw new Error("invalid_input");
+
+  const messages = await getChatMessages();
+  const idx = messages.findIndex((row) => String(row.id || "") === messageId);
+  if (idx === -1) throw new Error("message_not_found");
+
+  const target = messages[idx];
+  if (String(target.senderUserId || "") !== deleterUserId) throw new Error("not_message_owner");
+  if (target.isDeleted) return target;
+
+  const now = new Date().toISOString();
+  const updated: ChatMessage = {
+    ...target,
+    text: undefined,
+    image: undefined,
+    isDeleted: true,
+    deletedAt: now,
+    deletedByUserId: deleterUserId,
+    updatedAt: now,
+  };
+  messages[idx] = updated;
+  await saveChatMessages(messages);
+  await refreshChatThreadLastMessage(String(target.threadId || ""));
+  return updated;
 }
 
 export async function markChatThreadRead(threadId: string, userId: string): Promise<void> {
@@ -1490,7 +3727,11 @@ export async function saveAttendance(eventId: string, memberId: string, status: 
 }
 
 // --- Transactions ---
-export const getTransactions = () => safeGet<Transaction[]>(KEYS.TRANSACTIONS, []);
+export async function getTransactions(): Promise<Transaction[]> {
+  const txns = await safeGet<Transaction[]>(KEYS.TRANSACTIONS, []);
+  const index = await buildDeletedTargetIndexFromStorage();
+  return filterTransactionsByDeletedIndex(Array.isArray(txns) ? txns : [], index);
+}
 
 export async function addTransaction(txn: any) {
   const txns = await getTransactions();
@@ -1503,7 +3744,9 @@ export async function updateTransaction(id: string, updates: any) {
   const txns = await getTransactions();
   const idx = txns.findIndex((item) => item.id === id);
   if (idx !== -1) {
-    txns[idx] = { ...txns[idx], ...updates };
+    const safeUpdates = { ...updates };
+    if ("id" in safeUpdates) delete safeUpdates.id;
+    txns[idx] = { ...txns[idx], ...safeUpdates };
     await AsyncStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify(txns));
   }
 }
@@ -1528,7 +3771,11 @@ export async function deleteTransaction(id: string) {
 }
 
 // --- Loans ---
-export const getLoans = () => safeGet<Loan[]>(KEYS.LOANS, []);
+export async function getLoans(): Promise<Loan[]> {
+  const loans = await safeGet<Loan[]>(KEYS.LOANS, []);
+  const index = await buildDeletedTargetIndexFromStorage();
+  return filterLoansByDeletedIndex(Array.isArray(loans) ? loans : [], index);
+}
 
 export async function addLoan(loan: any) {
   const loans = await getLoans();
@@ -1553,14 +3800,15 @@ export async function deleteLoan(id: string) {
 
 // --- Settings ---
 export async function getAccountSettings(): Promise<AccountSettings> {
+  const runtimeDefaultSyncServerUrl = getRuntimeDefaultSyncServerUrl();
   const defaults: AccountSettings = {
     orgName: "My Organization",
     openingBalanceCash: 0,
     openingBalanceBank: 0,
     currency: "MMK",
     asOfDate: new Date().toISOString(),
-    syncServerUrl: DEFAULT_SYNC_SERVER_URL,
-    syncEnabled: false,
+    syncServerUrl: runtimeDefaultSyncServerUrl,
+    syncEnabled: true,
     cloudSyncEnabled: true,
     cloudSyncProvider: "google_drive_apps_script",
     cloudSyncEndpoint: DEFAULT_CLOUD_SYNC_ENDPOINT,
@@ -1572,10 +3820,16 @@ export async function getAccountSettings(): Promise<AccountSettings> {
     receivingBankAccountName: "",
     receivingKbzPayPhone: "",
     receivingKbzPayAccountName: "",
+    receivingKbzPayMmqr: "hQZLQlpQYXlhQE8C8FACEFECMTFXFgl3MnOIbSYDEBAfnwgEAQGfJAEwF419ca5a14952",
     receivingWavePayPhone: "",
     receivingWavePayAccountName: "",
+    receivingWavePayMmqr: "",
     receivingAyaPayPhone: "",
     receivingAyaPayAccountName: "",
+    receivingAyaPayMmqr: "",
+    monthlyFeeRateRules: [],
+    monthlyFeeReliefRules: [],
+    monthlyFeePolicyRequests: [],
   };
   const stored = await safeGet<Partial<AccountSettings> | null>(KEYS.ACCOUNT_SETTINGS, null);
   if (!stored || typeof stored !== "object") return defaults;
@@ -1587,6 +3841,14 @@ export async function getAccountSettings(): Promise<AccountSettings> {
 
   if (!String(stored.syncServerUrl || "").trim()) {
     merged.syncServerUrl = defaults.syncServerUrl;
+  }
+  const normalizedStoredSyncUrl = normalizeSyncServerUrl(String(stored.syncServerUrl || ""));
+  const legacyLanDefaults = new Set([
+    normalizeSyncServerUrl("http://192.168.99.9:5000"),
+    normalizeSyncServerUrl("http://192.168.99.114:5000"),
+  ]);
+  if (!normalizedStoredSyncUrl || legacyLanDefaults.has(normalizedStoredSyncUrl)) {
+    merged.syncServerUrl = runtimeDefaultSyncServerUrl || defaults.syncServerUrl;
   }
   if (stored.syncEnabled === undefined || stored.syncEnabled === null) {
     merged.syncEnabled = defaults.syncEnabled;
@@ -1600,6 +3862,15 @@ export async function getAccountSettings(): Promise<AccountSettings> {
   if (!String(stored.cloudSyncFolderName || "").trim()) {
     merged.cloudSyncFolderName = defaults.cloudSyncFolderName;
   }
+  if (!Array.isArray(stored.monthlyFeeRateRules)) {
+    merged.monthlyFeeRateRules = [];
+  }
+  if (!Array.isArray(stored.monthlyFeeReliefRules)) {
+    merged.monthlyFeeReliefRules = [];
+  }
+  if (!Array.isArray(stored.monthlyFeePolicyRequests)) {
+    merged.monthlyFeePolicyRequests = [];
+  }
   return merged;
 }
 
@@ -1612,6 +3883,61 @@ function normalizeSyncServerUrl(raw: string): string {
   if (!trimmed) return "";
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   return withProtocol.replace(/\/+$/, "");
+}
+
+function extractHost(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `http://${value}`;
+  try {
+    return String(new URL(withProtocol).hostname || "").trim();
+  } catch {
+    const fallback = value.split("/")[0] || "";
+    return String(fallback.split(":")[0] || "").trim();
+  }
+}
+
+function inferRuntimeLanHost(): string {
+  if (Platform.OS === "web") {
+    try {
+      const host = String((globalThis as any)?.location?.hostname || "").trim();
+      if (host && host !== "localhost") return host;
+    } catch {}
+  }
+
+  const constantCandidates = [
+    String((Constants as any)?.expoConfig?.hostUri || ""),
+    String((Constants as any)?.expoGoConfig?.debuggerHost || ""),
+    String((Constants as any)?.manifest?.debuggerHost || ""),
+    String((Constants as any)?.manifest2?.extra?.expoClient?.hostUri || ""),
+  ]
+    .map((value) => extractHost(value))
+    .filter(Boolean);
+
+  for (const host of constantCandidates) {
+    if (host === "localhost" || host === "127.0.0.1") continue;
+    return host;
+  }
+  return "";
+}
+
+function getRuntimeDefaultSyncServerUrl(): string {
+  const fromEnv = normalizeSyncServerUrl(String((process.env as any).EXPO_PUBLIC_SYNC_SERVER_URL || ""));
+  if (fromEnv) return fromEnv;
+
+  const inferredHost = inferRuntimeLanHost();
+  if (inferredHost) {
+    return normalizeSyncServerUrl(`http://${inferredHost}:5000`);
+  }
+
+  if (Platform.OS === "web") {
+    try {
+      const host = String((globalThis as any)?.location?.hostname || "").trim();
+      if (host) return normalizeSyncServerUrl(`http://${host}:5000`);
+    } catch {}
+  }
+
+  return normalizeSyncServerUrl(DEFAULT_SYNC_SERVER_URL);
 }
 
 function normalizeCloudSyncEndpoint(raw: string): string {
@@ -1647,12 +3973,34 @@ async function resolveCloudSyncConfig(): Promise<{
   folderName: string;
 }> {
   const settings = await getAccountSettings();
-  const endpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
-  const apiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
+  const managedLockdownEnabled = getManagedSyncLockdownEnabled();
+  const remoteEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
+  const legacyEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+  const managedCloudOverrideActive = managedLockdownEnabled && !!remoteEndpoint;
+  const endpoint = managedCloudOverrideActive ? remoteEndpoint : (legacyEndpoint || remoteEndpoint);
+  const managedEnabled = getManagedCloudSyncEnabled();
+  const remoteApiKey = sanitizeCloudApiKey(getRemoteCloudSyncApiKey() || "");
+  const legacyApiKey = sanitizeCloudApiKey(settings.cloudSyncApiKey || "");
+  const apiKey = managedCloudOverrideActive ? remoteApiKey : (legacyApiKey || remoteApiKey);
   const provider = String(settings.cloudSyncProvider || "google_drive_apps_script").trim();
-  const accountEmail = String(settings.cloudSyncGoogleAccountEmail || "").trim();
-  const folderName = String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || DEFAULT_CLOUD_SYNC_FOLDER_NAME;
-  const enabled = settings.cloudSyncEnabled === true && !!endpoint;
+  const remoteAccountEmail = String(getRemoteCloudSyncAccountEmail() || "").trim();
+  const accountEmail = managedCloudOverrideActive
+    ? remoteAccountEmail
+    : (String(settings.cloudSyncGoogleAccountEmail || "").trim() || remoteAccountEmail);
+  const remoteFolderName = String(getRemoteCloudSyncFolderName() || "").trim();
+  const folderName = managedCloudOverrideActive
+    ? (remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME)
+    : (String(settings.cloudSyncFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME).trim() || remoteFolderName || DEFAULT_CLOUD_SYNC_FOLDER_NAME);
+  const hasLegacyEndpoint = !!legacyEndpoint;
+  const enabledFlag =
+    managedEnabled !== null
+      ? managedEnabled
+      : managedCloudOverrideActive
+        ? true
+        : hasLegacyEndpoint
+          ? true
+          : settings.cloudSyncEnabled === true;
+  const enabled = enabledFlag && !!endpoint;
   return { enabled, endpoint, apiKey, provider, accountEmail, folderName };
 }
 
@@ -1705,11 +4053,64 @@ async function compressImageDataUrl(value: string): Promise<string> {
 
 async function resolveSyncServerUrl(): Promise<{ url: string; enabled: boolean }> {
   const settings = await getAccountSettings();
+  const remoteUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
   const url = normalizeSyncServerUrl(
-    settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL
+    settings.syncServerUrl || remoteUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL
   );
-  const enabled = settings.syncEnabled !== false && !!url;
+  const hasLocalUrl = !!normalizeSyncServerUrl(String(settings.syncServerUrl || ""));
+  const enabledFlag = hasLocalUrl ? true : settings.syncEnabled !== false;
+  const enabled = enabledFlag && !!url;
   return { url, enabled };
+}
+
+export async function getEffectiveSyncRuntimeConfig(): Promise<{
+  lan: { enabled: boolean; url: string; source: "managed_remote_config" | "local_settings" | "default" };
+  cloud: {
+    enabled: boolean;
+    endpoint: string;
+    hasApiKey: boolean;
+    source: "managed_remote_config" | "local_settings" | "default";
+  };
+  }> {
+    const settings = await getAccountSettings();
+    const managedLockdownEnabled = getManagedSyncLockdownEnabled();
+    const managedLanUrl = normalizeSyncServerUrl(getManagedLanSyncUrl() || "");
+    const managedLanOverrideActive = false;
+    const lanBase = normalizeSyncServerUrl(settings.syncServerUrl || managedLanUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL);
+    const lan = await resolveSyncServerUrl();
+    const hasLocalLanSetting = !!String(settings.syncServerUrl || "").trim();
+    const lanSource: "managed_remote_config" | "local_settings" | "default" = managedLanOverrideActive
+      ? "managed_remote_config"
+      : hasLocalLanSetting
+      ? "local_settings"
+      : managedLanUrl
+      ? "managed_remote_config"
+      : "default";
+
+    const managedCloudEndpoint = normalizeCloudSyncEndpoint(getRemoteCloudSyncEndpoint() || "");
+    const managedCloudOverrideActive = managedLockdownEnabled && !!managedCloudEndpoint;
+    const localCloudEndpoint = normalizeCloudSyncEndpoint(settings.cloudSyncEndpoint || "");
+    const cloud = await resolveCloudSyncConfig();
+    const hasLocalCloudSetting = !!localCloudEndpoint;
+    const cloudSource: "managed_remote_config" | "local_settings" | "default" = managedCloudOverrideActive
+      ? "managed_remote_config"
+      : hasLocalCloudSetting
+      ? "local_settings"
+      : "default";
+
+  return {
+    lan: {
+      enabled: lan.enabled,
+      url: lan.url || lanBase,
+      source: lanSource,
+    },
+    cloud: {
+      enabled: cloud.enabled,
+      endpoint: cloud.endpoint,
+      hasApiKey: !!sanitizeCloudApiKey(cloud.apiKey),
+      source: cloudSource,
+    },
+  };
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 8000): Promise<Response> {
@@ -1722,6 +4123,30 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, ti
       }, timeoutMs);
     }),
   ]);
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
+}
+
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 8000,
+  attempts = getSyncRetryMaxAttempts(),
+  baseDelayMs = getSyncRetryBaseDelayMs()
+): Promise<Response> {
+  return await runWithRetry(async () => {
+    const res = await fetchWithTimeout(input, init, timeoutMs);
+    if (isRetryableHttpStatus(res.status)) {
+      throw new Error(`http_${res.status}`);
+    }
+    return res;
+  }, {
+    attempts,
+    baseDelayMs,
+    maxDelayMs: Math.max(baseDelayMs * 8, 12_000),
+  });
 }
 
 async function compressLargeDataUrlDeep(input: unknown): Promise<unknown> {
@@ -1760,7 +4185,7 @@ export async function checkLanSyncHealth(): Promise<{ ok: boolean; url?: string;
   try {
     const { url, enabled } = await resolveSyncServerUrl();
     if (!enabled) return { ok: false, url, reason: "disabled_or_empty_url" };
-    const res = await fetchWithTimeout(`${url}/api/sync/health`, { method: "GET" }, 12000);
+    const res = await fetchWithRetry(`${url}/api/sync/health`, { method: "GET" }, 12000);
     if (!res.ok) return { ok: false, url, status: res.status, reason: "health_http_error" };
     return { ok: true, url, status: res.status };
   } catch (e: any) {
@@ -1780,6 +4205,7 @@ type CloudSnapshotPayload = {
   updatedAt?: string;
   source?: string;
   data?: Record<string, string>;
+  snapshotHash?: string;
 };
 
 type CloudApiPayload = {
@@ -1870,6 +4296,7 @@ function extractCloudSnapshot(payload: unknown): CloudSnapshotPayload | null {
       updatedAt: String(snapshotLike.updatedAt || candidate.updatedAt || root.updatedAt || ""),
       source: String(snapshotLike.source || candidate.source || root.source || "cloud"),
       data,
+      snapshotHash: String(snapshotLike.snapshotHash || candidate.snapshotHash || root.snapshotHash || ""),
     };
   }
 
@@ -1964,14 +4391,16 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
     } catch {}
     try {
       const settings = await getAccountSettings();
-      const configuredUrl = normalizeSyncServerUrl(String(settings.syncServerUrl || DEFAULT_SYNC_SERVER_URL));
+      const configuredUrl = normalizeSyncServerUrl(
+        String(settings.syncServerUrl || getRuntimeDefaultSyncServerUrl() || DEFAULT_SYNC_SERVER_URL)
+      );
       if (configuredUrl) candidates.push(configuredUrl);
     } catch {}
 
     const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
     for (const baseUrl of uniqueCandidates) {
       try {
-        const res = await fetchWithTimeout(
+        const res = await fetchWithRetry(
           `${baseUrl}/api/cloud-sync/proxy`,
           {
             method: "POST",
@@ -1989,7 +4418,7 @@ async function postCloudSyncRequest(endpoint: string, payload: Record<string, un
     }
   }
 
-  return await fetchWithTimeout(
+  return await fetchWithRetry(
     endpoint,
     {
       method: "POST",
@@ -2014,12 +4443,14 @@ export async function pushLanSnapshotFromLocalDetailed(): Promise<LanSyncResult>
     if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
     const raw = await exportData();
     const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const snapshotHash = await computeSnapshotHash(data);
     const payload = {
       updatedAt: new Date().toISOString(),
       source: "mobile",
       data,
+      snapshotHash,
     };
-    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, {
+    const res = await fetchWithRetry(`${url}/api/sync/snapshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -2037,6 +4468,7 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
     if (!enabled) return { ok: false, reason: "cloud_disabled_or_empty_endpoint", endpoint };
     const raw = await exportData();
     const data = await sanitizeExportForLanSync(JSON.parse(raw) as Record<string, string>);
+    const snapshotHash = await computeSnapshotHash(data);
     const payload = {
       action: "pushSnapshot",
       provider,
@@ -2046,6 +4478,7 @@ export async function pushCloudSnapshotFromLocalDetailed(): Promise<CloudSyncRes
         updatedAt: new Date().toISOString(),
         source: "mobile_cloud_sync",
         data,
+        snapshotHash,
       },
     };
     const result = await postCloudSyncWithApiKeyFallback(
@@ -2074,14 +4507,18 @@ export async function pullLanSnapshotToLocalDetailed(): Promise<LanSyncResult> {
   try {
     const { url, enabled } = await resolveSyncServerUrl();
     if (!enabled) return { ok: false, reason: "disabled_or_empty_url", url };
-    const res = await fetchWithTimeout(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
+    const res = await fetchWithRetry(`${url}/api/sync/snapshot`, { method: "GET" }, 20000);
     if (res.status === 404) {
       return { ok: true, changed: false, reason: "snapshot_not_found", status: res.status, url };
     }
     if (!res.ok) return { ok: false, reason: "pull_http_error", status: res.status, url };
-    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string> };
+    const payload = (await res.json()) as { updatedAt?: string; data?: Record<string, string>; snapshotHash?: string };
     if (!payload || typeof payload !== "object" || !payload.data) {
       return { ok: false, reason: "invalid_snapshot_payload", url };
+    }
+    const verify = await verifySnapshotHash({ snapshotData: payload.data, expectedHash: payload.snapshotHash });
+    if (!verify.ok) {
+      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", url };
     }
 
     const incomingUpdatedAt = String(payload.updatedAt || "");
@@ -2146,14 +4583,32 @@ export async function pullCloudSnapshotToLocalDetailed(): Promise<CloudSyncResul
     }
 
     const incomingUpdatedAt = String(snapshot.updatedAt || "");
+    const incomingHash = String(snapshot.snapshotHash || "");
     const lastApplied = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY)) || "");
-    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied) {
-      return { ok: true, changed: false, reason: "already_applied", endpoint };
+    const lastAppliedHash = String((await AsyncStorage.getItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY)) || "");
+    if (incomingUpdatedAt && incomingUpdatedAt === lastApplied && incomingHash && lastAppliedHash && incomingHash === lastAppliedHash) {
+      try {
+        const localRaw = await exportData();
+        const localData = await sanitizeExportForLanSync(JSON.parse(localRaw) as Record<string, string>);
+        const localHash = await computeSnapshotHash(localData);
+        if (localHash === incomingHash) {
+          return { ok: true, changed: false, reason: "already_applied", endpoint };
+        }
+      } catch {
+        // If local hash can't be computed, fall through to merge.
+      }
+    }
+    const verify = await verifySnapshotHash({ snapshotData: snapshot.data, expectedHash: snapshot.snapshotHash });
+    if (!verify.ok) {
+      return { ok: false, reason: verify.reason || "snapshot_hash_mismatch", endpoint };
     }
 
     const merged = await mergeData(JSON.stringify(snapshot.data));
     if (incomingUpdatedAt) {
       await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_UPDATED_AT_KEY, incomingUpdatedAt);
+    }
+    if (incomingHash) {
+      await AsyncStorage.setItem(CLOUD_SYNC_LAST_REMOTE_HASH_KEY, incomingHash);
     }
     return { ok: true, changed: merged, reason: merged ? "cloud_pulled_applied" : "cloud_pulled_no_change", endpoint };
   } catch (e: any) {
@@ -2185,10 +4640,12 @@ export async function pullCloudSnapshotToLocal(): Promise<boolean> {
 export const getUsers = () => safeGet<UserAccount[]>(KEYS.USERS, []);
 export const saveUsers = (data: UserAccount[]) => AsyncStorage.setItem(KEYS.USERS, JSON.stringify(data));
 
-export async function seedDefaultAdminUser() {
+export async function seedDefaultAdminUser(options?: { allowDefaultDataSeed?: boolean }) {
+  const allowDefaultDataSeed = options?.allowDefaultDataSeed !== false;
+  const emptyStateMode = String((await AsyncStorage.getItem(EMPTY_ORG_STATE_KEY)) || "") === "1";
   // 1. Seeding: If no members exist, try to load from default-data.json
   const existingMembers = await getMembers();
-  if (existingMembers.length === 0) {
+  if (existingMembers.length === 0 && allowDefaultDataSeed && !emptyStateMode) {
     try {
       // Expo Go တွင် Data များပါလာစေရန် require ကိုအသုံးပြု၍ Bundle လုပ်ပါသည်
       // @ts-ignore
@@ -2225,6 +4682,9 @@ export async function seedDefaultAdminUser() {
 
   // Sync existing members to user accounts
   const members = await getMembers();
+  if (members.length > 0 && emptyStateMode) {
+    await AsyncStorage.removeItem(EMPTY_ORG_STATE_KEY);
+  }
   await syncUsersWithMembers(members);
   const syncedUsers = await getUsers();
   await ensureDefaultPasswordsForUsers(syncedUsers, members);
@@ -2281,6 +4741,24 @@ export async function restoreData(jsonString: string): Promise<boolean> {
       await AsyncStorage.multiRemove(allSharedKeys);
     }
     await AsyncStorage.multiSet(pairs);
+    const importedMembers = parseJsonSafe<any[]>(exportObj?.[KEYS.MEMBERS], []);
+    if (Array.isArray(importedMembers) && importedMembers.length > 0) {
+      await setEmptyOrgState(false);
+    }
+    const importedLogs = parseJsonSafe<AuditExecutionLog[]>(exportObj?.[KEYS.AUDIT_EXECUTION_LOGS], []);
+    if (Array.isArray(importedLogs) && importedLogs.length > 0) {
+      const index = collectDeletedTargetsFromExecutionLogs(importedLogs);
+      if (index.transactionIds.size || index.loanIds.size) {
+        const importedTxns = parseJsonSafe<Transaction[]>(exportObj?.[KEYS.TRANSACTIONS], []);
+        const importedLoans = parseJsonSafe<Loan[]>(exportObj?.[KEYS.LOANS], []);
+        const nextTxns = filterTransactionsByDeletedIndex(Array.isArray(importedTxns) ? importedTxns : [], index);
+        const nextLoans = filterLoansByDeletedIndex(Array.isArray(importedLoans) ? importedLoans : [], index);
+        await AsyncStorage.multiSet([
+          [KEYS.TRANSACTIONS, JSON.stringify(nextTxns)],
+          [KEYS.LOANS, JSON.stringify(nextLoans)],
+        ]);
+      }
+    }
     return true;
   } catch (error) {
     console.error("Restore failed:", error);
@@ -2298,6 +4776,66 @@ function parseJsonSafe<T>(value: unknown, fallback: T): T {
     }
   }
   return value as T;
+}
+
+type AuditTestCleanupTombstone = {
+  id?: string;
+  requestNumber?: string;
+};
+
+async function getAuditTestCleanupTombstones(): Promise<{ idSet: Set<string>; numberSet: Set<string> }> {
+  try {
+    const raw = await AsyncStorage.getItem(AUDIT_TEST_CLEANUP_TOMBSTONES_KEY);
+    const rows = parseJsonSafe<any[]>(raw, []);
+    const idSet = new Set<string>();
+    const numberSet = new Set<string>();
+    if (Array.isArray(rows)) {
+      rows.forEach((row) => {
+        if (typeof row === "string") {
+          const value = String(row || "").trim();
+          if (value) {
+            idSet.add(value);
+            numberSet.add(value);
+          }
+          return;
+        }
+        if (row && typeof row === "object") {
+          const id = String((row as AuditTestCleanupTombstone).id || "").trim();
+          const requestNumber = String((row as AuditTestCleanupTombstone).requestNumber || "").trim();
+          if (id) idSet.add(id);
+          if (requestNumber) numberSet.add(requestNumber);
+        }
+      });
+    }
+    return { idSet, numberSet };
+  } catch {
+    return { idSet: new Set(), numberSet: new Set() };
+  }
+}
+
+async function appendAuditTestCleanupTombstones(rows: AuditTestCleanupTombstone[]): Promise<void> {
+  if (!rows.length) return;
+  const existingRaw = await AsyncStorage.getItem(AUDIT_TEST_CLEANUP_TOMBSTONES_KEY);
+  const existing = parseJsonSafe<AuditTestCleanupTombstone[]>(existingRaw, []);
+  const next = Array.isArray(existing) ? [...existing] : [];
+  const seen = new Set<string>();
+  next.forEach((row) => {
+    const id = String(row?.id || "").trim();
+    const requestNumber = String(row?.requestNumber || "").trim();
+    if (id) seen.add(`id:${id}`);
+    if (requestNumber) seen.add(`no:${requestNumber}`);
+  });
+  rows.forEach((row) => {
+    const id = String(row?.id || "").trim();
+    const requestNumber = String(row?.requestNumber || "").trim();
+    const idKey = id ? `id:${id}` : "";
+    const noKey = requestNumber ? `no:${requestNumber}` : "";
+    if ((idKey && seen.has(idKey)) || (noKey && seen.has(noKey))) return;
+    if (idKey) seen.add(idKey);
+    if (noKey) seen.add(noKey);
+    next.push({ id: id || undefined, requestNumber: requestNumber || undefined });
+  });
+  await AsyncStorage.setItem(AUDIT_TEST_CLEANUP_TOMBSTONES_KEY, JSON.stringify(next));
 }
 
 function mergeRecordsById<T extends { id?: string }>(existing: T[], incoming: T[]): T[] {
@@ -2373,6 +4911,11 @@ function mergeStorageValues(existingValue: unknown, incomingValue: unknown): unk
 export async function mergeData(jsonString: string): Promise<boolean> {
   try {
     const exportObj = JSON.parse(jsonString) as Record<string, unknown>;
+    const incomingLogs = parseJsonSafe<AuditExecutionLog[]>(exportObj?.[KEYS.AUDIT_EXECUTION_LOGS], []);
+    const existingLogs = await getAuditExecutionLogs();
+    const mergedLogs = mergeRecordsById(existingLogs, Array.isArray(incomingLogs) ? incomingLogs : []);
+    const deletedIndex = collectDeletedTargetsFromExecutionLogs(mergedLogs);
+    const tombstones = await getAuditTestCleanupTombstones();
 
     const keys = Object.keys(exportObj || {}).filter((key) => isSharedBackupKey(key));
     let changed = false;
@@ -2408,7 +4951,31 @@ export async function mergeData(jsonString: string): Promise<boolean> {
 
       const existingParsed = parseJsonSafe<unknown>(existingRaw, existingRaw || null);
       const incomingParsed = parseJsonSafe<unknown>(incomingRaw, incomingRaw);
-      const mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      let mergedValue = mergeStorageValues(existingParsed, incomingParsed);
+      if (key === KEYS.AUDIT_CHANGE_REQUESTS && Array.isArray(mergedValue)) {
+        mergedValue = (mergedValue as any[]).filter((row: any) => {
+          const id = String(row?.id || "").trim();
+          const requestNumber = String(row?.requestNumber || "").trim();
+          if (id && tombstones.idSet.has(id)) return false;
+          if (requestNumber && tombstones.numberSet.has(requestNumber)) return false;
+          return true;
+        });
+      }
+      if (key === KEYS.AUDIT_EXECUTION_LOGS && Array.isArray(mergedValue)) {
+        mergedValue = (mergedValue as any[]).filter((row: any) => {
+          const reqId = String(row?.requestId || "").trim();
+          const reqNo = String(row?.requestNumber || "").trim();
+          if (reqId && tombstones.idSet.has(reqId)) return false;
+          if (reqNo && tombstones.numberSet.has(reqNo)) return false;
+          return true;
+        });
+      }
+      if (key === KEYS.TRANSACTIONS && Array.isArray(mergedValue)) {
+        mergedValue = filterTransactionsByDeletedIndex(mergedValue as Transaction[], deletedIndex);
+      }
+      if (key === KEYS.LOANS && Array.isArray(mergedValue)) {
+        mergedValue = filterLoansByDeletedIndex(mergedValue as Loan[], deletedIndex);
+      }
       const mergedSerialized = typeof mergedValue === "string" ? mergedValue : JSON.stringify(mergedValue);
       if (String(existingRaw || "") !== mergedSerialized) {
         await AsyncStorage.setItem(key, mergedSerialized);
@@ -2416,6 +4983,15 @@ export async function mergeData(jsonString: string): Promise<boolean> {
       }
     }
 
+    const mergedMembers = await getMembers();
+    if (mergedMembers.length > 0) {
+      await setEmptyOrgState(false);
+    }
+
+    if (deletedIndex.transactionIds.size || deletedIndex.loanIds.size) {
+      const pruned = await pruneDeletedTargetsFromStorage();
+      if (pruned) changed = true;
+    }
     return changed;
   } catch (error) {
     console.error("Merge failed:", error);

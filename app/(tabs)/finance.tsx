@@ -1,29 +1,131 @@
-import React, { useState, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   StyleSheet,
   Text,
   View,
   FlatList,
   Pressable,
+  ScrollView,
   Platform,
   Alert,
   ActivityIndicator,
   Modal,
   TextInput,
+  InteractionManager,
+  KeyboardAvoidingView,
+  Keyboard,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import AccessDenied from "@/components/AccessDenied";
-import { Transaction, Loan, CATEGORY_LABELS, type MemberPaymentRequestKind } from "@/lib/types";
+import { Transaction, Loan, type MemberPaymentRequestKind, type AuditChangeDrafts, normalizeOrgPosition } from "@/lib/types";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { computeLoanMetrics, getLoanPrincipal, type LoanComputedMetrics } from "@/lib/loan-metrics";
+import { getLocalizedTransactionCategoryLabel, getTransactionDisplayDescription } from "@/lib/transaction-display";
+import { exportXlsxFile } from "@/lib/xlsx-export";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 
 type Tab = "transactions" | "transfers" | "loans";
 type FinanceViewScope = "all" | "self" | "member";
+type CategoryFilterOption = { id: string; label: string };
+type TransactionAmountView = "single" | "in_out" | "deposit_withdraw" | "loan_columns";
+type FinancePrintKind = "current" | "summary" | "details";
+type DeleteRequestFieldType = "text" | "date" | "amount" | "member" | "readonly" | "recordType" | "category" | "paymentMethod";
+type DeleteRequestFieldRow = {
+  key: string;
+  label: string;
+  type: DeleteRequestFieldType;
+  value: any;
+  display?: string;
+};
+const FINANCE_PAGE_SIZE = 40;
+
+const formatKs = (value: number) => `${Math.round(value || 0).toLocaleString()} KS`;
+
+function escapeHtml(text: unknown): string {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function parseDateForPrint(value: unknown): Date | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (raw.includes("/")) {
+    const [day, month, year] = raw.split("/");
+    const d = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDateForPrint(value: unknown): string {
+  const d = parseDateForPrint(value);
+  if (!d) return "-";
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+const INCOME_CATEGORY_FILTERS: CategoryFilterOption[] = [
+  { id: "member_fees", label: "လစဉ်ကြေးရငွေ" },
+  { id: "donations", label: "အလှူငွေရရှိ" },
+  { id: "other_income", label: "အခြားရငွေ" },
+  { id: "loan_repayment", label: "ချေးငွေပြန်ဆပ်ရရှိငွေ" },
+  { id: "interest_income", label: "အတိုးရငွေ" },
+];
+
+const EXPENSE_CATEGORY_FILTERS: CategoryFilterOption[] = [
+  { id: "health_support", label: "ကျန်းမာရေးထောက်ပံ့ငွေ" },
+  { id: "education_support", label: "ပညာရေးထောက်ပံ့ငွေ" },
+  { id: "funeral_support", label: "နာရေးကူညီငွေ" },
+  { id: "loan_disbursement", label: "ချေးငွေထုတ်ပေးငွေ" },
+  { id: "bank_charges", label: "ဘဏ်စရိတ်ပေးငွေ" },
+  { id: "general_expenses", label: "အထွေထွေအသုံးစရိတ်" },
+  { id: "other_expenses", label: "အခြားအသုံးစရိတ်" },
+  { id: "entertaining_expense", label: "ဧည့်ခံစရိတ်" },
+  { id: "donation", label: "လှူဒါန်းငွေ" },
+];
+
+const TRANSFER_CATEGORY_FILTERS: CategoryFilterOption[] = [
+  { id: "bank_deposit", label: "ဘဏ်သို့ ငွေသွင်းခြင်း (Deposit)" },
+  { id: "bank_withdraw", label: "ဘဏ်မှ ငွေထုတ်ခြင်း (Withdraw)" },
+  { id: "bank_interest", label: "ဘဏ်တိုးရငွေ (Bank Interest)" },
+];
+
+function normalizeFinanceCategory(value: unknown, categoryLabel?: unknown): string {
+  const raw = String(value || "").trim().toLowerCase();
+  const label = String(categoryLabel || "").trim().toLowerCase();
+  const merged = `${raw} ${label}`;
+
+  if (raw === "member_fees" || raw === "monthly_fee" || merged.includes("လစဉ်ကြေး")) return "member_fees";
+  if (raw === "donations" || raw === "donation" || merged.includes("အလှူ")) return raw === "donations" ? "donations" : "donation";
+  if (raw === "bank_interest" || merged.includes("ဘဏ်တိုး")) return "bank_interest";
+  if (raw === "other_income" || (raw === "other" && merged.includes("ရငွေ"))) return "other_income";
+  if (raw === "loan_repayment" || raw === "loan_repaid" || merged.includes("ပြန်ဆပ်")) return "loan_repayment";
+  if (raw === "interest_income" || merged.includes("အတိုး")) return "interest_income";
+
+  if (raw === "health_support" || raw === "welfare_health" || merged.includes("ကျန်းမာရေး")) return "health_support";
+  if (raw === "education_support" || raw === "welfare_education" || merged.includes("ပညာရေး")) return "education_support";
+  if (raw === "funeral_support" || raw === "welfare_funeral" || merged.includes("နာရေး")) return "funeral_support";
+  if (raw === "loan_disbursement" || raw === "loan_issued" || merged.includes("ချေးငွေထုတ်")) return "loan_disbursement";
+  if (raw === "bank_charges" || merged.includes("ဘဏ်စရိတ်")) return "bank_charges";
+  if (raw === "general_expenses" || raw === "general_expense" || merged.includes("အထွေထွေ")) return "general_expenses";
+  if (raw === "other_expenses" || (raw === "other" && merged.includes("အသုံး"))) return "other_expenses";
+  if (raw === "entertaining_expense" || raw === "entertainment_expense" || merged.includes("ဧည့်ခံ")) return "entertaining_expense";
+
+  if (raw === "bank_deposit" || merged.includes("ဘဏ်သို့ ငွေသွင်း")) return "bank_deposit";
+  if (raw === "bank_withdraw" || merged.includes("ဘဏ်မှ ငွေထုတ်")) return "bank_withdraw";
+
+  return raw;
+}
 
 function BalanceCard({ label, amount, icon, color }: {
   label: string;
@@ -33,18 +135,40 @@ function BalanceCard({ label, amount, icon, color }: {
 }) {
   return (
     <View style={[styles.balanceCard, { borderLeftColor: color }]}>
-      <View style={[styles.balanceIcon, { backgroundColor: color + "15" }]}>
-        <Ionicons name={icon} size={18} color={color} />
+      <View style={styles.balanceLeftGroup}>
+        <View style={[styles.balanceIcon, { backgroundColor: color + "15" }]}>
+          <Ionicons name={icon} size={16} color={color} />
+        </View>
+        <Text style={styles.balanceLabel} numberOfLines={1}>{label}</Text>
       </View>
-      <Text style={styles.balanceLabel}>{label}</Text>
-      <Text style={[styles.balanceAmount, { color }]}>
+      <Text style={[styles.balanceAmount, { color }]} numberOfLines={1}>
         {amount < 0 ? "-" : ""}{Math.abs(amount).toLocaleString()} <Text style={styles.currencyText}>KS</Text>
       </Text>
     </View>
   );
 }
 
-function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete = false, canAuditFlag = false, onAuditPress }: {
+function MiniMetricCard({ title, value, color }: { title: string; value: number; color: string }) {
+  return (
+    <View style={[styles.miniMetricCard, { borderLeftColor: color }]}>
+      <Text style={styles.miniMetricTitle}>{title}</Text>
+      <Text style={[styles.miniMetricValue, { color }]}>{formatKs(value)}</Text>
+    </View>
+  );
+}
+
+function TransactionRow({
+  txn,
+  memberName,
+  onDelete: _onDelete,
+  canEdit = false,
+  canDelete: _canDelete = false,
+  canAuditFlag = false,
+  onAuditPress,
+  canRequestDelete = false,
+  onDeleteRequestPress,
+  amountView = "single",
+}: {
   txn: Transaction;
   memberName?: string;
   onDelete: (id: string) => void;
@@ -52,10 +176,19 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
   canDelete?: boolean;
   canAuditFlag?: boolean;
   onAuditPress?: (txn: Transaction) => void;
+  canRequestDelete?: boolean;
+  onDeleteRequestPress?: (txn: Transaction) => void;
+  amountView?: TransactionAmountView;
 }) {
+  const longPressTriggeredRef = React.useRef(false);
   const isIncome = txn.type === "income";
   const isTransfer = (txn.type as string) === "transfer";
+  const normalizedCategory = normalizeFinanceCategory((txn as any).category, (txn as any).categoryLabel);
+  const amount = Number((txn as any).amount || 0);
   const paymentMethod = (txn as any).paymentMethod || "cash";
+  const isLoanDisbursement = normalizedCategory === "loan_disbursement";
+  const isLoanRepayment = normalizedCategory === "loan_repayment";
+  const isLoanInterestPayment = normalizedCategory === "interest_income";
 
   const dateObj = useMemo(() => {
     const d = txn.date as any;
@@ -67,21 +200,28 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
     return new Date(d);
   }, [txn.date]);
 
+  const handlePress = () => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    if (canEdit) {
+      router.push({ pathname: "/add-transaction", params: { editId: txn.id } });
+    }
+  };
+
+  const handleLongPress = () => {
+    if (!canRequestDelete || !onDeleteRequestPress) return;
+    longPressTriggeredRef.current = true;
+    onDeleteRequestPress(txn);
+  };
+
   return (
     <Pressable
       style={styles.txnRow}
-      onPress={canEdit ? () => router.push({ pathname: "/add-transaction", params: { editId: txn.id } }) : undefined}
-      onLongPress={
-        canDelete
-          ? () => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              Alert.alert("ဖျက်ရန်", "ဤငွေစာရင်းကို ဖျက်လိုပါသလား?", [
-                { text: "မဖျက်တော့ပါ", style: "cancel" },
-                { text: "ဖျက်မည်", style: "destructive", onPress: () => onDelete(txn.id) },
-              ]);
-            }
-          : undefined
-      }
+      onPress={canEdit ? handlePress : undefined}
+      onLongPress={canRequestDelete ? handleLongPress : undefined}
+      delayLongPress={420}
     >
       <View style={[styles.txnIcon, { backgroundColor: (isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E")) + "15" }]}>
         <Ionicons
@@ -92,10 +232,10 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
       </View>
       <View style={styles.txnInfo}>
         <Text style={styles.txnCategory} numberOfLines={1}>
-          {(txn as any).categoryLabel || CATEGORY_LABELS[txn.category] || txn.category}
+          {getLocalizedTransactionCategoryLabel((txn as any).category, (txn as any).categoryLabel)}
         </Text>
-        <Text style={styles.txnDesc} numberOfLines={1}>
-          {memberName ? memberName + " - " : ""}{(txn as any).notes || (txn as any).description || txn.receiptNumber}
+        <Text style={styles.txnDesc} numberOfLines={2}>
+          {getTransactionDisplayDescription(txn as any, memberName) || txn.receiptNumber || "-"}
         </Text>
         {txn.auditFlagged ? (
           <View style={styles.auditBadge}>
@@ -117,20 +257,85 @@ function TransactionRow({ txn, memberName, onDelete, canEdit = false, canDelete 
             <Ionicons name={txn.auditFlagged ? "flag" : "flag-outline"} size={16} color={txn.auditFlagged ? "#B91C1C" : Colors.light.textSecondary} />
           </Pressable>
         ) : null}
-        <Text style={[styles.txnAmount, { color: isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E") }]}>
-          {isTransfer ? "" : (isIncome ? "+" : "-")}{txn.amount.toLocaleString()}
-        </Text>
+        {amountView === "in_out" ? (
+          <View style={styles.amountSplitWrap}>
+            <View style={styles.amountSplitCol}>
+              <Text style={styles.amountSplitLabel}>အဝင်</Text>
+              <Text style={[styles.amountSplitValue, { color: "#10B981" }]}>
+                {isIncome ? amount.toLocaleString() : "-"}
+              </Text>
+            </View>
+            <View style={styles.amountSplitCol}>
+              <Text style={styles.amountSplitLabel}>အထွက်</Text>
+              <Text style={[styles.amountSplitValue, { color: "#F43F5E" }]}>
+                {isIncome ? "-" : amount.toLocaleString()}
+              </Text>
+            </View>
+          </View>
+        ) : amountView === "deposit_withdraw" ? (
+          <View style={styles.amountSplitWrap}>
+            <View style={styles.amountSplitCol}>
+              <Text style={styles.amountSplitLabel}>ဘဏ်သွင်း</Text>
+              <Text style={[styles.amountSplitValue, { color: "#10B981" }]}>
+                {normalizedCategory === "bank_deposit" || normalizedCategory === "bank_interest" ? amount.toLocaleString() : "-"}
+              </Text>
+            </View>
+            <View style={styles.amountSplitCol}>
+              <Text style={styles.amountSplitLabel}>ဘဏ်ထုတ်</Text>
+              <Text style={[styles.amountSplitValue, { color: "#F43F5E" }]}>
+                {normalizedCategory === "bank_withdraw" ? amount.toLocaleString() : "-"}
+              </Text>
+            </View>
+          </View>
+        ) : amountView === "loan_columns" ? (
+          <View style={styles.loanAmountSplitWrap}>
+            <View style={styles.loanAmountSplitCol}>
+              <Text style={styles.loanAmountSplitLabel}>ထုတ်ချေး</Text>
+              <Text style={[styles.loanAmountSplitValue, { color: "#F59E0B" }]}>
+                {isLoanDisbursement ? amount.toLocaleString() : "-"}
+              </Text>
+            </View>
+            <View style={styles.loanAmountSplitCol}>
+              <Text style={styles.loanAmountSplitLabel}>ပြန်ဆပ်</Text>
+              <Text style={[styles.loanAmountSplitValue, { color: "#10B981" }]}>
+                {isLoanRepayment ? amount.toLocaleString() : "-"}
+              </Text>
+            </View>
+            <View style={styles.loanAmountSplitCol}>
+              <Text style={styles.loanAmountSplitLabel}>အတိုးဆပ်</Text>
+              <Text style={[styles.loanAmountSplitValue, { color: "#8B5CF6" }]}>
+                {isLoanInterestPayment ? amount.toLocaleString() : "-"}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <Text style={[styles.txnAmount, { color: isTransfer ? "#8B5CF6" : (isIncome ? "#10B981" : "#F43F5E") }]}>
+            {isTransfer ? "" : (isIncome ? "+" : "-")}{amount.toLocaleString()}
+          </Text>
+        )}
       </View>
     </Pressable>
   );
 }
 
-function LoanRow({ loan, memberName, outstanding }: {
+function LoanRow({
+  loan,
+  memberName,
+  outstanding,
+  metrics,
+  canRequestDelete = false,
+  onDeleteRequestPress,
+}: {
   loan: Loan;
   memberName?: string;
   outstanding: number;
+  metrics: LoanComputedMetrics;
+  canRequestDelete?: boolean;
+  onDeleteRequestPress?: (loan: Loan) => void;
 }) {
+  const longPressTriggeredRef = React.useRef(false);
   const isPaid = loan.status === "paid";
+  const principalAmount = getLoanPrincipal(loan as any);
 
   const dateStr = useMemo(() => {
     const d = loan.issueDate as any;
@@ -142,11 +347,26 @@ function LoanRow({ loan, memberName, outstanding }: {
     return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }, [loan.issueDate]);
 
+  const handlePress = () => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    router.push({ pathname: "/loan-detail", params: { id: loan.id } } as any);
+  };
+
+  const handleLongPress = () => {
+    if (!canRequestDelete || !onDeleteRequestPress) return;
+    longPressTriggeredRef.current = true;
+    onDeleteRequestPress(loan);
+  };
+
   return (
     <Pressable
       style={styles.loanRow}
-      // Route path error အတွက် cast လုပ်ပေးထားပါသည်
-      onPress={() => router.push({ pathname: "/loan-details", params: { id: loan.id } } as any)}
+      onPress={handlePress}
+      onLongPress={canRequestDelete ? handleLongPress : undefined}
+      delayLongPress={420}
     >
       <View style={[styles.loanIcon, { backgroundColor: (isPaid ? Colors.light.success : "#F59E0B") + "15" }]}>
         <Ionicons
@@ -158,16 +378,17 @@ function LoanRow({ loan, memberName, outstanding }: {
       <View style={styles.loanInfo}>
         <Text style={styles.loanName}>{memberName || "အမည်မသိ"}</Text>
         <Text style={styles.loanDesc}>
-          အတိုး {loan.interestRate}% • {loan.principal.toLocaleString()} KS
+          အတိုး {metrics.appliedRate}% • အရင်း {formatKs(principalAmount)}
         </Text>
-        <Text style={styles.loanDate}>
-          {dateStr}
-        </Text>
+        <Text style={styles.loanDate}>{dateStr}</Text>
+        <View style={styles.loanInlineStats}>
+          <Text style={styles.loanInlineStat}>ပြန်ဆပ်ပြီး: {formatKs(metrics.principalRepaid)}</Text>
+          <Text style={styles.loanInlineStat}>အတိုးကျသင့်: {formatKs(metrics.interestPayable)}</Text>
+          <Text style={styles.loanInlineStat}>အတိုးကျန်: {formatKs(metrics.interestOutstanding)}</Text>
+        </View>
       </View>
       <View style={styles.loanRight}>
-        <Text style={styles.loanOutstanding}>
-          {outstanding.toLocaleString()} KS
-        </Text>
+        <Text style={styles.loanOutstanding}>{formatKs(outstanding)}</Text>
         <View style={[styles.loanStatusBadge, isPaid ? styles.loanPaid : styles.loanActive]}>
           <Text style={[styles.loanStatusText, { color: isPaid ? Colors.light.success : "#3B82F6" }]}>
             {isPaid ? "ဆပ်ပြီး" : "ကျန်ရှိ"}
@@ -183,9 +404,14 @@ export default function FinanceScreen() {
   const {
     transactions,
     loans,
+    auditChangeRequests,
+    auditExecutionLogs,
     members,
+    users,
     removeTransaction,
     updateTransaction,
+    createAuditChangeRequest,
+    changeAuditChangeRequestStatus,
     getLoanOutstanding,
     loading,
     accountSettings,
@@ -194,7 +420,7 @@ export default function FinanceScreen() {
   const { can, currentUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
-  const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1)); // Jan 1st of current year
+  const [startDate, setStartDate] = useState(new Date(2018, 0, 1));
   const [endDate, setEndDate] = useState(new Date());
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
@@ -206,10 +432,42 @@ export default function FinanceScreen() {
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [auditTxn, setAuditTxn] = useState<Transaction | null>(null);
   const [auditNote, setAuditNote] = useState("");
+  const [showDeleteRequestModal, setShowDeleteRequestModal] = useState(false);
+    const [deleteRequestType, setDeleteRequestType] = useState<"transaction" | "loan">("transaction");
+    const [deleteRequestTxn, setDeleteRequestTxn] = useState<Transaction | null>(null);
+    const [deleteRequestLoan, setDeleteRequestLoan] = useState<Loan | null>(null);
+    const [deleteRequestNote, setDeleteRequestNote] = useState("");
+    const [deleteRequestSubmitting, setDeleteRequestSubmitting] = useState(false);
+    const [deleteRequestSubmitError, setDeleteRequestSubmitError] = useState<string | null>(null);
+    const [deleteRequestSubmitStatus, setDeleteRequestSubmitStatus] = useState<{
+      type: "success" | "error";
+      message: string;
+    } | null>(null);
+    const [deleteRequestDraftValues, setDeleteRequestDraftValues] = useState<Record<string, any>>({});
+    const [deleteRequestActiveDateField, setDeleteRequestActiveDateField] = useState<string | null>(null);
+    const [showDeleteRequestMemberPicker, setShowDeleteRequestMemberPicker] = useState(false);
+    const [deleteRequestMemberSearch, setDeleteRequestMemberSearch] = useState("");
+    const [deleteRequestMemberField, setDeleteRequestMemberField] = useState<string>("");
+    const [showDeleteRequestTagPicker, setShowDeleteRequestTagPicker] = useState(false);
+    const [deleteRequestTagSearch, setDeleteRequestTagSearch] = useState("");
+    const [deleteRequestTagIds, setDeleteRequestTagIds] = useState<string[]>([]);
+    const [showDeleteRequestOptionPicker, setShowDeleteRequestOptionPicker] = useState(false);
+    const [deleteRequestOptionField, setDeleteRequestOptionField] = useState<string>("");
+    const [deleteRequestOptionTitle, setDeleteRequestOptionTitle] = useState<string>("");
+    const [deleteRequestOptionItems, setDeleteRequestOptionItems] = useState<CategoryFilterOption[]>([]);
   const [viewScope, setViewScope] = useState<FinanceViewScope>("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [keywordSearch, setKeywordSearch] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [computeReady, setComputeReady] = useState(false);
+    const [visibleListCount, setVisibleListCount] = useState(FINANCE_PAGE_SIZE);
+    const [visibleLoanTxnCount, setVisibleLoanTxnCount] = useState(FINANCE_PAGE_SIZE);
+    const [showPrintPicker, setShowPrintPicker] = useState(false);
+    const [printing, setPrinting] = useState(false);
+
+    const myRole = normalizeOrgPosition(currentUser?.orgPosition || "member");
 
   const canViewFinanceSummary = can("finance.view_summary") || can("finance.view_all");
   const canViewFinanceDetail = can("finance.view_detail") || can("finance.view_all");
@@ -219,10 +477,105 @@ export default function FinanceScreen() {
   const canEditFinance = can("finance.edit") || can("finance.manage");
   const canDeleteFinance = can("finance.delete") || can("finance.manage");
   const canAuditFlagFinance = can("finance.audit_flag");
+  const canRequestDeleteFinance = canDeleteFinance || canEditFinance || canAuditFlagFinance;
   const canViewAnyFinance = canViewFinanceSummary || canViewFinanceDetail || canViewFinanceSelf;
   const effectiveScope: FinanceViewScope = canViewFinanceDetail ? viewScope : "self";
+  const startDateMs = startDate.getTime();
+  const endDateMs = endDate.getTime();
+  const transactionCount = transactions?.length ?? 0;
+  const loanCount = loans?.length ?? 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    setComputeReady(false);
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => {
+        if (!cancelled) setComputeReady(true);
+      }, 40);
+    });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (typeof (task as any)?.cancel === "function") {
+        (task as any).cancel();
+      }
+    };
+  }, [
+    transactionCount,
+    loanCount,
+    startDateMs,
+    endDateMs,
+    effectiveScope,
+    selectedMemberId,
+    activeTab,
+  ]);
+
+  const deletedTargets = useMemo(() => {
+    const txnIds = new Set<string>();
+    const loanIds = new Set<string>();
+    (auditExecutionLogs || []).forEach((log: any) => {
+      if (String(log?.action || "") !== "delete_executed") return;
+      const targetType = String(log?.targetType || "").trim().toLowerCase();
+      const targetId = String(log?.targetId || "").trim();
+      if (targetType === "loan") {
+        if (targetId) loanIds.add(targetId);
+      } else if (!targetType || targetType === "transaction") {
+        if (targetId) txnIds.add(targetId);
+      }
+      const affected = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+      affected.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) txnIds.add(value);
+      });
+    });
+    (auditChangeRequests || []).forEach((req: any) => {
+      if (String(req?.requestKind || "") !== "delete") return;
+      if (String(req?.status || "") !== "approved") return;
+      const targetType = String(req?.targetType || "").trim().toLowerCase();
+      const targetId = String(req?.targetId || "").trim();
+      if (targetType === "loan") {
+        if (targetId) loanIds.add(targetId);
+      } else if (!targetType || targetType === "transaction") {
+        if (targetId) txnIds.add(targetId);
+      }
+      const related = Array.isArray(req?.relatedTransactionIds) ? req.relatedTransactionIds : [];
+      related.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) txnIds.add(value);
+      });
+    });
+    return { txnIds, loanIds };
+  }, [auditExecutionLogs, auditChangeRequests]);
+
+  const computeTransactions = useMemo(
+    () =>
+      computeReady
+        ? (transactions || []).filter((txn: any) => {
+            const id = String(txn?.id || "").trim();
+            if (id && deletedTargets.txnIds.has(id)) return false;
+            if (txn?.deleted || txn?.deletedAt) return false;
+            return true;
+          })
+        : [],
+    [computeReady, transactions, deletedTargets]
+  );
+
+  const computeLoans = useMemo(
+    () =>
+      computeReady
+        ? (loans || []).filter((loan: any) => {
+            const id = String(loan?.id || "").trim();
+            if (id && deletedTargets.loanIds.has(id)) return false;
+            if (loan?.deleted || loan?.deletedAt) return false;
+            return true;
+          })
+        : [],
+    [computeReady, loans, deletedTargets]
+  );
+
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
-    router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
+    router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);
   };
 
   const handleOpenSettings = () => {
@@ -256,16 +609,35 @@ export default function FinanceScreen() {
       Alert.alert("လိုအပ်ချက်", "မှားယွင်းမှုအကြောင်းပြချက် Note ကိုဖြည့်ပါ။");
       return;
     }
-    await updateTransaction(auditTxn.id, {
-      auditFlagged: true,
-      auditNote: note,
-      auditFlaggedByUserId: currentUser?.id || "",
-      auditFlaggedAt: new Date().toISOString(),
-    } as Partial<Transaction>);
-    setShowAuditModal(false);
-    setAuditTxn(null);
-    setAuditNote("");
-    Alert.alert("မှတ်သားပြီးပါပြီ", "စာရင်းစစ် မှတ်ချက်ကိုသိမ်းပြီးပါပြီ။");
+    try {
+      await updateTransaction(auditTxn.id, {
+        auditFlagged: true,
+        auditNote: note,
+        auditFlaggedByUserId: currentUser?.id || "",
+        auditFlaggedAt: new Date().toISOString(),
+      } as Partial<Transaction>);
+      if (currentUser?.id) {
+        await createAuditChangeRequest({
+          transactionId: auditTxn.id,
+          relatedLoanId: String((auditTxn as any)?.loanId || "").trim() || undefined,
+          auditNote: note,
+          createdByUserId: currentUser.id,
+          createdByMemberId: currentUser.memberId,
+          createdByDisplayName: currentUser.displayName,
+        });
+      }
+      setShowAuditModal(false);
+      setAuditTxn(null);
+      setAuditNote("");
+      Alert.alert("မှတ်သားပြီးပါပြီ", "စာရင်းစစ် မှတ်ချက်ကိုသိမ်းပြီးပါပြီ။");
+    } catch (error: any) {
+      const reason = String(error?.message || "");
+      if (reason.includes("request_conflict_in_progress")) {
+        Alert.alert("မရပါ", "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။");
+        return;
+      }
+      Alert.alert("အမှား", "Audit Request တင်ရာတွင် အဆင်မပြေပါ။");
+    }
   };
 
   const handleClearAuditFlag = async () => {
@@ -276,21 +648,199 @@ export default function FinanceScreen() {
       auditFlaggedByUserId: "",
       auditFlaggedAt: "",
     } as Partial<Transaction>);
+    const openRequests = (Array.isArray(auditChangeRequests) ? auditChangeRequests : []).filter(
+      (row: any) =>
+        String(row?.transactionId || "") === String(auditTxn.id || "") &&
+        (row?.status === "pending" || row?.status === "suspended")
+    );
+    for (const req of openRequests) {
+      if (!currentUser?.id) break;
+      await changeAuditChangeRequestStatus({
+        requestId: req.id,
+        status: "cancelled",
+        byUserId: currentUser.id,
+        byMemberId: currentUser.memberId,
+        byDisplayName: currentUser.displayName,
+        note: "Audit flag ဖြုတ်သိမ်းထားသောကြောင့် request ကိုပိတ်သိမ်းပါသည်။",
+      });
+    }
     setShowAuditModal(false);
     setAuditTxn(null);
     setAuditNote("");
     Alert.alert("ဖြုတ်ပြီးပါပြီ", "Audit Flag ကိုဖြုတ်ပြီးပါပြီ။");
   };
 
-  const getMemberName = (id?: string) => {
-    if (!id) return "";
-    const m = members.find((member: any) => member.id === id);
-    if (!m) return "";
-    const anyM = m as any;
-    if (anyM.name) return anyM.name;
-    const fullName = [anyM.firstName, anyM.lastName].filter(Boolean).join(" ").trim();
-    return fullName || anyM.email || anyM.phone || "";
-  };
+    const openDeleteRequestForTxn = (txn: Transaction) => {
+      setDeleteRequestType("transaction");
+      setDeleteRequestTxn(txn);
+      setDeleteRequestLoan(null);
+      setDeleteRequestNote("");
+      setDeleteRequestSubmitError(null);
+      setDeleteRequestSubmitStatus(null);
+      setDeleteRequestDraftValues({});
+      setDeleteRequestTagIds([]);
+      setShowDeleteRequestModal(true);
+    };
+
+    const openDeleteRequestForLoan = (loan: Loan) => {
+      setDeleteRequestType("loan");
+      setDeleteRequestTxn(null);
+      setDeleteRequestLoan(loan);
+      setDeleteRequestNote("");
+      setDeleteRequestSubmitError(null);
+      setDeleteRequestSubmitStatus(null);
+      setDeleteRequestDraftValues({});
+      setDeleteRequestTagIds([]);
+      setShowDeleteRequestModal(true);
+    };
+
+    const resetDeleteRequestModal = () => {
+      setShowDeleteRequestModal(false);
+      setDeleteRequestTxn(null);
+      setDeleteRequestLoan(null);
+      setDeleteRequestNote("");
+      setDeleteRequestDraftValues({});
+      setDeleteRequestTagIds([]);
+      setDeleteRequestSubmitStatus(null);
+    };
+
+    const handleDeleteRequestStatusOk = () => {
+      const status = deleteRequestSubmitStatus;
+      setDeleteRequestSubmitStatus(null);
+      if (status?.type === "success") {
+        resetDeleteRequestModal();
+      }
+    };
+
+    const buildDeleteRequestDrafts = (): AuditChangeDrafts | undefined => {
+      const role = myRole === "chairperson" ? "chairperson" : myRole === "auditor" ? "auditor" : myRole === "treasurer" ? "treasurer" : null;
+      if (!role || !currentUser?.id) return undefined;
+      const values = { ...(deleteRequestDraftValues || {}) };
+      if (!Object.keys(values).length) return undefined;
+      return {
+        [role]: {
+          values,
+          note: deleteRequestNote.trim() || undefined,
+          byUserId: currentUser.id,
+          byMemberId: currentUser.memberId,
+          byDisplayName: currentUser.displayName,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    };
+
+    const resolveDeleteRequestTagUserIds = (): string[] => {
+      if (!deleteRequestTagIds.length) return [];
+      const ids = deleteRequestTagIds
+        .map((memberId) => users.find((user: any) => String(user?.memberId || "") === String(memberId))?.id)
+        .filter(Boolean) as string[];
+      return Array.from(new Set(ids));
+    };
+
+    const submitDeleteRequest = async () => {
+      if (!currentUser?.id) {
+        const message = "အသုံးပြုသူမရှိပါ။";
+        setDeleteRequestSubmitError(message);
+        setDeleteRequestSubmitStatus({ type: "error", message });
+        return;
+      }
+      if (deleteRequestSubmitting) return;
+      const note = deleteRequestNote.trim();
+      if (!note) {
+        const message = "Delete Request အကြောင်းပြချက် မှတ်ချက်ဖြည့်ရန်လိုပါသည်။";
+        setDeleteRequestSubmitError(message);
+        setDeleteRequestSubmitStatus({ type: "error", message });
+        return;
+      }
+
+      try {
+        setDeleteRequestSubmitError(null);
+        setDeleteRequestSubmitStatus(null);
+        setDeleteRequestSubmitting(true);
+        const drafts = buildDeleteRequestDrafts();
+        const tagUserIds = resolveDeleteRequestTagUserIds();
+        if (deleteRequestType === "transaction") {
+          if (!deleteRequestTxn) return;
+          await createAuditChangeRequest({
+            requestKind: "delete",
+            targetType: "transaction",
+            targetId: deleteRequestTxn.id,
+            transactionId: deleteRequestTxn.id,
+            relatedLoanId: String((deleteRequestTxn as any)?.loanId || "").trim() || undefined,
+            auditNote: note,
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+            createdByDisplayName: currentUser.displayName,
+            drafts,
+            tagUserIds,
+          });
+          await updateTransaction(deleteRequestTxn.id, {
+            auditFlagged: true,
+            auditNote: note,
+            auditFlaggedByUserId: currentUser.id,
+            auditFlaggedAt: new Date().toISOString(),
+          } as Partial<Transaction>);
+        } else {
+          if (!deleteRequestLoan) return;
+          await createAuditChangeRequest({
+            requestKind: "delete",
+            targetType: "loan",
+            targetId: deleteRequestLoan.id,
+            transactionId: undefined,
+            relatedLoanId: deleteRequestLoan.id,
+            auditNote: note,
+            createdByUserId: currentUser.id,
+            createdByMemberId: currentUser.memberId,
+            createdByDisplayName: currentUser.displayName,
+            drafts,
+            tagUserIds,
+          });
+        }
+
+        setDeleteRequestSubmitStatus({
+          type: "success",
+          message: "Delete Request ကို Audit စိစစ်ရန် ပေးပို့ပြီးပါပြီ။",
+        });
+      } catch (error: any) {
+        const reason = String(error?.message || "");
+        if (reason.includes("request_conflict_in_progress")) {
+          const message = "ဤစာရင်းအတွက် Request တစ်ခု လုပ်ဆောင်နေပြီးဖြစ်သောကြောင့် အသစ်တင်လို့မရပါ။";
+          setDeleteRequestSubmitError(message);
+          setDeleteRequestSubmitStatus({ type: "error", message });
+          return;
+        }
+        if (reason.includes("request_finalized_locked")) {
+          const message = "ဤစာရင်းကို ဥက္ကဌဆုံးဖြတ်ပြီးဖြစ်သောကြောင့် Request ထပ်မတင်နိုင်ပါ။";
+          setDeleteRequestSubmitError(message);
+          setDeleteRequestSubmitStatus({ type: "error", message });
+          return;
+        }
+        if (reason.includes("already_deleted")) {
+          const message = "ဤစာရင်းသည် ပယ်ဖျက်ပြီးဖြစ်သောကြောင့် Delete Request ထပ်မတင်နိုင်ပါ။";
+          setDeleteRequestSubmitError(message);
+          setDeleteRequestSubmitStatus({ type: "error", message });
+          return;
+        }
+        const message = "Delete Request ပေးပို့ရာတွင် အဆင်မပြေပါ။";
+        setDeleteRequestSubmitError(message);
+        setDeleteRequestSubmitStatus({ type: "error", message });
+      } finally {
+        setDeleteRequestSubmitting(false);
+      }
+    };
+
+  const getMemberName = useCallback(
+    (id?: string) => {
+      if (!id) return "";
+      const m = members.find((member: any) => member.id === id);
+      if (!m) return "";
+      const anyM = m as any;
+      if (anyM.name) return anyM.name;
+      const fullName = [anyM.firstName, anyM.lastName].filter(Boolean).join(" ").trim();
+      return fullName || anyM.email || anyM.phone || "";
+    },
+    [members]
+  );
 
   const memberOptions = useMemo(() => {
     const needle = memberSearch.trim().toLowerCase();
@@ -303,6 +853,330 @@ export default function FinanceScreen() {
     });
   }, [members, memberSearch]);
 
+    const deleteRequestRows: DeleteRequestFieldRow[] = useMemo(() => {
+      if (deleteRequestType === "transaction" && deleteRequestTxn) {
+        const txn: any = deleteRequestTxn;
+        const memberId = String(txn?.memberId || "");
+        const memberName = getMemberName(memberId) || txn?.payerPayee || memberId || "-";
+        const rawType = String(txn?.type || "").toLowerCase();
+        const recordType = rawType === "expense" ? "expense" : rawType === "transfer" ? "transfer" : "income";
+        const normalizedCategory = normalizeFinanceCategory(txn?.category, txn?.categoryLabel);
+        const categoryLabel = getLocalizedTransactionCategoryLabel(txn?.category, txn?.categoryLabel);
+        const relatedIds = Array.isArray(txn?.relatedIds)
+          ? txn.relatedIds
+          : Array.isArray(txn?.linkedTransactionIds)
+            ? txn.linkedTransactionIds
+            : [];
+        return [
+          { key: "type", label: "စာရင်းအမျိုးအစား", type: "recordType", value: recordType },
+          { key: "category", label: "အမျိုးအစား", type: "category", value: normalizedCategory || "-", display: categoryLabel || String(normalizedCategory || "-") },
+          { key: "description", label: "အကြောင်းအရာ", type: "text", value: String(txn?.description || txn?.notes || "-") },
+          { key: "memberId", label: "အသင်းဝင်", type: "member", value: memberId, display: memberName },
+          { key: "payerPayee", label: "ပေးသွင်းသူ", type: "member", value: String(txn?.payerPayee || "-"), display: String(txn?.payerPayee || "-") },
+          { key: "date", label: "ရက်စွဲ", type: "date", value: String(txn?.date || "-") },
+          { key: "amount", label: "ပမာဏ", type: "amount", value: Number(txn?.amount || 0) },
+          { key: "direction", label: "အဝင်/အထွက်", type: "readonly", value: String(txn?.type || "") === "expense" ? "အထွက်" : "အဝင်" },
+          { key: "paymentMethod", label: "ငွေပေးချေမှု", type: "paymentMethod", value: String(txn?.paymentMethod || "cash").toLowerCase() },
+          { key: "accountName", label: "အကောင့်/ဘဏ်", type: "readonly", value: String(txn?.accountName || txn?.account || txn?.bankAccount || "-") },
+          { key: "receiptNumber", label: "ပြေစာ", type: "text", value: String(txn?.receiptNumber || "-") },
+          {
+            key: "feePeriodStart",
+            label: "လစဉ်ကြေးကာလ (From)",
+            type: "date",
+            value: String(txn?.feePeriodStart || "-"),
+          },
+          {
+            key: "feePeriodEnd",
+            label: "လစဉ်ကြေးကာလ (To)",
+            type: "date",
+            value: String(txn?.feePeriodEnd || "-"),
+          },
+          { key: "notes", label: "မှတ်ချက်", type: "text", value: String(txn?.notes || "-") },
+          { key: "relatedIds", label: "Related IDs", type: "readonly", value: relatedIds.length ? relatedIds.join(", ") : "-" },
+        ];
+      }
+      if (deleteRequestType === "loan" && deleteRequestLoan) {
+        const loan: any = deleteRequestLoan;
+        const memberId = String(loan?.memberId || "");
+        const memberName = getMemberName(memberId) || memberId || "-";
+        const relatedIds = Array.isArray(loan?.relatedIds)
+          ? loan.relatedIds
+          : Array.isArray(loan?.linkedTransactionIds)
+            ? loan.linkedTransactionIds
+            : [];
+        return [
+          { key: "memberId", label: "အသင်းဝင်", type: "member", value: memberId, display: memberName },
+          { key: "principal", label: "အရင်း", type: "amount", value: Number(loan?.principal ?? loan?.amount ?? 0) },
+          { key: "issueDate", label: "ထုတ်ချေးရက်စွဲ", type: "date", value: String(loan?.issueDate || loan?.date || "-") },
+          { key: "dueDate", label: "သတ်မှတ်ရက်", type: "date", value: String(loan?.dueDate || "-") },
+          { key: "interestRate", label: "အတိုးနှုန်း (%)", type: "text", value: String(loan?.interestRate ?? "-") },
+          { key: "notes", label: "မှတ်ချက်", type: "text", value: String(loan?.notes || loan?.description || "-") },
+          { key: "relatedIds", label: "Related IDs", type: "readonly", value: relatedIds.length ? relatedIds.join(", ") : "-" },
+        ];
+      }
+      return [];
+    }, [deleteRequestType, deleteRequestTxn, deleteRequestLoan, getMemberName]);
+
+    useEffect(() => {
+      if (!showDeleteRequestModal) return;
+      const base: Record<string, any> = {};
+      deleteRequestRows.forEach((row) => {
+        base[row.key] = row.value;
+        if (row.key === "category" && row.display) {
+          base.categoryLabel = row.display;
+        }
+      });
+      setDeleteRequestDraftValues(base);
+    }, [showDeleteRequestModal, deleteRequestTxn?.id, deleteRequestLoan?.id, deleteRequestRows]);
+
+    const deleteEditRole =
+      myRole === "chairperson" ? "chairperson" : myRole === "auditor" ? "auditor" : myRole === "treasurer" ? "treasurer" : null;
+
+    const formatDeleteFieldValue = (row: DeleteRequestFieldRow, value: any) => {
+      if (row.key === "direction") {
+        const rawType = String(deleteRequestDraftValues.type || value || "").toLowerCase();
+        return rawType === "expense" ? "အထွက်" : "အဝင်";
+      }
+      if (row.type === "recordType") {
+        const v = String(value || "").toLowerCase();
+        if (v === "expense") return "အသုံးစာရင်း";
+        if (v === "transfer") return "ဘဏ်သွင်း/ဘဏ်ထုတ်";
+        return "ရငွေစာရင်း";
+      }
+      if (row.type === "paymentMethod") {
+        const v = String(value || "").toLowerCase();
+        return v === "bank" ? "ဘဏ် (Bank)" : "ငွေသား (Cash)";
+      }
+      if (row.type === "category") {
+        const v = String(value || "").toLowerCase();
+        const all = [...INCOME_CATEGORY_FILTERS, ...EXPENSE_CATEGORY_FILTERS, ...TRANSFER_CATEGORY_FILTERS];
+        const found = all.find((item) => item.id === v);
+        return found ? found.label : row.display || v || "-";
+      }
+      if (row.type === "amount") {
+        const amount = Number(value || 0);
+        return `${amount.toLocaleString()} KS`;
+      }
+      if (row.type === "member") {
+        const memberId = String(value || "").trim();
+        if (row.key === "payerPayee") {
+          return String(value || row.display || "-");
+        }
+        return getMemberName(memberId) || row.display || memberId || "-";
+      }
+      if (row.type === "date") {
+        return String(value || "-");
+      }
+      return String(value || "-");
+    };
+
+    const updateDeleteRequestDraftValue = (fieldKey: string, value: any) => {
+      setDeleteRequestDraftValues((prev) => ({ ...prev, [fieldKey]: value }));
+    };
+
+    const applyDeleteRequestOptionSelection = (fieldKey: string, value: string, label?: string) => {
+      setDeleteRequestDraftValues((prev) => {
+        const next = { ...prev, [fieldKey]: value };
+        if (fieldKey === "type") {
+          const nextType = String(value || "").toLowerCase();
+          const options =
+            nextType === "expense"
+              ? EXPENSE_CATEGORY_FILTERS
+              : nextType === "transfer"
+                ? TRANSFER_CATEGORY_FILTERS
+                : INCOME_CATEGORY_FILTERS;
+          if (!options.find((opt) => opt.id === String(prev.category || ""))) {
+            next.category = options[0]?.id || "";
+            next.categoryLabel = options[0]?.label || "";
+          }
+        }
+        if (fieldKey === "category") {
+          next.categoryLabel = label || next.categoryLabel;
+        }
+        return next;
+      });
+    };
+
+    const showWebAlert = (message: string) => {
+      if (Platform.OS !== "web") return false;
+      const alertFn = (globalThis as any)?.alert;
+      if (typeof alertFn === "function") {
+        alertFn(message);
+        return true;
+      }
+      return false;
+    };
+
+    const openDeleteRequestDatePicker = (fieldKey: string) => {
+      setDeleteRequestActiveDateField(fieldKey);
+    };
+
+    const handleDeleteRequestDatePicked = (event: any, selected?: Date) => {
+      if (!deleteRequestActiveDateField) return;
+      if (event?.type === "dismissed") {
+        setDeleteRequestActiveDateField(null);
+        return;
+      }
+      const next = selected || new Date();
+      const y = next.getFullYear();
+      const m = String(next.getMonth() + 1).padStart(2, "0");
+      const d = String(next.getDate()).padStart(2, "0");
+      updateDeleteRequestDraftValue(deleteRequestActiveDateField, `${y}-${m}-${d}`);
+      setDeleteRequestActiveDateField(null);
+    };
+
+    const openDeleteRequestMemberPicker = (fieldKey: string) => {
+      setDeleteRequestMemberField(fieldKey);
+      setShowDeleteRequestMemberPicker(true);
+    };
+
+    const openDeleteRequestOptionPicker = (fieldKey: string, title: string, items: CategoryFilterOption[]) => {
+      setDeleteRequestOptionField(fieldKey);
+      setDeleteRequestOptionTitle(title);
+      setDeleteRequestOptionItems(items);
+      setShowDeleteRequestOptionPicker(true);
+    };
+
+    const currentDeleteRequestRecordType = useMemo(() => {
+      if (deleteRequestType !== "transaction" || !deleteRequestTxn) return "income";
+      const draft = String(deleteRequestDraftValues.type || "").toLowerCase();
+      if (draft) return draft;
+      const raw = String((deleteRequestTxn as any)?.type || "").toLowerCase();
+      return raw === "expense" || raw === "transfer" ? raw : "income";
+    }, [deleteRequestType, deleteRequestTxn, deleteRequestDraftValues.type]);
+
+    const deleteRequestCategoryOptions = useMemo(() => {
+      if (currentDeleteRequestRecordType === "expense") return EXPENSE_CATEGORY_FILTERS;
+      if (currentDeleteRequestRecordType === "transfer") return TRANSFER_CATEGORY_FILTERS;
+      return INCOME_CATEGORY_FILTERS;
+    }, [currentDeleteRequestRecordType]);
+
+    const deleteRequestMemberOptions = useMemo(() => {
+      const needle = deleteRequestMemberSearch.trim().toLowerCase();
+      const list = [...(members || [])];
+      if (!needle) return list;
+      return list.filter((member: any) => {
+        const id = String(member.id || "").toLowerCase();
+        const name = String(member.name || "").toLowerCase();
+        return id.includes(needle) || name.includes(needle);
+      });
+    }, [members, deleteRequestMemberSearch]);
+
+    const deleteRequestTagOptions = useMemo(() => {
+      const needle = deleteRequestTagSearch.trim().toLowerCase();
+      const list = [...(members || [])];
+      if (!needle) return list;
+      return list.filter((member: any) => {
+        const id = String(member.id || "").toLowerCase();
+        const name = String(member.name || "").toLowerCase();
+        return id.includes(needle) || name.includes(needle);
+      });
+    }, [members, deleteRequestTagSearch]);
+
+    const selectedDeleteRequestTagNames = useMemo(() => {
+      if (!deleteRequestTagIds.length) return "";
+      return deleteRequestTagIds
+        .map((id) => getMemberName(id) || id)
+        .filter(Boolean)
+        .join(", ");
+    }, [deleteRequestTagIds, getMemberName]);
+
+    const renderDeleteRoleCell = (role: "treasurer" | "auditor" | "chairperson", row: DeleteRequestFieldRow) => {
+      const canEdit = deleteEditRole === role && !!deleteEditRole;
+      const rawValue = role === deleteEditRole ? deleteRequestDraftValues[row.key] ?? row.value : row.value;
+
+      if (!canEdit || row.type === "readonly") {
+        return <Text style={styles.auditTableValue}>{formatDeleteFieldValue(row, rawValue)}</Text>;
+      }
+
+      if (row.type === "member") {
+        return (
+          <Pressable style={styles.auditTablePicker} onPress={() => openDeleteRequestMemberPicker(row.key)}>
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "date") {
+        if (Platform.OS === "web") {
+          return (
+            <TextInput
+              style={styles.auditTableInput}
+              value={String(rawValue ?? "")}
+              onChangeText={(text) => updateDeleteRequestDraftValue(row.key, text)}
+              placeholder="YYYY-MM-DD"
+            />
+          );
+        }
+        return (
+          <Pressable style={styles.auditTablePicker} onPress={() => openDeleteRequestDatePicker(row.key)}>
+            <Text style={styles.auditTablePickerText}>{String(rawValue || "-")}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "recordType") {
+        return (
+          <Pressable
+            style={styles.auditTablePicker}
+            onPress={() =>
+              openDeleteRequestOptionPicker("type", "စာရင်းအမျိုးအစား", [
+                { id: "income", label: "ရငွေစာရင်း" },
+                { id: "expense", label: "အသုံးစာရင်း" },
+                { id: "transfer", label: "ဘဏ်သွင်း/ဘဏ်ထုတ်" },
+              ])
+            }
+          >
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "paymentMethod") {
+        return (
+          <Pressable
+            style={styles.auditTablePicker}
+            onPress={() =>
+              openDeleteRequestOptionPicker("paymentMethod", "ငွေပေးချေမှု ပုံစံ", [
+                { id: "cash", label: "ငွေသား (Cash)" },
+                { id: "bank", label: "ဘဏ် (Bank)" },
+              ])
+            }
+          >
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      if (row.type === "category") {
+        return (
+          <Pressable
+            style={styles.auditTablePicker}
+            onPress={() =>
+              openDeleteRequestOptionPicker("category", "အမျိုးအစားရွေးချယ်ရန်", deleteRequestCategoryOptions)
+            }
+          >
+            <Text style={styles.auditTablePickerText}>{formatDeleteFieldValue(row, rawValue)}</Text>
+          </Pressable>
+        );
+      }
+
+      return (
+        <TextInput
+          style={styles.auditTableInput}
+          value={String(rawValue ?? "")}
+          onChangeText={(text) => updateDeleteRequestDraftValue(row.key, row.type === "amount" ? text.replace(/[^0-9.]/g, "") : text)}
+          keyboardType={row.type === "amount" ? "decimal-pad" : "default"}
+          placeholder="-"
+        />
+      );
+    };
+  const showInlineMemberResults = useMemo(
+    () => viewScope === "member" && memberSearch.trim().length > 0,
+    [viewScope, memberSearch]
+  );
+  const inlineMemberOptions = useMemo(() => memberOptions.slice(0, 10), [memberOptions]);
+
   const scopedMemberId = useMemo<string | null>(() => {
     if (effectiveScope === "all") return null;
     if (effectiveScope === "self") return currentUser?.memberId || "__none__";
@@ -311,15 +1185,66 @@ export default function FinanceScreen() {
 
   const scopeLabel = useMemo(() => {
     if (effectiveScope === "all") return "အားလုံး";
-    if (effectiveScope === "self") return "ကိုယ်ပိုင်";
+    if (effectiveScope === "self") return "ကိုယ်တိုင်";
     const selectedName = members.find((member: any) => member.id === scopedMemberId)?.name || "";
     if (scopedMemberId === "__none__") return "ရွေးချယ်ထားသူ";
     return selectedName ? `${selectedName} (${scopedMemberId})` : scopedMemberId;
   }, [effectiveScope, scopedMemberId, members]);
 
+  const keywordNeedle = useMemo(() => keywordSearch.trim().toLowerCase(), [keywordSearch]);
+
+  const matchesTransactionKeyword = useCallback(
+    (txn: any): boolean => {
+      if (!keywordNeedle) return true;
+      const memberName = getMemberName(txn?.memberId) || String(txn?.payerPayee || "");
+      const displayDescription = getTransactionDisplayDescription(txn, memberName);
+      const haystack = [
+        txn?.id,
+        txn?.receiptNumber,
+        txn?.memberId,
+        memberName,
+        txn?.payerPayee,
+        getLocalizedTransactionCategoryLabel(txn?.category, txn?.categoryLabel),
+        displayDescription,
+        txn?.description,
+        txn?.notes,
+        txn?.feePeriodStart,
+        txn?.feePeriodEnd,
+        formatDateForPrint(txn?.date),
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(keywordNeedle);
+    },
+    [getMemberName, keywordNeedle]
+  );
+
+  const matchesLoanKeyword = useCallback(
+    (loan: any): boolean => {
+      if (!keywordNeedle) return true;
+      const memberName = getMemberName(loan?.memberId);
+      const haystack = [
+        loan?.id,
+        loan?.memberId,
+        memberName,
+        loan?.description,
+        loan?.notes,
+        loan?.status,
+        loan?.issueDate,
+        loan?.dueDate,
+        loan?.repaymentDate,
+        formatDateForPrint(loan?.issueDate),
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(keywordNeedle);
+    },
+    [getMemberName, keywordNeedle]
+  );
+
   // Filter transactions by date range
   const sortedTxns = useMemo(
-    () => [...(transactions || [])]
+    () => [...computeTransactions]
     .sort((a, b) => {
       const getDate = (d: any) => {
         if (!d) return 0;
@@ -343,7 +1268,7 @@ export default function FinanceScreen() {
       }
       return current >= start && current <= end;
     }),
-    [transactions, startDate, endDate]
+    [computeTransactions, startDate, endDate]
   );
 
   const visibleTxns = useMemo(() => {
@@ -352,12 +1277,12 @@ export default function FinanceScreen() {
   }, [sortedTxns, scopedMemberId]);
 
   const sortedLoans = useMemo(
-    () => [...(loans || [])].sort((a, b) => {
+    () => [...computeLoans].sort((a, b) => {
       if (a.status === "active" && b.status !== "active") return -1;
       if (a.status !== "active" && b.status === "active") return 1;
       return new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime();
     }),
-    [loans]
+    [computeLoans]
   );
 
   const visibleLoans = useMemo(() => {
@@ -366,9 +1291,9 @@ export default function FinanceScreen() {
   }, [sortedLoans, scopedMemberId]);
 
   const balanceSourceTransactions = useMemo(() => {
-    if (scopedMemberId === null) return transactions || [];
-    return (transactions || []).filter((t: any) => t.memberId === scopedMemberId);
-  }, [transactions, scopedMemberId]);
+    if (scopedMemberId === null) return computeTransactions;
+    return computeTransactions.filter((t: any) => t.memberId === scopedMemberId);
+  }, [computeTransactions, scopedMemberId]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -406,30 +1331,695 @@ export default function FinanceScreen() {
     return { income, expense, net: income - expense };
   }, [visibleTxns]);
 
+  const loanMetricRows = useMemo(() => {
+    return (visibleLoans || []).map((loan: any) => {
+      const metrics = computeLoanMetrics(loan, balanceSourceTransactions as any);
+      return { loan, metrics };
+    });
+  }, [visibleLoans, balanceSourceTransactions]);
+
+  const loanPrincipalSummary = useMemo(() => {
+    const disbursed = visibleTxns
+      .filter((t: any) => String(t?.category || "") === "loan_disbursement")
+      .reduce((sum: number, t: any) => sum + Number(t?.amount || 0), 0);
+    const repaid = visibleTxns
+      .filter((t: any) => String(t?.category || "") === "loan_repayment")
+      .reduce((sum: number, t: any) => sum + Number(t?.amount || 0), 0);
+    // Use direct subtraction to ensure outstanding matches displayed totals (Disbursed - Repaid)
+    const outstanding = disbursed - repaid;
+    return { disbursed, repaid, outstanding };
+  }, [visibleTxns]);
+
+  const loanInterestSummary = useMemo(() => {
+    const base = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.baseInterest || 0), 0);
+    const relief = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestRelief || 0), 0);
+    const payable = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPayable || 0), 0);
+    const paid = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestPaid || 0), 0);
+    const outstanding = loanMetricRows.reduce((sum: number, row: any) => sum + Number(row.metrics.interestOutstanding || 0), 0);
+    return { base, relief, payable, paid, outstanding };
+  }, [loanMetricRows]);
+
+  const loanRelatedTransactions = useMemo(() => {
+    return visibleTxns.filter((t: any) => {
+      const category = String(t?.category || "");
+      if (!(category === "loan_disbursement" || category === "loan_repayment" || Boolean(t?.loanId))) {
+        return false;
+      }
+      return matchesTransactionKeyword(t);
+    });
+  }, [visibleTxns, matchesTransactionKeyword]);
+
+  const pagedLoanRelatedTransactions = useMemo(
+    () => loanRelatedTransactions.slice(0, visibleLoanTxnCount),
+    [loanRelatedTransactions, visibleLoanTxnCount]
+  );
+  const hasMoreLoanRelatedTransactions = pagedLoanRelatedTransactions.length < loanRelatedTransactions.length;
+
+  const pendingAuditChangeRequestCount = useMemo(() => {
+    const rows = Array.isArray(auditChangeRequests) ? auditChangeRequests : [];
+    return rows.filter((row: any) => row.status === "pending" || row.status === "suspended").length;
+  }, [auditChangeRequests]);
+
   const isAllScope = effectiveScope === "all";
+  const financeCategoryGroups = useMemo<{ title: string; options: CategoryFilterOption[] }[]>(() => {
+    if (activeTab === "loans") return [];
+    if (activeTab === "transactions") {
+      if (isAllScope) {
+        return [
+          { title: "ရငွေစာရင်း အမျိုးအစားများ", options: INCOME_CATEGORY_FILTERS },
+          { title: "အသုံးစာရင်း အမျိုးအစားများ", options: EXPENSE_CATEGORY_FILTERS },
+        ];
+      }
+      return [{ title: "ရငွေစာရင်း အမျိုးအစားများ", options: INCOME_CATEGORY_FILTERS }];
+    }
+    if (activeTab === "transfers") {
+      if (isAllScope) {
+        return [{ title: "ဘဏ်သွင်း/ဘဏ်ထုတ် အမျိုးအစားများ", options: TRANSFER_CATEGORY_FILTERS }];
+      }
+      return [{ title: "အသုံးစာရင်း အမျိုးအစားများ", options: EXPENSE_CATEGORY_FILTERS }];
+    }
+    return [];
+  }, [activeTab, isAllScope]);
+
+  const selectableCategoryIds = useMemo(
+    () => Array.from(new Set(financeCategoryGroups.flatMap((group) => group.options.map((option) => option.id)))),
+    [financeCategoryGroups]
+  );
+
+  useEffect(() => {
+    setCategoryFilter("all");
+  }, [activeTab, effectiveScope]);
+
+  useEffect(() => {
+    if (categoryFilter !== "all" && !selectableCategoryIds.includes(categoryFilter)) {
+      setCategoryFilter("all");
+    }
+  }, [categoryFilter, selectableCategoryIds]);
+
+  const baseActiveListData = useMemo<any[]>(() => {
+    if (activeTab === "loans") return (visibleLoans as any[]) || [];
+    if (activeTab === "transfers") {
+      return (
+        isAllScope
+          ? visibleTxns.filter((t: any) => t.type === "transfer" || normalizeFinanceCategory(t?.category, t?.categoryLabel) === "bank_interest")
+          : visibleTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
+      ) as any[];
+    }
+    return (
+      isAllScope
+        ? visibleTxns.filter((t: any) => t.type !== "transfer" && normalizeFinanceCategory(t?.category, t?.categoryLabel) !== "bank_interest")
+        : visibleTxns.filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
+    ) as any[];
+  }, [activeTab, isAllScope, visibleLoans, visibleTxns]);
+
+  const activeListData = useMemo<any[]>(() => {
+    const categoryFiltered =
+      activeTab === "loans" || categoryFilter === "all"
+        ? baseActiveListData
+        : baseActiveListData.filter(
+      (item: any) => normalizeFinanceCategory(item?.category, item?.categoryLabel) === categoryFilter
+    );
+
+    if (!keywordNeedle) return categoryFiltered;
+    if (activeTab === "loans") {
+      return categoryFiltered.filter((loan: any) => matchesLoanKeyword(loan));
+    }
+    return categoryFiltered.filter((txn: any) => matchesTransactionKeyword(txn));
+  }, [activeTab, baseActiveListData, categoryFilter, keywordNeedle, matchesLoanKeyword, matchesTransactionKeyword]);
+
+  const transactionFlowSummary = useMemo(() => {
+    if (!(isAllScope && activeTab === "transactions")) return { incoming: 0, outgoing: 0 };
+    return activeListData.reduce(
+      (acc: { incoming: number; outgoing: number }, row: any) => {
+        const amount = Number(row?.amount || 0);
+        if (String(row?.type || "") === "income") acc.incoming += amount;
+        if (String(row?.type || "") === "expense") acc.outgoing += amount;
+        return acc;
+      },
+      { incoming: 0, outgoing: 0 }
+    );
+  }, [activeListData, activeTab, isAllScope]);
+
+  const transferFlowSummary = useMemo(() => {
+    if (!(isAllScope && activeTab === "transfers")) return { deposit: 0, withdraw: 0 };
+    return activeListData.reduce(
+      (acc: { deposit: number; withdraw: number }, row: any) => {
+        const amount = Number(row?.amount || 0);
+        const normalized = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+        if (normalized === "bank_deposit" || normalized === "bank_interest") acc.deposit += amount;
+        if (normalized === "bank_withdraw") acc.withdraw += amount;
+        return acc;
+      },
+      { deposit: 0, withdraw: 0 }
+    );
+  }, [activeListData, activeTab, isAllScope]);
+
+  useEffect(() => {
+    setVisibleListCount(FINANCE_PAGE_SIZE);
+    setVisibleLoanTxnCount(FINANCE_PAGE_SIZE);
+  }, [activeTab, effectiveScope, scopedMemberId, startDateMs, endDateMs, activeListData.length]);
+
+  const pagedActiveListData = useMemo(() => activeListData.slice(0, visibleListCount), [activeListData, visibleListCount]);
+  const hasMoreActiveListData = pagedActiveListData.length < activeListData.length;
+  const isActiveListEmpty =
+    activeTab === "loans"
+      ? activeListData.length === 0 && loanRelatedTransactions.length === 0
+      : activeListData.length === 0;
 
   const formatDateBtn = (date: Date) => date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const activeTabLabel = useMemo(() => {
+    if (activeTab === "transactions") return "အဝင်/အထွက်";
+    if (activeTab === "transfers") return "ဘဏ်သွင်း/ဘဏ်ထုတ်";
+    return "ချေးငွေ";
+  }, [activeTab]);
+
+  const selectedCategoryLabel = useMemo(() => {
+    if (activeTab === "loans") return "";
+    if (categoryFilter === "all") return "အမျိုးအစားအားလုံး";
+    for (const group of financeCategoryGroups) {
+      const found = group.options.find((option) => option.id === categoryFilter);
+      if (found) return found.label;
+    }
+    return categoryFilter;
+  }, [activeTab, categoryFilter, financeCategoryGroups]);
+
+  const shareHtmlAsPdf = useCallback(async (html: string) => {
+    if (Platform.OS === "web") {
+      if (typeof document === "undefined") {
+        await Print.printAsync({ html });
+        return;
+      }
+
+      const frame = document.createElement("iframe");
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "0";
+      frame.style.height = "0";
+      frame.style.border = "0";
+      frame.setAttribute("aria-hidden", "true");
+      document.body.appendChild(frame);
+
+      const cleanup = () => {
+        try {
+          if (frame.parentNode) frame.parentNode.removeChild(frame);
+        } catch {}
+      };
+
+      try {
+        const doc = frame.contentDocument || frame.contentWindow?.document;
+        if (!doc || !frame.contentWindow) {
+          cleanup();
+          await Print.printAsync({ html });
+          return;
+        }
+        doc.open();
+        doc.write(html);
+        doc.close();
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        setTimeout(cleanup, 1200);
+      } catch {
+        cleanup();
+        await Print.printAsync({ html });
+      }
+      return;
+    }
+
+    const { uri } = await Print.printToFileAsync({ html });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, { UTI: ".pdf", mimeType: "application/pdf" });
+      return;
+    }
+    await Print.printAsync({ html });
+  }, []);
+
+  const exportFinanceXlsx = useCallback(async (rows: unknown[][], sheetName: string, filePrefix: string) => {
+    await exportXlsxFile({
+      filePrefix,
+      dialogTitle: "Finance Excel (.xlsx) ထုတ်ယူရန်",
+      sheets: [{ name: sheetName, rows }],
+    });
+  }, []);
+
+  const buildBaseHtml = useCallback(
+    (title: string, subtitle: string, content: string, options?: { forExcel?: boolean }) => `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <style>
+            ${options?.forExcel ? "" : "@page { size: A4 portrait; margin: 10mm; }"}
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 16px; color: #0F172A; }
+            h1 { text-align: center; margin: 0 0 8px; font-size: 22px; }
+            h2 { margin: 18px 0 8px; font-size: 16px; }
+            p.meta { text-align: center; margin: 0 0 12px; color: #475569; font-size: 12px; line-height: 1.5; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 10px; }
+            th, td { border: 1px solid #E2E8F0; padding: 7px; text-align: left; vertical-align: top; }
+            th { background: #F1F5F9; font-weight: 700; }
+            tr:nth-child(even) { background: #F8FAFC; }
+            .empty { border: 1px dashed #CBD5E1; border-radius: 10px; color: #64748B; padding: 12px; text-align: center; }
+            .footer { margin-top: 20px; text-align: center; font-size: 10px; color: #94A3B8; }
+          </style>
+        </head>
+        <body>
+          <h1>${escapeHtml(accountSettings?.orgName || "Social Org Manager")}</h1>
+          <p class="meta">${escapeHtml(title)}<br/>${escapeHtml(subtitle)}</p>
+          ${content}
+          <div class="footer">Generated by Social Org Manager</div>
+        </body>
+      </html>
+    `,
+    [accountSettings?.orgName]
+  );
+
+  const buildFinanceHtmlPayload = useCallback(
+    (kind: FinancePrintKind) => {
+      const subtitle = `Tab: ${activeTabLabel} | Scope: ${scopeLabel}${activeTab !== "loans" ? ` | Category: ${selectedCategoryLabel}` : ""}${keywordNeedle ? ` | Search: ${keywordSearch}` : ""} | Date: ${formatDateForPrint(startDate)} - ${formatDateForPrint(endDate)} | ${new Date().toLocaleString()}`;
+
+      let summaryHtml = "";
+      if (activeTab === "transactions") {
+        const txnRows = (activeListData as any[]) || [];
+        const income = txnRows.filter((row) => String(row?.type || "") === "income").reduce((sum, row) => sum + Number(row?.amount || 0), 0);
+        const expense = txnRows.filter((row) => String(row?.type || "") === "expense").reduce((sum, row) => sum + Number(row?.amount || 0), 0);
+        const net = income - expense;
+        summaryHtml = `
+          <h2>အဝင်/အထွက် စာရင်းချုပ်</h2>
+          <div class="summary">
+            <div class="summary-box"><div class="summary-label">အဝင်</div><div class="summary-value">${income.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">အထွက်</div><div class="summary-value">${expense.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">ကွာဟချက်</div><div class="summary-value">${net.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">စာရင်းအရေအတွက်</div><div class="summary-value">${txnRows.length.toLocaleString()}</div></div>
+          </div>
+        `;
+      } else if (activeTab === "transfers") {
+        const transferRows = (activeListData as any[]) || [];
+        const deposit = transferRows.reduce((sum: number, row: any) => {
+          const category = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+          if (category === "bank_deposit" || category === "bank_interest") return sum + Number(row?.amount || 0);
+          return sum;
+        }, 0);
+        const withdraw = transferRows.reduce((sum: number, row: any) => {
+          const category = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+          if (category === "bank_withdraw") return sum + Number(row?.amount || 0);
+          return sum;
+        }, 0);
+        summaryHtml = `
+          <h2>ဘဏ်သွင်း/ဘဏ်ထုတ် စာရင်းချုပ်</h2>
+          <div class="summary">
+            <div class="summary-box"><div class="summary-label">ဘဏ်သွင်း</div><div class="summary-value">${deposit.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">ဘဏ်ထုတ်</div><div class="summary-value">${withdraw.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">ကွာဟချက်</div><div class="summary-value">${(deposit - withdraw).toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">စာရင်းအရေအတွက်</div><div class="summary-value">${transferRows.length.toLocaleString()}</div></div>
+          </div>
+        `;
+      } else {
+        summaryHtml = `
+          <h2>ချေးငွေ စာရင်းချုပ်</h2>
+          <div class="summary">
+            <div class="summary-box"><div class="summary-label">ထုတ်ချေးငွေ</div><div class="summary-value">${loanPrincipalSummary.disbursed.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">ပြန်ဆပ်ငွေ</div><div class="summary-value">${loanPrincipalSummary.repaid.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">ပြန်ဆပ်ရန်ကျန်ငွေ</div><div class="summary-value">${loanPrincipalSummary.outstanding.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">အတိုးဆပ်ရန်ကျန်ငွေ</div><div class="summary-value">${loanInterestSummary.outstanding.toLocaleString()} KS</div></div>
+            <div class="summary-box"><div class="summary-label">ချေးငွေစာရင်း</div><div class="summary-value">${activeListData.length.toLocaleString()}</div></div>
+          </div>
+        `;
+      }
+
+      let detailsHtml = "";
+      if (activeTab === "transactions") {
+        const rows = (activeListData as any[]) || [];
+        detailsHtml = rows.length
+          ? `
+            <h2>အဝင်/အထွက် အသေးစိတ်စာရင်း</h2>
+            <table>
+              <thead><tr><th>No.</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>အသင်းဝင်/အမည်</th><th>အဝင်</th><th>အထွက်</th><th>မှတ်ချက်</th></tr></thead>
+              <tbody>
+                ${rows
+                  .map((row: any, index: number) => {
+                    const isIncome = String(row?.type || "") === "income";
+                    const memberName = getMemberName(row?.memberId) || String(row?.payerPayee || row?.memberId || "-");
+                    return `
+                      <tr>
+                        <td>${index + 1}</td>
+                        <td>${escapeHtml(formatDateForPrint(row?.date))}</td>
+                        <td>${escapeHtml(String(row?.receiptNumber || "-"))}</td>
+                        <td>${escapeHtml(getLocalizedTransactionCategoryLabel(row?.category, row?.categoryLabel))}</td>
+                        <td>${escapeHtml(memberName)}</td>
+                        <td style="text-align:right;">${isIncome ? `${Number(row?.amount || 0).toLocaleString()} KS` : "-"}</td>
+                        <td style="text-align:right;">${isIncome ? "-" : `${Number(row?.amount || 0).toLocaleString()} KS`}</td>
+                        <td>${escapeHtml(getTransactionDisplayDescription(row, memberName) || String(row?.notes || "-"))}</td>
+                      </tr>
+                    `;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          `
+          : `<div class="empty">အသေးစိတ်စာရင်း မရှိသေးပါ။</div>`;
+      } else if (activeTab === "transfers") {
+        const rows = (activeListData as any[]) || [];
+        detailsHtml = rows.length
+          ? `
+            <h2>ဘဏ်သွင်း/ဘဏ်ထုတ် အသေးစိတ်စာရင်း</h2>
+            <table>
+              <thead><tr><th>No.</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>ခေါင်းစဉ်</th><th>အသင်းဝင်/အမည်</th><th>ဘဏ်သွင်း</th><th>ဘဏ်ထုတ်</th><th>မှတ်ချက်</th></tr></thead>
+              <tbody>
+                ${rows
+                  .map((row: any, index: number) => {
+                    const normalized = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+                    const memberName = getMemberName(row?.memberId) || String(row?.payerPayee || row?.memberId || "-");
+                    const deposit = normalized === "bank_deposit" || normalized === "bank_interest";
+                    const withdraw = normalized === "bank_withdraw";
+                    return `
+                      <tr>
+                        <td>${index + 1}</td>
+                        <td>${escapeHtml(formatDateForPrint(row?.date))}</td>
+                        <td>${escapeHtml(String(row?.receiptNumber || "-"))}</td>
+                        <td>${escapeHtml(getLocalizedTransactionCategoryLabel(row?.category, row?.categoryLabel))}</td>
+                        <td>${escapeHtml(memberName)}</td>
+                        <td style="text-align:right;">${deposit ? `${Number(row?.amount || 0).toLocaleString()} KS` : "-"}</td>
+                        <td style="text-align:right;">${withdraw ? `${Number(row?.amount || 0).toLocaleString()} KS` : "-"}</td>
+                        <td>${escapeHtml(getTransactionDisplayDescription(row, memberName) || String(row?.notes || "-"))}</td>
+                      </tr>
+                    `;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          `
+          : `<div class="empty">အသေးစိတ်စာရင်း မရှိသေးပါ။</div>`;
+      } else {
+        const loanTxRows = (loanRelatedTransactions || []) as any[];
+        const loanRows = (activeListData || []) as any[];
+        const loanTxnTable = loanTxRows.length
+          ? `
+            <h2>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</h2>
+            <table>
+              <thead><tr><th>No.</th><th>ရက်စွဲ</th><th>ပြေစာ</th><th>အသင်းဝင်/အမည်</th><th>ချေးငွေထုတ်ပေးငွေ</th><th>ချေးငွေပြန်ဆပ်ရရှိငွေ</th><th>အတိုးဆပ်ငွေ</th><th>မှတ်ချက်</th></tr></thead>
+              <tbody>
+                ${loanTxRows
+                  .map((row: any, index: number) => {
+                    const category = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+                    const memberName = getMemberName(row?.memberId) || String(row?.payerPayee || row?.memberId || "-");
+                    return `
+                      <tr>
+                        <td>${index + 1}</td>
+                        <td>${escapeHtml(formatDateForPrint(row?.date))}</td>
+                        <td>${escapeHtml(String(row?.receiptNumber || "-"))}</td>
+                        <td>${escapeHtml(memberName)}</td>
+                        <td style="text-align:right;">${category === "loan_disbursement" ? `${Number(row?.amount || 0).toLocaleString()} KS` : "-"}</td>
+                        <td style="text-align:right;">${category === "loan_repayment" ? `${Number(row?.amount || 0).toLocaleString()} KS` : "-"}</td>
+                        <td style="text-align:right;">${category === "interest_income" ? `${Number(row?.amount || 0).toLocaleString()} KS` : "-"}</td>
+                        <td>${escapeHtml(getTransactionDisplayDescription(row, memberName) || String(row?.notes || "-"))}</td>
+                      </tr>
+                    `;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          `
+          : `<div class="empty">ချေးငွေဆိုင်ရာ မှတ်တမ်းများ မရှိသေးပါ။</div>`;
+
+        const loanAccountTable = loanRows.length
+          ? `
+            <h2>ချေးငွေအသေးစိတ်စာရင်း</h2>
+            <table>
+              <thead><tr><th>No.</th><th>အသင်းဝင်/အမည်</th><th>ထုတ်ပေးရက်</th><th>အရင်း</th><th>ပြန်ဆပ်ပြီး</th><th>ပြန်ဆပ်ရန်ကျန်</th><th>အတိုးကျသင့်</th><th>အတိုးဆပ်ပြီး</th><th>အတိုးကျန်</th><th>အခြေအနေ</th></tr></thead>
+              <tbody>
+                ${loanRows
+                  .map((loan: any, index: number) => {
+                    const metrics = computeLoanMetrics(loan, balanceSourceTransactions as any);
+                    const memberName = getMemberName(loan?.memberId) || String(loan?.memberId || "-");
+                    const principal = getLoanPrincipal(loan as any);
+                    const isPaid = String(loan?.status || "") === "paid";
+                    return `
+                      <tr>
+                        <td>${index + 1}</td>
+                        <td>${escapeHtml(memberName)}</td>
+                        <td>${escapeHtml(formatDateForPrint(loan?.issueDate))}</td>
+                        <td style="text-align:right;">${principal.toLocaleString()} KS</td>
+                        <td style="text-align:right;">${Number(metrics.principalRepaid || 0).toLocaleString()} KS</td>
+                        <td style="text-align:right;">${Number(metrics.principalOutstanding || 0).toLocaleString()} KS</td>
+                        <td style="text-align:right;">${Number(metrics.interestPayable || 0).toLocaleString()} KS</td>
+                        <td style="text-align:right;">${Number(metrics.interestPaid || 0).toLocaleString()} KS</td>
+                        <td style="text-align:right;">${Number(metrics.interestOutstanding || 0).toLocaleString()} KS</td>
+                        <td>${isPaid ? "ဆပ်ပြီး" : "ကျန်ရှိ"}</td>
+                      </tr>
+                    `;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          `
+          : `<div class="empty">ချေးငွေအသေးစိတ်စာရင်း မရှိသေးပါ။</div>`;
+        detailsHtml = `${loanTxnTable}${loanAccountTable}`;
+      }
+
+      const title = `ငွေစာရင်းမှတ်တမ်း (${activeTabLabel})`;
+      const content = kind === "summary" ? summaryHtml : kind === "details" ? detailsHtml : `${summaryHtml}${detailsHtml}`;
+      return { title, subtitle, content };
+    },
+    [
+      activeListData,
+      activeTab,
+      activeTabLabel,
+      balanceSourceTransactions,
+      endDate,
+      getMemberName,
+      keywordNeedle,
+      keywordSearch,
+      loanInterestSummary,
+      loanPrincipalSummary,
+      loanRelatedTransactions,
+      scopeLabel,
+      selectedCategoryLabel,
+      startDate,
+    ]
+  );
+
+  const generateFinancePdf = useCallback(
+    async (kind: FinancePrintKind) => {
+      try {
+        setPrinting(true);
+        const payload = buildFinanceHtmlPayload(kind);
+        await shareHtmlAsPdf(buildBaseHtml(payload.title, payload.subtitle, payload.content));
+      } catch {
+        Alert.alert("အမှား", "Print ထုတ်ယူရာတွင် အဆင်မပြေပါ။");
+      } finally {
+        setPrinting(false);
+      }
+    },
+    [buildBaseHtml, buildFinanceHtmlPayload, shareHtmlAsPdf]
+  );
+
+  const generateFinanceExcel = useCallback(
+    async (kind: FinancePrintKind) => {
+      try {
+        setPrinting(true);
+        const subtitle = `Tab: ${activeTabLabel} | Scope: ${scopeLabel}${activeTab !== "loans" ? ` | Category: ${selectedCategoryLabel}` : ""}${keywordNeedle ? ` | Search: ${keywordSearch}` : ""} | Date: ${formatDateForPrint(startDate)} - ${formatDateForPrint(endDate)} | ${new Date().toLocaleString()}`;
+        const rows: unknown[][] = [];
+        const title = `ငွေစာရင်းမှတ်တမ်း (${activeTabLabel})`;
+        rows.push([accountSettings?.orgName || "Social Org Manager"]);
+        rows.push([title]);
+        rows.push([subtitle]);
+        rows.push([]);
+
+        if (kind !== "details") {
+          rows.push(["စာရင်းချုပ်"]);
+          if (activeTab === "transactions") {
+            const txnRows = (activeListData as any[]) || [];
+            const income = txnRows.filter((row) => String(row?.type || "") === "income").reduce((sum, row) => sum + Number(row?.amount || 0), 0);
+            const expense = txnRows.filter((row) => String(row?.type || "") === "expense").reduce((sum, row) => sum + Number(row?.amount || 0), 0);
+            rows.push(["အဝင်", income, "အထွက်", expense]);
+            rows.push(["ကွာဟချက်", income - expense, "စာရင်းအရေအတွက်", txnRows.length]);
+          } else if (activeTab === "transfers") {
+            const transferRows = (activeListData as any[]) || [];
+            const deposit = transferRows.reduce((sum: number, row: any) => {
+              const category = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+              if (category === "bank_deposit" || category === "bank_interest") return sum + Number(row?.amount || 0);
+              return sum;
+            }, 0);
+            const withdraw = transferRows.reduce((sum: number, row: any) => {
+              const category = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+              if (category === "bank_withdraw") return sum + Number(row?.amount || 0);
+              return sum;
+            }, 0);
+            rows.push(["ဘဏ်သွင်း", deposit, "ဘဏ်ထုတ်", withdraw]);
+            rows.push(["ကွာဟချက်", deposit - withdraw, "စာရင်းအရေအတွက်", transferRows.length]);
+          } else {
+            rows.push(["ထုတ်ချေးငွေ", loanPrincipalSummary.disbursed, "ပြန်ဆပ်ငွေ", loanPrincipalSummary.repaid]);
+            rows.push(["ပြန်ဆပ်ရန်ကျန်ငွေ", loanPrincipalSummary.outstanding, "အတိုးဆပ်ရန်ကျန်ငွေ", loanInterestSummary.outstanding]);
+            rows.push(["ချေးငွေစာရင်း", activeListData.length]);
+          }
+          rows.push([]);
+        }
+
+        if (kind !== "summary") {
+          rows.push(["အသေးစိတ်စာရင်း"]);
+          if (activeTab === "transactions") {
+            const txRows = (activeListData as any[]) || [];
+            rows.push(["No.", "ရက်စွဲ", "ပြေစာ", "ခေါင်းစဉ်", "အသင်းဝင်/အမည်", "အဝင်", "အထွက်", "မှတ်ချက်"]);
+            txRows.forEach((row: any, index: number) => {
+              const isIncome = String(row?.type || "") === "income";
+              const memberName = getMemberName(row?.memberId) || String(row?.payerPayee || row?.memberId || "-");
+              rows.push([
+                index + 1,
+                formatDateForPrint(row?.date),
+                String(row?.receiptNumber || "-"),
+                getLocalizedTransactionCategoryLabel(row?.category, row?.categoryLabel),
+                memberName,
+                isIncome ? Number(row?.amount || 0) : "",
+                isIncome ? "" : Number(row?.amount || 0),
+                getTransactionDisplayDescription(row, memberName) || String(row?.notes || "-"),
+              ]);
+            });
+          } else if (activeTab === "transfers") {
+            const txRows = (activeListData as any[]) || [];
+            rows.push(["No.", "ရက်စွဲ", "ပြေစာ", "ခေါင်းစဉ်", "အသင်းဝင်/အမည်", "ဘဏ်သွင်း", "ဘဏ်ထုတ်", "မှတ်ချက်"]);
+            txRows.forEach((row: any, index: number) => {
+              const normalized = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+              const memberName = getMemberName(row?.memberId) || String(row?.payerPayee || row?.memberId || "-");
+              const deposit = normalized === "bank_deposit" || normalized === "bank_interest";
+              const withdraw = normalized === "bank_withdraw";
+              rows.push([
+                index + 1,
+                formatDateForPrint(row?.date),
+                String(row?.receiptNumber || "-"),
+                getLocalizedTransactionCategoryLabel(row?.category, row?.categoryLabel),
+                memberName,
+                deposit ? Number(row?.amount || 0) : "",
+                withdraw ? Number(row?.amount || 0) : "",
+                getTransactionDisplayDescription(row, memberName) || String(row?.notes || "-"),
+              ]);
+            });
+          } else {
+            const loanTxRows = (loanRelatedTransactions || []) as any[];
+            rows.push(["ချေးငွေဆိုင်ရာ မှတ်တမ်းများ"]);
+            rows.push(["No.", "ရက်စွဲ", "ပြေစာ", "အသင်းဝင်/အမည်", "ချေးငွေထုတ်ပေးငွေ", "ချေးငွေပြန်ဆပ်ရရှိငွေ", "အတိုးဆပ်ငွေ", "မှတ်ချက်"]);
+            loanTxRows.forEach((row: any, index: number) => {
+              const category = normalizeFinanceCategory(row?.category, row?.categoryLabel);
+              const memberName = getMemberName(row?.memberId) || String(row?.payerPayee || row?.memberId || "-");
+              rows.push([
+                index + 1,
+                formatDateForPrint(row?.date),
+                String(row?.receiptNumber || "-"),
+                memberName,
+                category === "loan_disbursement" ? Number(row?.amount || 0) : "",
+                category === "loan_repayment" ? Number(row?.amount || 0) : "",
+                category === "interest_income" ? Number(row?.amount || 0) : "",
+                getTransactionDisplayDescription(row, memberName) || String(row?.notes || "-"),
+              ]);
+            });
+
+            rows.push([]);
+            rows.push(["ချေးငွေအသေးစိတ်စာရင်း"]);
+            rows.push(["No.", "အသင်းဝင်/အမည်", "ထုတ်ပေးရက်", "အရင်း", "ပြန်ဆပ်ပြီး", "ပြန်ဆပ်ရန်ကျန်", "အတိုးကျသင့်", "အတိုးဆပ်ပြီး", "အတိုးကျန်", "အခြေအနေ"]);
+            ((activeListData || []) as any[]).forEach((loan: any, index: number) => {
+              const metrics = computeLoanMetrics(loan, balanceSourceTransactions as any);
+              const memberName = getMemberName(loan?.memberId) || String(loan?.memberId || "-");
+              const principal = getLoanPrincipal(loan as any);
+              const isPaid = String(loan?.status || "") === "paid";
+              rows.push([
+                index + 1,
+                memberName,
+                formatDateForPrint(loan?.issueDate),
+                principal,
+                Number(metrics.principalRepaid || 0),
+                Number(metrics.principalOutstanding || 0),
+                Number(metrics.interestPayable || 0),
+                Number(metrics.interestPaid || 0),
+                Number(metrics.interestOutstanding || 0),
+                isPaid ? "ဆပ်ပြီး" : "ကျန်ရှိ",
+              ]);
+            });
+          }
+        }
+
+        await exportFinanceXlsx(rows, activeTabLabel, `finance_${activeTab}`);
+      } catch {
+        Alert.alert("အမှား", "Excel ထုတ်ယူရာတွင် အဆင်မပြေပါ။");
+      } finally {
+        setPrinting(false);
+      }
+    },
+    [
+      activeListData,
+      activeTab,
+      activeTabLabel,
+      balanceSourceTransactions,
+      endDate,
+      getMemberName,
+      loanInterestSummary,
+      loanPrincipalSummary,
+      loanRelatedTransactions,
+      keywordNeedle,
+      keywordSearch,
+      scopeLabel,
+      selectedCategoryLabel,
+      exportFinanceXlsx,
+      startDate,
+      accountSettings?.orgName,
+    ]
+  );
+
+  const handlePrintKind = useCallback(
+    (kind: FinancePrintKind) => {
+      setShowPrintPicker(false);
+      void generateFinancePdf(kind);
+    },
+    [generateFinancePdf]
+  );
+
+  const handleExcelKind = useCallback(
+    (kind: FinancePrintKind) => {
+      setShowPrintPicker(false);
+      void generateFinanceExcel(kind);
+    },
+    [generateFinanceExcel]
+  );
 
   if (!canViewAnyFinance) {
     return <AccessDenied showBack={false} />;
   }
 
-  if (loading) {
+  if (loading || !computeReady) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
+        <Text style={styles.loadingHint}>လုပ်ဆောင်နေပါတယ် ခေတ္တစောင့်ပါ။</Text>
+        <View style={styles.loadingBarTrack}>
+          <View style={styles.loadingBarFill} />
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={[styles.header, { flexDirection: 'column', alignItems: 'stretch', gap: 5 }]}>
-        <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", marginHorizontal: 50 }}>
-          <Pressable onPress={() => router.replace("/")} style={{ padding: 4, position: "absolute", left: 0, zIndex: 10 }}>
-            <Ionicons name="home" size={24} color={Colors.light.text} />
-          </Pressable>
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.pageContent, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 14) + 24 }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+      <View style={styles.header}>
+        <View style={styles.headerTopRow}>
+          <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း - {scopeLabel}</Text>
           <View style={styles.headerButtons}>
+            <Pressable
+              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
+              onPress={() => setShowPrintPicker(true)}
+              disabled={printing}
+            >
+              {printing ? (
+                <ActivityIndicator size="small" color={Colors.light.text} />
+              ) : (
+                <Ionicons name="print-outline" size={19} color={Colors.light.text} />
+              )}
+            </Pressable>
             {canManageFinance && (
               <Pressable
                 style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
@@ -454,39 +2044,55 @@ export default function FinanceScreen() {
                 <Ionicons name="add" size={24} color="white" />
               </Pressable>
             )}
-            <Pressable
-              style={[styles.addButton, { backgroundColor: Colors.light.surface, borderWidth: 1, borderColor: Colors.light.border }]}
-              onPress={() => router.push("/expense-claims" as any)}
-            >
-              <Ionicons name="document-text-outline" size={20} color={Colors.light.text} />
-            </Pressable>
           </View>
         </View>
-        <Text style={styles.title} numberOfLines={1}>ငွေစာရင်းမှတ်တမ်း - {scopeLabel}</Text>
+        <View style={styles.headerClaimRow}>
+          {(canAuditFlagFinance || canEditFinance || canManageFinance) && (
+            <Pressable
+              style={styles.auditRequestBtn}
+              onPress={() => router.push("/audit-change-requests" as any)}
+            >
+              <Ionicons name="flag-outline" size={16} color="#fff" />
+              <Text style={styles.auditRequestBtnText}>
+                Audit Requests
+                {pendingAuditChangeRequestCount > 0 ? ` (${pendingAuditChangeRequestCount})` : ""}
+              </Text>
+            </Pressable>
+          )}
+          <Pressable
+            style={styles.claimButton}
+            onPress={() => router.push({ pathname: "/expense-claims", params: { openCreate: "1" } } as any)}
+          >
+            <Ionicons name="add-circle-outline" size={18} color="white" />
+            <Text style={styles.claimButtonText}>ငွေတောင်းခံရန်</Text>
+          </Pressable>
+        </View>
       </View>
 
       {canViewFinanceDetail && (
         <View style={styles.scopeCard}>
-          <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
-          <View style={styles.scopeRow}>
-            <Pressable
-              style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]}
-              onPress={() => setViewScope("all")}
-            >
-              <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]}
-              onPress={() => setViewScope("self")}
-            >
-              <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]}
-              onPress={() => setViewScope("member")}
-            >
-              <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြား</Text>
-            </Pressable>
+          <View style={styles.scopeTopRow}>
+            <Text style={styles.scopeLabel}>ကြည့်ရှုမည့်အပိုင်း</Text>
+            <View style={styles.scopeRow}>
+              <Pressable
+                style={[styles.scopeChip, viewScope === "all" && styles.scopeChipActive]}
+                onPress={() => setViewScope("all")}
+              >
+                <Text style={[styles.scopeChipText, viewScope === "all" && styles.scopeChipTextActive]}>အားလုံး</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.scopeChip, viewScope === "self" && styles.scopeChipActive]}
+                onPress={() => setViewScope("self")}
+              >
+                <Text style={[styles.scopeChipText, viewScope === "self" && styles.scopeChipTextActive]}>ကိုယ်တိုင်</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.scopeChip, viewScope === "member" && styles.scopeChipActive]}
+                onPress={() => setViewScope("member")}
+              >
+                <Text style={[styles.scopeChipText, viewScope === "member" && styles.scopeChipTextActive]}>အခြားသူ</Text>
+              </Pressable>
+            </View>
           </View>
 
           {viewScope === "member" && (
@@ -497,6 +2103,24 @@ export default function FinanceScreen() {
                 onChangeText={setMemberSearch}
                 placeholder="Member ID / Full Name ရိုက်ရှာပါ"
               />
+              {showInlineMemberResults ? (
+                <View style={styles.memberQuickList}>
+                  {inlineMemberOptions.length > 0 ? (
+                    inlineMemberOptions.map((item: any) => (
+                      <Pressable
+                        key={`quick-member-${String(item.id || "")}`}
+                        style={styles.memberQuickRow}
+                        onPress={() => setSelectedMemberId(String(item.id || ""))}
+                      >
+                        <Text style={styles.memberQuickName} numberOfLines={1}>{item.name || "-"}</Text>
+                        <Text style={styles.memberQuickId}>{item.id || "-"}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <Text style={styles.memberQuickEmpty}>ရှာဖွေတွေ့ရှိသော Member မရှိပါ</Text>
+                  )}
+                </View>
+              ) : null}
               <Pressable style={styles.memberPickerBtn} onPress={() => setShowMemberPicker(true)}>
                 <Text style={styles.memberPickerBtnText} numberOfLines={1}>
                   {selectedMemberId === "" ? "Dropdown မှ Member ရွေးမည်" : `${getMemberName(selectedMemberId)} (${selectedMemberId})`}
@@ -560,6 +2184,22 @@ export default function FinanceScreen() {
         )}
       </View>
 
+      <View style={styles.keywordSearchRow}>
+        <Ionicons name="search-outline" size={18} color={Colors.light.textSecondary} />
+        <TextInput
+          style={styles.keywordSearchInput}
+          value={keywordSearch}
+          onChangeText={setKeywordSearch}
+          placeholder="ပြေစာ / အမည် / အကြောင်းအရာ / မှတ်ချက် ရိုက်ရှာပါ"
+          placeholderTextColor={Colors.light.textSecondary}
+        />
+        {keywordSearch.trim().length > 0 ? (
+          <Pressable onPress={() => setKeywordSearch("")} style={styles.keywordSearchClearBtn}>
+            <Ionicons name="close-circle" size={18} color={Colors.light.textSecondary} />
+          </Pressable>
+        ) : null}
+      </View>
+
       {/* Date Pickers */}
       {(showStartPicker || showEndPicker) && Platform.OS !== 'web' && (
         <DateTimePicker
@@ -587,7 +2227,7 @@ export default function FinanceScreen() {
           </>
         ) : (
           <>
-            <BalanceCard label="အသင်းသို့ပေးသွင်းငွေများ" amount={scopedFinanceStats.income} icon="arrow-down" color="#10B981" />
+            <BalanceCard label="အသင်းသို့ပေးသွင်းငွေ" amount={scopedFinanceStats.income} icon="arrow-down" color="#10B981" />
             <BalanceCard label="အသင်းမှထုတ်ယူငွေ" amount={scopedFinanceStats.expense} icon="arrow-up" color="#F43F5E" />
             <BalanceCard label="စုစုပေါင်းကွာဟချက်" amount={scopedFinanceStats.net} icon="wallet" color="#8B5CF6" />
           </>
@@ -614,7 +2254,10 @@ export default function FinanceScreen() {
               <Ionicons name="trending-up-outline" size={18} color={Colors.light.tint} />
               <Text style={styles.quickActionText}>အတိုးဆပ်ရန်</Text>
             </Pressable>
-            <Pressable style={styles.quickActionBtn} onPress={() => router.push("/expense-claims" as any)}>
+            <Pressable
+              style={styles.quickActionBtn}
+              onPress={() => router.push({ pathname: "/expense-claims", params: { openCreate: "1" } } as any)}
+            >
               <Ionicons name="document-text-outline" size={18} color={Colors.light.tint} />
               <Text style={styles.quickActionText}>ငွေတောင်းခံရန်</Text>
             </Pressable>
@@ -649,67 +2292,245 @@ export default function FinanceScreen() {
         </Pressable>
       </View>
 
+      {activeTab === "transactions" && isAllScope ? (
+        <View style={styles.tabSummaryGrid}>
+          <BalanceCard label="အဝင်" amount={transactionFlowSummary.incoming} icon="arrow-down" color="#10B981" />
+          <BalanceCard label="အထွက်" amount={transactionFlowSummary.outgoing} icon="arrow-up" color="#F43F5E" />
+        </View>
+      ) : null}
+
+      {activeTab === "transfers" && isAllScope ? (
+        <View style={styles.tabSummaryGrid}>
+          <BalanceCard label="ဘဏ်သွင်း" amount={transferFlowSummary.deposit} icon="arrow-down" color="#10B981" />
+          <BalanceCard label="ဘဏ်ထုတ်" amount={transferFlowSummary.withdraw} icon="arrow-up" color="#F43F5E" />
+        </View>
+      ) : null}
+
+      {financeCategoryGroups.length > 0 ? (
+        <View style={styles.categoryFilterCard}>
+          <Text style={styles.categoryFilterTitle}>Category Filter</Text>
+          <View style={styles.categoryChipRow}>
+            <Pressable
+              style={[styles.categoryChip, categoryFilter === "all" && styles.categoryChipActive]}
+              onPress={() => setCategoryFilter("all")}
+            >
+              <Text style={[styles.categoryChipText, categoryFilter === "all" && styles.categoryChipTextActive]}>
+                အားလုံး
+              </Text>
+            </Pressable>
+          </View>
+          {financeCategoryGroups.map((group) => (
+            <View key={group.title} style={styles.categoryGroupWrap}>
+              <Text style={styles.categoryGroupTitle}>{group.title}</Text>
+              <View style={styles.categoryChipRow}>
+                {group.options.map((option) => (
+                  <Pressable
+                    key={`${group.title}-${option.id}`}
+                    style={[styles.categoryChip, categoryFilter === option.id && styles.categoryChipActive]}
+                    onPress={() => setCategoryFilter(option.id)}
+                  >
+                    <Text style={[styles.categoryChipText, categoryFilter === option.id && styles.categoryChipTextActive]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       {!canViewFinanceDetail && canViewFinanceSummary && !canViewFinanceSelf ? (
-        <View style={styles.emptyContainer}>
+        <View style={styles.emptyContainerCompact}>
           <Ionicons name="shield-checkmark-outline" size={40} color={Colors.light.textSecondary} />
           <Text style={styles.emptyText}>Summary only permission ဖြစ်သောကြောင့် အသေးစိတ်စာရင်း မပြထားပါ။</Text>
         </View>
       ) : (
-      <FlatList
-        // FlatList Error အတွက် explicit typing သုံးပေးထားပါသည်
-        data={
-          activeTab === "loans" 
-            ? (visibleLoans as any[]) 
-            : activeTab === "transfers"
-              ? (
-                  isAllScope
-                    ? visibleTxns.filter(t => t.type === 'transfer')
-                    : visibleTxns.filter((t: any) => t.type === "expense" && (t.type as string) !== "transfer")
-                ) as any[]
-              : (
-                  isAllScope
-                    ? visibleTxns.filter(t => t.type !== 'transfer')
-                    : visibleTxns.filter((t: any) => t.type === "income" && (t.type as string) !== "transfer")
-                ) as any[]
-        }
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => {
-          if (activeTab === "transactions" || activeTab === "transfers") {
-            const txn = item as Transaction;
-            const memberName = getMemberName(txn.memberId);
-            const displayName = memberName || (item as any).payerPayee;
-            return (
-              <TransactionRow
-                txn={txn}
-                memberName={displayName}
-                onDelete={removeTransaction}
-                canEdit={canEditFinance}
-                canDelete={canDeleteFinance}
-                canAuditFlag={canAuditFlagFinance}
-                onAuditPress={openAuditModal}
-              />
-            );
-          } else {
-            const loan = item as Loan;
-            const member = members.find((m: any) => m.id === loan.memberId);
-            return (
-              <LoanRow
-                loan={loan}
-                memberName={member?.name}
-                outstanding={getLoanOutstanding(loan.id)}
-              />
-            );
-          }
-        }}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="receipt-outline" size={48} color={Colors.light.textSecondary} />
-            <Text style={styles.emptyText}>မှတ်တမ်းများ မရှိသေးပါ</Text>
-          </View>
-        }
-      />
+        <View style={styles.listContent}>
+          {activeTab === "loans" ? (
+            <View style={styles.loanSummaryWrap}>
+              <Text style={styles.loanSummaryTitle}>ချေးငွေအရင်း စာရင်းချုပ်</Text>
+              <View style={styles.loanPrimaryRow}>
+                <View style={styles.loanPrimaryBox}>
+                  <Text style={styles.loanPrimaryLabel}>ထုတ်ချေးငွေ</Text>
+                  <Text style={[styles.loanPrimaryValue, { color: "#F59E0B" }]}>{formatKs(loanPrincipalSummary.disbursed)}</Text>
+                </View>
+                <View style={styles.loanPrimaryBox}>
+                  <Text style={styles.loanPrimaryLabel}>ပြန်ဆပ်ငွေ</Text>
+                  <Text style={[styles.loanPrimaryValue, { color: "#10B981" }]}>{formatKs(loanPrincipalSummary.repaid)}</Text>
+                </View>
+                <View style={[styles.loanPrimaryBox, styles.loanPrimaryBoxWide]}>
+                  <Text style={styles.loanPrimaryLabel}>ပြန်ဆပ်ရန်ကျန်ငွေ</Text>
+                  <Text style={[styles.loanPrimaryValue, { color: "#EF4444" }]}>{formatKs(loanPrincipalSummary.outstanding)}</Text>
+                </View>
+              </View>
+
+              <Text style={styles.loanSummaryTitle}>အတိုးကျသင့်ငွေ စာရင်းချုပ်</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.loanInterestRow}>
+                <MiniMetricCard title="မူလအတိုးကျသင့်ငွေ" value={loanInterestSummary.base} color="#8B5CF6" />
+                <MiniMetricCard title="အတိုးဖြေလျှော့ငွေ" value={loanInterestSummary.relief} color="#0EA5E9" />
+                <MiniMetricCard title="အတိုးဆပ်ရန်ကျသင့်ငွေ" value={loanInterestSummary.payable} color="#0369A1" />
+                <MiniMetricCard title="အတိုးဆပ်ပြီးငွေ" value={loanInterestSummary.paid} color="#16A34A" />
+                <MiniMetricCard title="အတိုးဆပ်ရန်ကျန်ငွေ" value={loanInterestSummary.outstanding} color="#DC2626" />
+              </ScrollView>
+
+              <Text style={styles.loanSummaryTitle}>ချေးငွေဆိုင်ရာ အနှစ်ချုပ်</Text>
+            </View>
+          ) : null}
+          {activeTab === "loans" ? (
+            <>
+              <Text style={styles.loanSummaryTitle}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ</Text>
+              {loanRelatedTransactions.length === 0 ? (
+                <View style={styles.emptyContainerCompact}>
+                  <Ionicons name="receipt-outline" size={40} color={Colors.light.textSecondary} />
+                  <Text style={styles.emptyText}>ချေးငွေဆိုင်ရာ မှတ်တမ်းများ မရှိသေးပါ</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.loanTxnHeaderRow}>
+                    <Text style={styles.loanTxnHeaderLeft}>အသေးစိတ်</Text>
+                    <View style={styles.loanTxnHeaderRight}>
+                      <Text style={styles.loanTxnHeaderAmountCol}>ချေးငွေထုတ်ပေးငွေ</Text>
+                      <Text style={styles.loanTxnHeaderAmountCol}>ချေးငွေပြန်ဆပ်ရရှိငွေ</Text>
+                      <Text style={styles.loanTxnHeaderAmountCol}>အတိုးဆပ်ငွေ</Text>
+                    </View>
+                  </View>
+                  {pagedLoanRelatedTransactions.map((txn: any) => {
+                    const memberName = getMemberName(txn.memberId);
+                    const displayName = memberName || (txn as any).payerPayee;
+                    return (
+                      <TransactionRow
+                        key={`loan-txn-${txn.id}`}
+                        txn={txn}
+                        memberName={displayName}
+                        onDelete={removeTransaction}
+                        canEdit={canEditFinance}
+                        canDelete={canDeleteFinance}
+                        canAuditFlag={canAuditFlagFinance}
+                        onAuditPress={openAuditModal}
+                        canRequestDelete={canRequestDeleteFinance}
+                        onDeleteRequestPress={openDeleteRequestForTxn}
+                        amountView="loan_columns"
+                      />
+                    );
+                  })}
+                  {hasMoreLoanRelatedTransactions ? (
+                    <View style={styles.loadMoreWrap}>
+                      <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleLoanTxnCount((prev) => prev + FINANCE_PAGE_SIZE)}>
+                        <Text style={styles.loadMoreBtnText}>
+                          နောက်ထပ် {Math.min(FINANCE_PAGE_SIZE, loanRelatedTransactions.length - pagedLoanRelatedTransactions.length).toLocaleString()} ခု ပြရန်
+                        </Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </>
+              )}
+              <Text style={styles.loanSummaryTitle}>ချေးငွေအသေးစိတ်စာရင်း</Text>
+            </>
+          ) : null}
+          {isActiveListEmpty ? (
+            <View style={styles.emptyContainerCompact}>
+              <Ionicons name="receipt-outline" size={40} color={Colors.light.textSecondary} />
+              <Text style={styles.emptyText}>မှတ်တမ်းများ မရှိသေးပါ</Text>
+            </View>
+          ) : (
+            pagedActiveListData.map((item: any) => {
+              if (activeTab === "transactions" || activeTab === "transfers") {
+                const txn = item as Transaction;
+                const memberName = getMemberName(txn.memberId);
+                const displayName = memberName || (item as any).payerPayee;
+                const amountView: TransactionAmountView =
+                  isAllScope && activeTab === "transactions"
+                    ? "in_out"
+                    : isAllScope && activeTab === "transfers"
+                      ? "deposit_withdraw"
+                      : "single";
+                return (
+                  <TransactionRow
+                    key={txn.id}
+                    txn={txn}
+                    memberName={displayName}
+                    onDelete={removeTransaction}
+                    canEdit={canEditFinance}
+                    canDelete={canDeleteFinance}
+                    canAuditFlag={canAuditFlagFinance}
+                    onAuditPress={openAuditModal}
+                    canRequestDelete={canRequestDeleteFinance}
+                    onDeleteRequestPress={openDeleteRequestForTxn}
+                    amountView={amountView}
+                  />
+                );
+              }
+
+              const loan = item as Loan;
+              const member = members.find((m: any) => m.id === loan.memberId);
+              const metrics = computeLoanMetrics(loan as any, balanceSourceTransactions as any);
+              return (
+                <LoanRow
+                  key={loan.id}
+                  loan={loan}
+                  memberName={member?.name}
+                  outstanding={getLoanOutstanding(loan.id)}
+                  metrics={metrics}
+                  canRequestDelete={canRequestDeleteFinance}
+                  onDeleteRequestPress={openDeleteRequestForLoan}
+                />
+              );
+            })
+          )}
+          {hasMoreActiveListData ? (
+            <View style={styles.loadMoreWrap}>
+              <Pressable style={styles.loadMoreBtn} onPress={() => setVisibleListCount((prev) => prev + FINANCE_PAGE_SIZE)}>
+                <Text style={styles.loadMoreBtnText}>
+                  နောက်ထပ် {Math.min(FINANCE_PAGE_SIZE, activeListData.length - pagedActiveListData.length).toLocaleString()} ခု ပြရန်
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
       )}
+      </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showPrintPicker}
+        onRequestClose={() => setShowPrintPicker(false)}
+      >
+        <View style={styles.modalContainer}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPrintPicker(false)} />
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Print / Excel ရွေးချယ်ရန်</Text>
+            <Text style={styles.printSectionTitle}>PDF Print</Text>
+            <View style={styles.printOptionList}>
+              <Pressable style={styles.printOptionBtn} onPress={() => handlePrintKind("current")}>
+                <Text style={styles.printOptionText}>လက်ရှိ Tab (စာရင်းချုပ် + အသေးစိတ်) Print</Text>
+              </Pressable>
+              <Pressable style={styles.printOptionBtn} onPress={() => handlePrintKind("summary")}>
+                <Text style={styles.printOptionText}>စာရင်းချုပ်သာ Print</Text>
+              </Pressable>
+              <Pressable style={styles.printOptionBtn} onPress={() => handlePrintKind("details")}>
+                <Text style={styles.printOptionText}>အသေးစိတ်စာရင်းသာ Print</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.printSectionTitle}>Excel (.xlsx - Mobile/Desktop)</Text>
+            <View style={styles.printOptionList}>
+              <Pressable style={styles.printOptionBtn} onPress={() => handleExcelKind("current")}>
+                <Text style={styles.printOptionText}>လက်ရှိ Tab (စာရင်းချုပ် + အသေးစိတ်) Excel</Text>
+              </Pressable>
+              <Pressable style={styles.printOptionBtn} onPress={() => handleExcelKind("summary")}>
+                <Text style={styles.printOptionText}>စာရင်းချုပ်သာ Excel</Text>
+              </Pressable>
+              <Pressable style={styles.printOptionBtn} onPress={() => handleExcelKind("details")}>
+                <Text style={styles.printOptionText}>အသေးစိတ်စာရင်းသာ Excel</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowPrintPicker(false)}>
+              <Text style={styles.cancelBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       {/* Opening Balance Modal */}
       <Modal
@@ -739,15 +2560,315 @@ export default function FinanceScreen() {
         </View>
       </Modal>
 
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestModal}
+          onRequestClose={() => setShowDeleteRequestModal(false)}
+        >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          style={styles.modalContainer}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestModal(false)} />
+          <ScrollView
+            style={styles.auditModalContent}
+            contentContainerStyle={[styles.auditModalContentBody, { paddingBottom: insets.bottom + 12 }]}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.modalTitle}>Delete Request</Text>
+            <Text style={styles.label}>အမျိုးအစား</Text>
+            <Text style={styles.requestMetaText}>{deleteRequestType === "loan" ? "ချေးငွေမှတ်တမ်း" : "ငွေစာရင်းမှတ်တမ်း"}</Text>
+            <Text style={styles.label}>Target ID</Text>
+            <Text style={styles.requestMetaText}>
+              {deleteRequestType === "loan" ? String(deleteRequestLoan?.id || "-") : String(deleteRequestTxn?.id || "-")}
+            </Text>
+      {deleteRequestRows.length > 0 ? (
+        <>
+          <Text style={styles.label}>အသေးစိတ် (ဇယား)</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.auditTable}>
+                    <View style={[styles.auditTableRow, styles.auditTableHeaderRow]}>
+                      <View style={[styles.auditTableCell, styles.auditTableLabelCell]}>
+                        <Text style={styles.auditTableHeaderText}>အချက်</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>မူလစာရင်း</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>ဘဏ္ဍာရေးမှူး</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>စာရင်းစစ်</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>ဥက္ကဌ</Text>
+                      </View>
+                      <View style={styles.auditTableCell}>
+                        <Text style={styles.auditTableHeaderText}>မှတ်ချက်</Text>
+                      </View>
+                    </View>
+                      {deleteRequestRows.map((row, index) => (
+                        <View key={row.key} style={styles.auditTableRow}>
+                          <View style={[styles.auditTableCell, styles.auditTableLabelCell]}>
+                            <Text style={styles.auditTableLabelText}>{row.label}</Text>
+                          </View>
+                          <View style={styles.auditTableCell}>
+                            <Text style={styles.auditTableValue}>{formatDeleteFieldValue(row, row.value)}</Text>
+                          </View>
+                          <View style={styles.auditTableCell}>{renderDeleteRoleCell("treasurer", row)}</View>
+                          <View style={styles.auditTableCell}>{renderDeleteRoleCell("auditor", row)}</View>
+                          <View style={styles.auditTableCell}>{renderDeleteRoleCell("chairperson", row)}</View>
+                          <View style={styles.auditTableCell}>
+                            <Text style={styles.auditTableNoteText}>{index === 0 ? (deleteRequestNote || "-") : "-"}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </>
+      ) : null}
+      {deleteRequestActiveDateField && Platform.OS !== "web" ? (
+        <DateTimePicker
+          value={(() => {
+            const raw = deleteRequestDraftValues[deleteRequestActiveDateField] ?? deleteRequestRows.find((row) => row.key === deleteRequestActiveDateField)?.value;
+            const parsed = new Date(raw || "");
+            return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+          })()}
+          mode="date"
+          display="default"
+          onChange={handleDeleteRequestDatePicked}
+        />
+      ) : null}
+      <Text style={styles.label}>ဖျက်လိုသော အကြောင်းပြချက် (Audit ထံပေးပို့မည်)</Text>
+      <TextInput
+        style={[styles.input, styles.auditNoteInput]}
+        value={deleteRequestNote}
+        onChangeText={setDeleteRequestNote}
+                multiline
+                numberOfLines={4}
+                placeholder="ဥပမာ - ပြေစာမှားတင်ထားမိသည် / duplicate entry"
+              />
+              <Text style={styles.label}>အသိပေးရန် Member များ (Optional)</Text>
+              <Pressable style={styles.tagPickerBtn} onPress={() => setShowDeleteRequestTagPicker(true)}>
+                <Ionicons name="people" size={16} color="#0F766E" />
+                <Text style={styles.tagPickerBtnText}>Member ရွေးချယ်ရန်</Text>
+              </Pressable>
+              <Text style={styles.tagPickerSelectedText}>
+                {selectedDeleteRequestTagNames ? selectedDeleteRequestTagNames : "မရွေးရသေးပါ"}
+              </Text>
+              {deleteRequestSubmitError ? (
+                <Text style={styles.submitErrorText}>{deleteRequestSubmitError}</Text>
+              ) : null}
+              {deleteRequestSubmitStatus ? (
+                <View
+                  style={[
+                    styles.submitStatusBox,
+                    deleteRequestSubmitStatus.type === "success" ? styles.submitStatusSuccess : styles.submitStatusError,
+                  ]}
+                >
+                  <Text style={styles.submitStatusText}>{deleteRequestSubmitStatus.message}</Text>
+                  <Pressable style={styles.submitStatusOkBtn} onPress={handleDeleteRequestStatusOk}>
+                    <Text style={styles.submitStatusOkText}>OK</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+              <Pressable
+                style={[styles.saveBtn, { backgroundColor: "#D97706" }, deleteRequestSubmitting && styles.saveBtnDisabled]}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  submitDeleteRequest();
+                }}
+                disabled={deleteRequestSubmitting}
+              >
+                {deleteRequestSubmitting ? (
+                  <View style={styles.saveBtnContent}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={[styles.saveBtnText, { marginLeft: 8 }]}>ပို့နေပါသည်...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.saveBtnText}>Delete Request ပေးပို့မည်</Text>
+                )}
+              </Pressable>
+            <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestModal(false)}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </Pressable>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestTagPicker}
+          onRequestClose={() => setShowDeleteRequestTagPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestTagPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Member ID / Full Name ရှာပါ"
+                value={deleteRequestTagSearch}
+                onChangeText={setDeleteRequestTagSearch}
+              />
+              <View style={styles.tagPickerActions}>
+                <Pressable
+                  style={styles.tagPickerMiniBtn}
+                  onPress={() => setDeleteRequestTagIds(deleteRequestTagOptions.map((m: any) => String(m.id)))}
+                >
+                  <Text style={styles.tagPickerMiniBtnText}>Select All</Text>
+                </Pressable>
+                <Pressable style={styles.tagPickerMiniBtn} onPress={() => setDeleteRequestTagIds([])}>
+                  <Text style={styles.tagPickerMiniBtnText}>Clear</Text>
+                </Pressable>
+              </View>
+              <FlatList
+                data={deleteRequestTagOptions}
+                keyExtractor={(item: any) => String(item.id)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: any }) => {
+                  const id = String(item.id || "");
+                  const selected = deleteRequestTagIds.includes(id);
+                  return (
+                    <Pressable
+                      style={styles.tagPickerRow}
+                      onPress={() =>
+                        setDeleteRequestTagIds((prev) =>
+                          selected ? prev.filter((value) => value !== id) : [...prev, id]
+                        )
+                      }
+                    >
+                      <Ionicons name={selected ? "checkbox" : "square-outline"} size={20} color={selected ? "#0F766E" : "#94A3B8"} />
+                      <View style={{ marginLeft: 10 }}>
+                        <Text style={styles.memberOptionName}>{item.name || "-"}</Text>
+                        <Text style={styles.memberOptionId}>{item.id || "-"}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                }}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                    <Text style={{ color: Colors.light.textSecondary }}>မတွေ့ပါ</Text>
+                  </View>
+                }
+              />
+              <Pressable style={styles.saveBtn} onPress={() => setShowDeleteRequestTagPicker(false)}>
+                <Text style={styles.saveBtnText}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestOptionPicker}
+          onRequestClose={() => setShowDeleteRequestOptionPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestOptionPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{deleteRequestOptionTitle || "ရွေးချယ်ရန်"}</Text>
+              <FlatList
+                data={deleteRequestOptionItems}
+                keyExtractor={(item: any) => String(item.id)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: any }) => (
+                  <Pressable
+                    style={styles.memberOptionRow}
+                    onPress={() => {
+                      applyDeleteRequestOptionSelection(deleteRequestOptionField, item.id, item.label);
+                      setShowDeleteRequestOptionPicker(false);
+                    }}
+                  >
+                    <Text style={styles.memberOptionName}>{item.label}</Text>
+                    <Text style={styles.memberOptionId}>{item.id}</Text>
+                  </Pressable>
+                )}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                    <Text style={{ color: Colors.light.textSecondary }}>မတွေ့ပါ</Text>
+                  </View>
+                }
+              />
+              <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestOptionPicker(false)}>
+                <Text style={styles.cancelBtnText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showDeleteRequestMemberPicker}
+          onRequestClose={() => setShowDeleteRequestMemberPicker(false)}
+        >
+          <View style={styles.modalContainer}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowDeleteRequestMemberPicker(false)} />
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Member ရွေးချယ်ရန်</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Member ID / Full Name ရှာပါ"
+                value={deleteRequestMemberSearch}
+                onChangeText={setDeleteRequestMemberSearch}
+              />
+              <FlatList
+                data={deleteRequestMemberOptions}
+                keyExtractor={(item: any) => String(item.id)}
+                style={{ maxHeight: 320 }}
+                renderItem={({ item }: { item: any }) => (
+                  <Pressable
+                    style={styles.memberOptionRow}
+                    onPress={() => {
+                      const field = deleteRequestMemberField;
+                      const memberId = String(item.id || "");
+                      if (field === "payerPayee") {
+                        updateDeleteRequestDraftValue(field, String(item.name || memberId || ""));
+                      } else {
+                        updateDeleteRequestDraftValue(field, memberId);
+                      }
+                      setShowDeleteRequestMemberPicker(false);
+                    }}
+                  >
+                    <Text style={styles.memberOptionName}>{item.name || "-"}</Text>
+                    <Text style={styles.memberOptionId}>{item.id || "-"}</Text>
+                  </Pressable>
+                )}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                    <Text style={{ color: Colors.light.textSecondary }}>မတွေ့ပါ</Text>
+                  </View>
+                }
+              />
+              <Pressable style={styles.cancelBtn} onPress={() => setShowDeleteRequestMemberPicker(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
       <Modal
         animationType="slide"
         transparent={true}
         visible={showAuditModal}
         onRequestClose={() => setShowAuditModal(false)}
       >
-        <View style={styles.modalContainer}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          style={styles.modalContainer}
+        >
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowAuditModal(false)} />
-          <View style={styles.modalContent}>
+          <ScrollView
+            style={styles.auditModalContent}
+            contentContainerStyle={[styles.auditModalContentBody, { paddingBottom: insets.bottom + 12 }]}
+            keyboardShouldPersistTaps="handled"
+          >
             <Text style={styles.modalTitle}>Audit Flag (စာရင်းစစ် မှတ်ချက်)</Text>
             <Text style={styles.label}>မှတ်ချက်</Text>
             <TextInput
@@ -769,8 +2890,8 @@ export default function FinanceScreen() {
             <Pressable style={styles.cancelBtn} onPress={() => setShowAuditModal(false)}>
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </Pressable>
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -818,35 +2939,105 @@ export default function FinanceScreen() {
 // ... styles remain the same (အပေါ်က ကုဒ်ဟောင်းအတိုင်း သုံးနိုင်ပါသည်)
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
+  pageContent: { paddingBottom: 24 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+  loadingHint: {
+    marginTop: 10,
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textSecondary,
   },
-  title: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  loadingBarTrack: {
+    marginTop: 12,
+    width: 220,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#E5E7EB",
+    overflow: "hidden",
+  },
+  loadingBarFill: {
+    width: "62%",
+    height: "100%",
+    backgroundColor: Colors.light.tint,
+    borderRadius: 999,
+  },
+  header: {
+    flexDirection: "column",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 6,
+    gap: 8,
+  },
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  title: { flex: 1, fontSize: 19, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerButtons: { flexDirection: "row", gap: 10, flexShrink: 0 },
+  headerClaimRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  auditRequestBtn: {
+    height: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: "#0EA5E9",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  auditRequestBtnText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  claimButton: {
+    height: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.light.tint,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  claimButtonText: {
+    color: "white",
+    fontSize: 12.5,
+    fontFamily: "Inter_700Bold",
+  },
+  loadMoreWrap: {
+    paddingTop: 6,
+    paddingBottom: 10,
+    alignItems: "center",
+  },
+  loadMoreBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "white",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  loadMoreBtnText: {
+    fontSize: 12.5,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.tint,
+  },
   scopeCard: {
-    marginHorizontal: 20,
-    marginBottom: 10,
-    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
     borderRadius: 12,
     backgroundColor: "white",
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  scopeTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   scopeLabel: {
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
     color: Colors.light.textSecondary,
-    marginBottom: 8,
   },
-  scopeRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  scopeRow: { flexDirection: "row", gap: 6 },
   scopeChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: Colors.light.border,
@@ -858,33 +3049,38 @@ const styles = StyleSheet.create({
   },
   scopeChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   scopeChipTextActive: { color: "white" },
-  memberPickerWrap: { gap: 8 },
+  memberPickerWrap: { gap: 8, marginTop: 8 },
   memberSearchInput: {
     backgroundColor: "#F8FAFC",
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 12.5,
     color: Colors.light.text,
   },
+  memberQuickList: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, backgroundColor: "#fff", overflow: "hidden" },
+  memberQuickRow: { paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#EEF2F7" },
+  memberQuickName: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  memberQuickId: { fontSize: 11.5, color: Colors.light.textSecondary, marginTop: 1, fontFamily: "Inter_500Medium" },
+  memberQuickEmpty: { paddingHorizontal: 12, paddingVertical: 10, color: Colors.light.textSecondary, fontSize: 12.5, fontFamily: "Inter_500Medium" },
   memberPickerBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     borderWidth: 1,
     borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     backgroundColor: "#F8FAFC",
   },
-  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  memberPickerBtnText: { flex: 1, marginRight: 8, fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: Colors.light.tint,
     justifyContent: "center",
     alignItems: "center",
@@ -892,46 +3088,124 @@ const styles = StyleSheet.create({
   balanceGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    paddingHorizontal: 15,
+    paddingHorizontal: 14,
     gap: 10,
-    marginBottom: 20,
+    marginBottom: 12,
+  },
+  tabSummaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 14,
+    gap: 10,
+    marginBottom: 10,
+  },
+  categoryFilterCard: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  categoryFilterTitle: {
+    fontSize: 12.5,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_700Bold",
+    marginBottom: 6,
+  },
+  categoryGroupWrap: {
+    marginTop: 8,
+  },
+  categoryGroupTitle: {
+    fontSize: 11.5,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+    marginBottom: 6,
+  },
+  categoryChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  categoryChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  categoryChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  categoryChipText: {
+    fontSize: 11.5,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+  },
+  categoryChipTextActive: {
+    color: "white",
   },
   balanceCard: {
     flex: 1,
     minWidth: "45%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     backgroundColor: "white",
-    borderRadius: 16,
-    padding: 15,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
     borderLeftWidth: 4,
     ...Platform.select({
       ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8 },
       android: { elevation: 2 },
     }),
   },
+  balanceLeftGroup: { flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0, marginRight: 8 },
   balanceIcon: {
-    width: 32,
-    height: 32,
+    width: 26,
+    height: 26,
     borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginRight: 6,
   },
-  balanceLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  balanceAmount: { fontSize: 16, fontFamily: "Inter_700Bold", marginTop: 4 },
-  currencyText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  balanceLabel: { fontSize: 11.5, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, flexShrink: 1 },
+  balanceAmount: { fontSize: 13.5, fontFamily: "Inter_700Bold" },
+  currencyText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  miniMetricCard: {
+    width: 220,
+    borderLeftWidth: 4,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  miniMetricTitle: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", flex: 1 },
+  miniMetricValue: { fontSize: 12.5, fontFamily: "Inter_700Bold" },
   quickActionsTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontFamily: "Inter_700Bold",
     color: Colors.light.text,
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingHorizontal: 16,
+    marginBottom: 6,
   },
   quickActionsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 8,
   },
   quickActionBtn: {
     flexDirection: "row",
@@ -945,21 +3219,21 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   quickActionText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontFamily: "Inter_600SemiBold",
     color: Colors.light.text,
   },
   tabBar: {
     flexDirection: "row",
-    paddingHorizontal: 20,
-    marginBottom: 10,
-    gap: 15,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    gap: 10,
   },
-  tab: { paddingVertical: 8, paddingHorizontal: 4 },
+  tab: { paddingVertical: 6, paddingHorizontal: 4 },
   activeTab: { borderBottomWidth: 2, borderBottomColor: Colors.light.tint },
-  tabText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
+  tabText: { fontSize: 13.5, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary },
   activeTabText: { color: Colors.light.tint },
-  listContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  listContent: { paddingHorizontal: 16, paddingBottom: 8 },
   txnRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -995,6 +3269,14 @@ const styles = StyleSheet.create({
   txnMethod: { fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.tint },
   txnSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
   txnRight: { alignItems: "flex-end", gap: 4 },
+  amountSplitWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
+  amountSplitCol: { minWidth: 72, alignItems: "flex-end" },
+  amountSplitLabel: { fontSize: 10, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
+  amountSplitValue: { fontSize: 12.5, fontFamily: "Inter_700Bold", textAlign: "right" },
+  loanAmountSplitWrap: { flexDirection: "row", alignItems: "center", gap: 6 },
+  loanAmountSplitCol: { minWidth: 64, alignItems: "flex-end" },
+  loanAmountSplitLabel: { fontSize: 9.5, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
+  loanAmountSplitValue: { fontSize: 11.5, fontFamily: "Inter_700Bold", textAlign: "right" },
   auditFlagBtn: {
     padding: 4,
     borderRadius: 8,
@@ -1018,27 +3300,298 @@ const styles = StyleSheet.create({
   loanName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   loanDesc: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 1 },
   loanDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginTop: 2 },
+  loanInlineStats: { marginTop: 4, gap: 2 },
+  loanInlineStat: { fontSize: 11, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   loanRight: { alignItems: "flex-end", gap: 4 },
   loanOutstanding: { fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text },
   loanStatusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   loanStatusText: { fontSize: 10, fontFamily: "Inter_700Bold" },
   loanActive: { backgroundColor: "#3B82F6" + "15" },
   loanPaid: { backgroundColor: Colors.light.success + "15" },
+  loanSummaryWrap: {
+    marginBottom: 12,
+  },
+  loanSummaryTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  loanTxnHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+    gap: 10,
+  },
+  loanTxnHeaderLeft: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_600SemiBold",
+  },
+  loanTxnHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  loanTxnHeaderAmountCol: {
+    minWidth: 64,
+    textAlign: "right",
+    fontSize: 10,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_700Bold",
+  },
+  loanPrimaryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 8,
+  },
+  loanPrimaryBox: {
+    width: "48%",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 6,
+  },
+  loanPrimaryBoxWide: {
+    width: "100%",
+  },
+  loanPrimaryLabel: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+  },
+  loanPrimaryValue: {
+    fontSize: 22,
+    fontFamily: "Inter_700Bold",
+    lineHeight: 28,
+  },
+  loanInterestRow: {
+    paddingBottom: 4,
+    paddingRight: 10,
+  },
   emptyContainer: { alignItems: "center", marginTop: 50 },
+  emptyContainerCompact: { alignItems: "center", marginTop: 20, marginBottom: 12 },
   emptyText: { marginTop: 10, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  filterContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 20, marginBottom: 15 },
-  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
-  dateBtnText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  filterContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, marginBottom: 10 },
+  keywordSearchRow: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    gap: 8,
+    minHeight: 40,
+  },
+  keywordSearchInput: {
+    flex: 1,
+    fontSize: 12.5,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+    paddingVertical: 8,
+  },
+  keywordSearchClearBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border },
+  dateBtnText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
   modalContainer: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
   modalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
+  auditModalContent: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "85%" },
+  auditModalContentBody: { padding: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 20, textAlign: "center" },
+  printSectionTitle: {
+    marginTop: 2,
+    marginBottom: 8,
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.textSecondary,
+  },
+  printOptionList: { gap: 8 },
+  printOptionBtn: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  printOptionText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
   label: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginBottom: 6, marginTop: 10 },
+  requestMetaText: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_600SemiBold", marginBottom: 2 },
+  auditTable: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+    minWidth: 860,
+    marginTop: 6,
+  },
+  auditTableRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  auditTableHeaderRow: {
+    backgroundColor: "#F1F5F9",
+  },
+  auditTableCell: {
+    minWidth: 130,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRightWidth: 1,
+    borderRightColor: Colors.light.border,
+    justifyContent: "center",
+  },
+  auditTableLabelCell: {
+    minWidth: 150,
+  },
+  auditTableHeaderText: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  auditTableLabelText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  auditTableValue: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
+  auditTableNoteText: {
+    fontSize: 11.5,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.textSecondary,
+  },
+  auditTableInput: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
+  auditTablePicker: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    justifyContent: "center",
+  },
+  auditTablePickerText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.text,
+  },
   input: { backgroundColor: "#F8FAFC", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: Colors.light.border },
   auditNoteInput: { minHeight: 96, textAlignVertical: "top" },
   saveBtn: { backgroundColor: Colors.light.tint, paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 20 },
   saveBtnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  saveBtnContent: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  saveBtnDisabled: { opacity: 0.7 },
   clearFlagBtn: { backgroundColor: "#EF4444", paddingVertical: 12, borderRadius: 12, alignItems: "center", marginTop: 8 },
   clearFlagBtnText: { color: "#fff", fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  tagPickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F0FDFA",
+  },
+  tagPickerBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#0F766E" },
+  tagPickerSelectedText: { marginTop: 6, fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
+  tagPickerActions: { flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 6 },
+  tagPickerMiniBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#F8FAFC",
+  },
+  tagPickerMiniBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  tagPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  submitErrorText: {
+    marginTop: 6,
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#B91C1C",
+  },
+  submitStatusBox: {
+    marginTop: 10,
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    gap: 8,
+  },
+  submitStatusSuccess: {
+    backgroundColor: "#ECFDF3",
+    borderColor: "#86EFAC",
+  },
+  submitStatusError: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+  },
+  submitStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.text,
+  },
+  submitStatusOkBtn: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.light.tint,
+  },
+  submitStatusOkText: {
+    color: "#fff",
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
   memberOptionRow: {
     paddingVertical: 10,
     borderBottomWidth: 1,

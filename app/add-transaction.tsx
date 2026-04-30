@@ -200,7 +200,7 @@ export default function AddTransactionScreen() {
       try {
         const stored = await AsyncStorage.getItem("@custom_categories");
         if (stored) setCustomCategories(JSON.parse(stored));
-      } catch (e) {}
+      } catch {}
     };
     loadCustomCategories();
   }, []);
@@ -275,7 +275,6 @@ export default function AddTransactionScreen() {
       const isFee = type === 'income' && category === 'member_fees';
 
       const transactionData = {
-        id: Date.now().toString(),
         memberId: selectedMemberId || undefined,
         payerPayee: payerPayeeName.trim(),
         amount: parseFloat(amount),
@@ -296,7 +295,7 @@ export default function AddTransactionScreen() {
       }
       Alert.alert("အောင်မြင်ပါသည်", "ငွေစာရင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။");
       router.back();
-    } catch (error) {
+    } catch {
       Alert.alert("အမှားအယွင်း", "သိမ်းဆည်းရာတွင် အဆင်မပြေပါ။");
     } finally {
       setSaving(false);
@@ -322,7 +321,7 @@ export default function AddTransactionScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 20 }]} keyboardShouldPersistTaps="handled">
+            <ScrollView contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + 120 }]} keyboardShouldPersistTaps="handled">
         <Text style={styles.label}>စာရင်းအမျိုးအစား</Text>
         <View style={styles.typeSelector}>
           <Pressable style={[styles.typeButton, type === "income" && styles.typeButtonActive]} onPress={() => setType("income")}>

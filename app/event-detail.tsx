@@ -1,11 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { secureRandomToken } from "@/lib/secure-random";
 
 interface OrgEventNotice {
   id: string;
@@ -17,6 +19,7 @@ interface OrgEventNotice {
   images?: string[];
   senderName?: string;
   senderMemberId?: string;
+  senderPhone?: string;
   senderDate?: string;
   senderTime?: string;
   summary?: string;
@@ -66,7 +69,13 @@ interface OrgEventNotice {
     memberId?: string;
     displayName?: string;
     message: string;
+    image?: string;
     createdAt: string;
+    updatedAt?: string;
+    editedAt?: string;
+    deletedAt?: string;
+    deletedByUserId?: string;
+    isDeleted?: boolean;
     replyToCommentId?: string;
     replyToUserId?: string;
     replyToDisplayName?: string;
@@ -90,6 +99,9 @@ export default function EventDetailScreen() {
   const { currentUser } = useAuth();
   const { members, users, events, editEvent } = useData() as any;
   const [commentText, setCommentText] = useState("");
+  const [commentImage, setCommentImage] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState("");
+  const [isSendingComment, setIsSendingComment] = useState(false);
   const [replyTarget, setReplyTarget] = useState<{
     commentId: string;
     userId: string;
@@ -173,28 +185,137 @@ export default function EventDetailScreen() {
 
   const handleSendComment = async () => {
     const msg = commentText.trim();
-    if (!msg || !actorUserId || !event) return;
-    setCommentText("");
+    if (!msg && !commentImage) return;
+    if (!actorUserId || !event) return;
+    if (isSendingComment) return;
     const comments = event.comments || [];
-    const mentionUserIds = replyTarget?.userId ? [replyTarget.userId] : [];
-    await editEvent(String(id), {
-      comments: [
-        ...comments,
-        {
-          id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          userId: actorUserId,
-          memberId: actorMemberId || undefined,
-          displayName: actorDisplayName || undefined,
-          message: msg,
-          createdAt: new Date().toISOString(),
-          replyToCommentId: replyTarget?.commentId,
-          replyToUserId: replyTarget?.userId,
-          replyToDisplayName: replyTarget?.displayName,
-          mentionUserIds,
-        },
-      ],
-    });
+    const now = new Date().toISOString();
+    const draftText = commentText;
+    const draftImage = commentImage;
+    const draftReply = replyTarget;
+    const draftEditingId = editingCommentId;
+
+    setIsSendingComment(true);
+    setCommentText("");
+    setCommentImage("");
+    setEditingCommentId("");
     setReplyTarget(null);
+
+    if (editingCommentId) {
+      const next = comments.map((comment) => {
+        if (String(comment.id || "") !== String(editingCommentId || "")) return comment;
+        if (String(comment.userId || "") !== actorUserId) return comment;
+        return {
+          ...comment,
+          message: msg,
+          image: draftImage || undefined,
+          updatedAt: now,
+          editedAt: now,
+        };
+      });
+      try {
+        await editEvent(String(id), { comments: next });
+      } catch {
+        setCommentText(draftText);
+        setCommentImage(draftImage);
+        setReplyTarget(draftReply);
+        setEditingCommentId(draftEditingId);
+        Alert.alert("Error", "Comment ပို့မရပါ။ Network ကိုစစ်ပြီး ထပ်မံကြိုးစားပါ။");
+      } finally {
+        setIsSendingComment(false);
+      }
+    } else {
+      const mentionUserIds = draftReply?.userId ? [draftReply.userId] : [];
+      try {
+        await editEvent(String(id), {
+          comments: [
+            ...comments,
+            {
+              id: `${Date.now()}_${secureRandomToken(6)}`,
+              userId: actorUserId,
+              memberId: actorMemberId || undefined,
+              displayName: actorDisplayName || undefined,
+              message: msg,
+              image: draftImage || undefined,
+              createdAt: now,
+              replyToCommentId: draftReply?.commentId,
+              replyToUserId: draftReply?.userId,
+              replyToDisplayName: draftReply?.displayName,
+              mentionUserIds,
+            },
+          ],
+        });
+      } catch {
+        setCommentText(draftText);
+        setCommentImage(draftImage);
+        setReplyTarget(draftReply);
+        Alert.alert("Error", "Comment ပို့မရပါ။ Network ကိုစစ်ပြီး ထပ်မံကြိုးစားပါ။");
+      } finally {
+        setIsSendingComment(false);
+      }
+    }
+  };
+
+  const pickCommentImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== "granted") return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.5,
+      base64: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    if (!asset.base64) return;
+    const mime = asset.mimeType || "image/jpeg";
+    setCommentImage(`data:${mime};base64,${asset.base64}`);
+  };
+
+  const startEditComment = (comment: any) => {
+    setEditingCommentId(String(comment?.id || ""));
+    setCommentText(String(comment?.message || ""));
+    setCommentImage(String(comment?.image || ""));
+    setReplyTarget(null);
+  };
+
+  const cancelEditComment = () => {
+    setEditingCommentId("");
+    setCommentText("");
+    setCommentImage("");
+  };
+
+  const handleDeleteComment = async (comment: any) => {
+    if (!event || !actorUserId) return;
+    const commentId = String(comment?.id || "");
+    if (!commentId) return;
+    Alert.alert("ဖျက်မည်", "ဤမှတ်ချက်ကို ဖျက်မည်လား?", [
+      { text: "မဖျက်တော့ပါ", style: "cancel" },
+      {
+        text: "ဖျက်မည်",
+        style: "destructive",
+        onPress: () => {
+          const comments = event.comments || [];
+          const now = new Date().toISOString();
+          const next = comments.map((row) => {
+            if (String(row?.id || "") !== commentId) return row;
+            if (String(row?.userId || "") !== actorUserId) return row;
+            return {
+              ...row,
+              message: "ဤမှတ်ချက်ကို ဖျက်ပြီးပါပြီ။",
+              image: undefined,
+              isDeleted: true,
+              deletedAt: now,
+              deletedByUserId: actorUserId,
+              updatedAt: now,
+            };
+          });
+          void editEvent(String(id), { comments: next });
+          if (editingCommentId === commentId) {
+            cancelEditComment();
+          }
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -319,6 +440,7 @@ export default function EventDetailScreen() {
           <View style={styles.senderBox}>
             <Text style={styles.senderText}>သတင်းပေးပို့သူ: {event.senderName || "-"}</Text>
             <Text style={styles.senderText}>အဖွဲ့ဝင် ID: {event.senderMemberId || "-"}</Text>
+            <Text style={styles.senderText}>ဖုန်း: {event.senderPhone || "-"}</Text>
           </View>
 
           <View style={styles.scheduleBox}>
@@ -346,15 +468,50 @@ export default function EventDetailScreen() {
                 </Pressable>
               </View>
             )}
+            {editingCommentId ? (
+              <View style={styles.editBox}>
+                <Text style={styles.replyText}>Editing comment...</Text>
+                <Pressable onPress={cancelEditComment}>
+                  <Text style={styles.replyCancel}>Cancel Edit</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {commentImage ? (
+              <View style={styles.commentPreviewRow}>
+                <Image source={{ uri: commentImage }} style={styles.commentPreviewImage} />
+                <Pressable onPress={() => setCommentImage("")}>
+                  <Text style={styles.replyCancel}>Remove Image</Text>
+                </Pressable>
+              </View>
+            ) : null}
             <View style={styles.commentInputRow}>
+              <Pressable style={styles.commentImageBtn} onPress={() => void pickCommentImage()}>
+                <Ionicons name="image-outline" size={16} color={Colors.light.tint} />
+              </Pressable>
               <TextInput
                 style={styles.commentInput}
                 value={commentText}
                 onChangeText={setCommentText}
-                placeholder={replyTarget ? "Reply ကိုရေးပါ..." : "မှတ်ချက်ရေးပါ..."}
+                placeholder={
+                  editingCommentId
+                    ? "Caption/မှတ်ချက် ပြင်ရန်..."
+                    : commentImage
+                      ? "Caption (optional)"
+                      : replyTarget
+                        ? "Reply ကိုရေးပါ..."
+                        : "မှတ်ချက်ရေးပါ..."
+                }
               />
-              <Pressable style={styles.commentSendBtn} onPress={() => void handleSendComment()}>
-                <Ionicons name="send" size={16} color="#fff" />
+              <Pressable
+                style={[styles.commentSendBtn, isSendingComment && styles.commentSendBtnDisabled]}
+                onPress={() => void handleSendComment()}
+                disabled={isSendingComment}
+              >
+                {isSendingComment ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name={editingCommentId ? "checkmark" : "send"} size={16} color="#fff" />
+                )}
               </Pressable>
             </View>
             {(event.comments || []).length === 0 ? (
@@ -366,20 +523,33 @@ export default function EventDetailScreen() {
                   {comment.replyToDisplayName ? (
                     <Text style={styles.commentReplyTo}>Reply to: {comment.replyToDisplayName}</Text>
                   ) : null}
-                  <Text style={styles.commentBody}>{comment.message}</Text>
+                  <Text style={[styles.commentBody, comment.isDeleted && styles.deletedCommentBody]}>{comment.message}</Text>
+                  {comment.image ? <Image source={{ uri: comment.image }} style={styles.commentImage} resizeMode="cover" /> : null}
                   <Text style={styles.commentDate}>{new Date(comment.createdAt).toLocaleString()}</Text>
-                  {comment.userId !== actorUserId && (
-                    <Pressable
-                      style={styles.replyBtn}
-                      onPress={() => setReplyTarget({
-                        commentId: comment.id,
-                        userId: comment.userId,
-                        displayName: comment.displayName || comment.memberId || comment.userId,
-                      })}
-                    >
-                      <Text style={styles.replyBtnText}>Reply</Text>
-                    </Pressable>
-                  )}
+                  {comment.editedAt ? <Text style={styles.commentEditMeta}>Edited</Text> : null}
+                  {!comment.isDeleted ? (
+                    comment.userId !== actorUserId ? (
+                      <Pressable
+                        style={styles.replyBtn}
+                        onPress={() => setReplyTarget({
+                          commentId: comment.id,
+                          userId: comment.userId,
+                          displayName: comment.displayName || comment.memberId || comment.userId,
+                        })}
+                      >
+                        <Text style={styles.replyBtnText}>Reply</Text>
+                      </Pressable>
+                    ) : (
+                      <View style={styles.commentActionRow}>
+                        <Pressable style={styles.replyBtn} onPress={() => startEditComment(comment)}>
+                          <Text style={styles.replyBtnText}>Edit</Text>
+                        </Pressable>
+                        <Pressable style={styles.deleteBtn} onPress={() => void handleDeleteComment(comment)}>
+                          <Text style={styles.deleteBtnText}>Delete</Text>
+                        </Pressable>
+                      </View>
+                    )
+                  ) : null}
                 </View>
               ))
             )}
@@ -451,7 +621,31 @@ const styles = StyleSheet.create({
     borderColor: "#93C5FD",
   },
   reactText: { fontSize: 13, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  editBox: {
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+    backgroundColor: "#FFFBEB",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  commentPreviewRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  commentPreviewImage: { width: 64, height: 48, borderRadius: 8 },
   commentInputRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  commentImageBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+  },
   commentInput: {
     flex: 1,
     borderWidth: 1,
@@ -469,6 +663,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  commentSendBtnDisabled: { opacity: 0.7 },
   commentItem: {
     paddingVertical: 8,
     borderTopWidth: 1,
@@ -491,9 +686,15 @@ const styles = StyleSheet.create({
   commentAuthor: { fontSize: 12, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
   commentReplyTo: { fontSize: 11, color: "#1D4ED8", marginTop: 2 },
   commentBody: { fontSize: 13, color: Colors.light.text, marginTop: 2 },
+  deletedCommentBody: { color: Colors.light.textSecondary, fontStyle: "italic" },
+  commentImage: { width: 160, height: 120, borderRadius: 8, marginTop: 6 },
   commentDate: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 2 },
+  commentEditMeta: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 2 },
+  commentActionRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
   replyBtn: { alignSelf: "flex-start", marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: "#EEF2FF" },
   replyBtnText: { fontSize: 11, color: "#3730A3", fontFamily: "Inter_600SemiBold" },
+  deleteBtn: { alignSelf: "flex-start", marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: "#FEE2E2" },
+  deleteBtnText: { fontSize: 11, color: "#B91C1C", fontFamily: "Inter_600SemiBold" },
   readRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
   errorText: { fontSize: 16, color: Colors.light.textSecondary, marginBottom: 10 },
   backButton: { padding: 10 },

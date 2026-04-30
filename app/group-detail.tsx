@@ -42,7 +42,7 @@ export default function GroupDetailScreen() {
     try {
       await editGroup(group.id, { memberIds: newIds });
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (err) {
+    } catch {
       Alert.alert("Error", "Failed to add member");
     }
   };
@@ -52,7 +52,7 @@ export default function GroupDetailScreen() {
     try {
       await editGroup(group.id, { memberIds: newIds });
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (err) {
+    } catch {
       Alert.alert("Error", "Failed to remove member");
     }
   };

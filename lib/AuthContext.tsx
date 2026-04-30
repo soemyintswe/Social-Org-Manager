@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { canAccess, canAccessMemberRecord as canAccessMember, type AccessOptions, type AccessPermission, type AccessProfile } from "./access-control";
 import { useData } from "./DataContext";
@@ -9,6 +9,7 @@ import { buildMemberUsername, changeUserPassword, resetUserPasswordByIdentifier,
 
 const AUTH_SESSION_KEY = "@orghub_auth_session";
 const AUTH_BACKGROUND_MARK_KEY = "@orghub_auth_background_marked";
+const AUTH_WEB_FORCE_LOGOUT_KEY = "@orghub_auth_web_force_logout";
 const RESTORE_SESSION_ON_LAUNCH = true;
 const LOGIN_GUARD_KEY = "@orghub_login_guard";
 const MAX_FAILED_ATTEMPTS = 5;
@@ -57,7 +58,15 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<boolean>;
   verifyCurrentPassword: (password: string) => Promise<boolean>;
   changePassword: (currentPassword: string, nextPassword: string) => Promise<boolean>;
-  resetPassword: (identifier: string) => Promise<boolean>;
+  resetPassword: (identifier: string, nextPassword?: string) => Promise<{
+    ok: boolean;
+    userId?: string;
+    reason?: string;
+    displayName?: string;
+    memberId?: string;
+    phone?: string;
+    password?: string;
+  }>;
   can: (permission: AccessPermission, options?: AccessOptions) => boolean;
   canAccessMemberRecord: (targetMemberId: string) => boolean;
   recordActivity: () => void;
@@ -239,8 +248,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setRestoring(false);
         return;
       }
-      const backgroundMarked = await AsyncStorage.getItem(AUTH_BACKGROUND_MARK_KEY);
-      if (backgroundMarked === "1") {
+      const shouldInvalidateOnBackground = Platform.OS !== "web";
+      const backgroundMarked = shouldInvalidateOnBackground
+        ? await AsyncStorage.getItem(AUTH_BACKGROUND_MARK_KEY)
+        : null;
+      if (shouldInvalidateOnBackground && backgroundMarked === "1") {
         await AsyncStorage.removeItem(AUTH_SESSION_KEY);
         await AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);
         if (!active) return;
@@ -248,6 +260,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setRestoring(false);
         return;
       }
+      if (Platform.OS === "web") {
+        try {
+          const navEntries = performance.getEntriesByType?.("navigation") as any;
+          const navType = Array.isArray(navEntries) && navEntries.length ? navEntries[0]?.type : "";
+          const legacyType = (performance as any)?.navigation?.type;
+          const isReload = navType === "reload" || legacyType === 1;
+          if (localStorage.getItem(AUTH_WEB_FORCE_LOGOUT_KEY) === "1" && !isReload) {
+            localStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
+            await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+            if (!active) return;
+            setSessionUserId(null);
+            setRestoring(false);
+            return;
+          }
+          if (isReload) {
+            localStorage.removeItem(AUTH_WEB_FORCE_LOGOUT_KEY);
+          }
+        } catch {}
+      }
+
       const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
       const restored = parsePersistedSession(raw);
       if (!active) return;
@@ -257,6 +289,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const handler = () => {
+      try {
+        localStorage.setItem(AUTH_WEB_FORCE_LOGOUT_KEY, "1");
+      } catch {}
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
   const clearSession = useCallback(async () => {
@@ -464,10 +507,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const resetPassword = useCallback(
-    async (identifier: string) => {
-      if (!currentUser || currentUser.systemRole !== "admin") return false;
-      const result = await resetUserPasswordByIdentifier(identifier);
-      return result.ok;
+    async (identifier: string, nextPassword?: string) => {
+      if (!currentUser || currentUser.systemRole !== "admin") return { ok: false, reason: "forbidden" };
+      return resetUserPasswordByIdentifier(identifier, nextPassword);
     },
     [currentUser]
   );
@@ -500,7 +542,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser, lastActivityAt, signOut]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || Platform.OS === "web") return;
     const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
       if (state === "active") {
         void AsyncStorage.removeItem(AUTH_BACKGROUND_MARK_KEY);

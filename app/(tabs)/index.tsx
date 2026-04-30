@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useEffect, useState } from "react";
+import React, { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
   StyleSheet,
   Text,
@@ -10,13 +10,15 @@ import {
   Linking,
   Platform,
   Alert,
+  Animated,
+  Easing,
 } from "react-native";
 import * as FileSystem from 'expo-file-system/legacy';
 import { default as Constants } from 'expo-constants';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
@@ -26,6 +28,7 @@ import {
   checkCloudSyncHealth,
   checkLanSyncHealth,
   exportData,
+  getEffectiveSyncRuntimeConfig,
   pullCloudSnapshotToLocalDetailed,
   pullLanSnapshotToLocalDetailed,
   pushCloudSnapshotFromLocalDetailed,
@@ -33,8 +36,22 @@ import {
 } from "@/lib/storage";
 import { parseGregorianDate, splitPhoneNumbers } from "@/lib/member-utils";
 import { DEFAULT_LAN_SYNC_URL } from "@/lib/sync-defaults";
+import { resolveNotificationRoute } from "@/lib/notification-routing";
 
-const MEMBER_CHANGE_LAST_SEEN_KEY = "@member_change_last_seen_at";
+const loadSeenMarkerSet = async (key: string): Promise<Set<string>> => {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item || "")).filter(Boolean) : []);
+  } catch {
+    return new Set<string>();
+  }
+};
+
+const saveSeenMarkerSet = async (key: string, values: Set<string>): Promise<void> => {
+  await AsyncStorage.setItem(key, JSON.stringify(Array.from(values)));
+};
 
 interface Transaction {
   id: string;
@@ -56,6 +73,39 @@ const getEventTime = (event: OrgEvent) => {
 
 // A utility function for consistent currency formatting
 const formatCurrency = (amount: number) => `${amount.toLocaleString()} KS`;
+
+const TXN_CATEGORY_MM_LABELS: Record<string, string> = {
+  member_fees: "လစဉ်ကြေးရငွေ",
+  donations: "အလှူငွေရရှိ",
+  donation: "အလှူငွေရရှိ",
+  bank_interest: "ဘဏ်တိုးရငွေ",
+  other_income: "အခြားရငွေ",
+  loan_repayment: "ချေးငွေပြန်ဆပ်ရရှိငွေ",
+  interest_income: "အတိုးရငွေ",
+  health_support: "ကျန်းမာရေးထောက်ပံ့ငွေ",
+  education_support: "ပညာရေးထောက်ပံ့ငွေ",
+  funeral_support: "နာရေးကူညီငွေ",
+  loan_disbursement: "ချေးငွေထုတ်ပေးငွေ",
+  bank_charges: "ဘဏ်စရိတ်ပေးငွေ",
+  general_expenses: "အထွေထွေအသုံးစရိတ်",
+  other_expenses: "အခြားအသုံးစရိတ်",
+  bank_deposit: "ဘဏ်သို့ ငွေသွင်းခြင်း",
+  bank_withdraw: "ဘဏ်မှ ငွေထုတ်ခြင်း",
+};
+
+const normalizeCategoryToken = (value: unknown): string =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+const isLoanDisbursementCategory = (value: unknown): boolean => {
+  const token = normalizeCategoryToken(value);
+  return token === "loan_disbursement" || token === "loan_issued";
+};
+
+const isLoanRepaymentCategory = (value: unknown): boolean =>
+  normalizeCategoryToken(value) === "loan_repayment";
 
 function StatCard({
   icon,
@@ -89,18 +139,47 @@ function QuickAction({
   icon,
   label,
   onPress,
+  spinning = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
+  spinning?: boolean;
 }) {
+  const spinValue = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!spinning) {
+      spinValue.stopAnimation(() => {
+        spinValue.setValue(0);
+      });
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 900,
+        easing: Easing.linear,
+        useNativeDriver: Platform.OS !== "web",
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spinning, spinValue]);
+
+  const rotate = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
   return (
     <Pressable
       style={({ pressed }) => [styles.quickAction, pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] }]}
       onPress={onPress}
     >
       <View style={styles.actionIcon}>
-        <Ionicons name={icon} size={24} color={Colors.light.tint} />
+        <Animated.View style={spinning ? { transform: [{ rotate }] } : undefined}>
+          <Ionicons name={icon} size={24} color={Colors.light.tint} />
+        </Animated.View>
       </View>
       <Text style={styles.actionLabel}>{label}</Text>
     </Pressable>
@@ -109,21 +188,32 @@ function QuickAction({
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { members, events, transactions, loans, memberChangeRequests, chatThreads, chatMessages, loading, getLoanOutstanding, refreshData, accountSettings } = useData() as any;
+  const { members, events, transactions, loans, auditChangeRequests, auditExecutionLogs, chatThreads, chatMessages, notifications, loading, getLoanOutstanding, refreshData, accountSettings, markNotificationRead } = useData() as any;
+  const safeMembers = Array.isArray(members) ? members : [];
   const { currentUser, currentMember, can } = useAuth();
+  const isSystemAdmin = currentUser?.systemRole === "admin";
   const userDisplayName = (currentMember?.name || currentUser?.displayName || "").trim();
+  const userMemberId = String(currentMember?.id || currentUser?.memberId || "").trim();
+  const userIdentityLabel = useMemo(() => {
+    if (userDisplayName && userMemberId) return `${userDisplayName} (${userMemberId})`;
+    if (userDisplayName) return userDisplayName;
+    if (userMemberId) return `(${userMemberId})`;
+    return "";
+  }, [userDisplayName, userMemberId]);
   const canCreateMember = can("members.create") || can("members.manage");
   const canCreateFinance = can("finance.create") || can("finance.manage");
-  const canApproveMemberChanges = can("members.approve_changes");
-  const canProposeMemberChanges = can("members.propose_changes");
-  const canViewOrgFinanceSummary =
-    currentUser?.systemRole === "admin" ||
-    isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition);
+  const canViewOrgFinanceSummary = !isSystemAdmin && (
+    can("finance.view_summary") ||
+    can("finance.view_detail") ||
+    can("finance.view_all") ||
+    isCommitteePosition(currentMember?.orgPosition || currentUser?.orgPosition)
+  );
   const hasPersonalFinanceProfile = Boolean(currentUser?.memberId);
   const openPaymentRequest = (kind: MemberPaymentRequestKind) => {
-    router.push({ pathname: "/member-payment-requests", params: { kind } } as any);
+    router.push({ pathname: "/member-payment-requests", params: { kind, openCreate: "1" } } as any);
   };
-  const [memberChangeLastSeenAt, setMemberChangeLastSeenAt] = useState<string>("");
+  const scrollRef = useRef<ScrollView>(null);
+  const { scrollToTop } = useLocalSearchParams();
   const [syncingNow, setSyncingNow] = useState(false);
   const [refreshingDashboard, setRefreshingDashboard] = useState(false);
 
@@ -134,17 +224,29 @@ export default function DashboardScreen() {
     return withProtocol.replace(/\/+$/, "");
   };
 
+  useEffect(() => {
+    if (!scrollToTop) return;
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    if (Platform.OS === "web") {
+      try {
+        window.scrollTo({ top: 0, behavior: "smooth" as any });
+      } catch {
+        // ignore
+      }
+    }
+  }, [scrollToTop]);
+
   const handleSyncNow = async () => {
     if (syncingNow) return;
     setSyncingNow(true);
     try {
-      const lanEnabled = accountSettings?.syncEnabled !== false;
-      const syncServerUrl = normalizeUrl(accountSettings?.syncServerUrl || DEFAULT_LAN_SYNC_URL);
-      const cloudEnabled = accountSettings?.cloudSyncEnabled === true;
-      const cloudEndpoint = String(accountSettings?.cloudSyncEndpoint || "").trim();
+      const runtimeConfig = await getEffectiveSyncRuntimeConfig();
+      const lanEnabled = runtimeConfig.lan.enabled;
+      const syncServerUrl = normalizeUrl(runtimeConfig.lan.url || accountSettings?.syncServerUrl || DEFAULT_LAN_SYNC_URL);
+      const cloudEnabled = runtimeConfig.cloud.enabled;
 
-      if ((!lanEnabled || !syncServerUrl) && (!cloudEnabled || !cloudEndpoint)) {
-        Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync ကို Account Settings မှာ Enable လုပ်ပေးပါ။");
+      if (!lanEnabled && !cloudEnabled) {
+        Alert.alert("Sync", "LAN သို့မဟုတ် Cloud Sync configuration ကို Admin account သို့မဟုတ် Remote Config မှာ စစ်ဆေးပေးပါ။");
         return;
       }
 
@@ -157,7 +259,7 @@ export default function DashboardScreen() {
       }
 
       let cloudHealthLine = "Cloud Health: Skip (disabled)";
-      if (cloudEnabled && cloudEndpoint) {
+      if (cloudEnabled) {
         const health = await checkCloudSyncHealth();
         cloudHealthLine = health.ok
           ? "Cloud Health: OK"
@@ -170,10 +272,10 @@ export default function DashboardScreen() {
       const pushLan = lanEnabled && syncServerUrl
         ? await pushLanSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "disabled_or_empty_url" } as const);
-      const pullCloud = cloudEnabled && cloudEndpoint
+      const pullCloud = cloudEnabled
         ? await pullCloudSnapshotToLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
-      const pushCloud = cloudEnabled && cloudEndpoint
+      const pushCloud = cloudEnabled
         ? await pushCloudSnapshotFromLocalDetailed()
         : ({ ok: false, reason: "cloud_disabled_or_empty_endpoint" } as const);
 
@@ -209,16 +311,10 @@ export default function DashboardScreen() {
     }
   };
 
-  const loadMemberChangeLastSeen = useCallback(async () => {
-    const seenAt = (await AsyncStorage.getItem(MEMBER_CHANGE_LAST_SEEN_KEY)) || "";
-    setMemberChangeLastSeenAt(seenAt);
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
-      void loadMemberChangeLastSeen();
       void refreshData();
-    }, [loadMemberChangeLastSeen, refreshData])
+    }, [refreshData])
   );
 
   const handleDashboardRefresh = useCallback(async () => {
@@ -237,21 +333,112 @@ export default function DashboardScreen() {
     return m ? (m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim()) : "";
   };
 
-  const recentTxns: Transaction[] = [...(transactions || [])]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 5);
-  const recentEvents: OrgEvent[] = [...(events || [])]
+  const getRecentTxnCategoryLabel = (txn: Transaction) => {
+    const categoryLabelKey = normalizeCategoryToken(txn.categoryLabel);
+    const categoryKey = normalizeCategoryToken(txn.category);
+    return (
+      TXN_CATEGORY_MM_LABELS[categoryLabelKey] ||
+      TXN_CATEGORY_MM_LABELS[categoryKey] ||
+      txn.categoryLabel ||
+      CATEGORY_LABELS[txn.category as keyof typeof CATEGORY_LABELS] ||
+      String(txn.category || "")
+    );
+  };
+
+  const deletedTxnIds = useMemo(() => {
+    const set = new Set<string>();
+    (auditExecutionLogs || []).forEach((log: any) => {
+      if (String(log?.action || "") !== "delete_executed") return;
+      const targetType = String(log?.targetType || "").trim().toLowerCase();
+      const targetId = String(log?.targetId || log?.transactionId || "").trim();
+      if (!targetType || targetType === "transaction") {
+        if (targetId) set.add(targetId);
+      }
+      const affected = Array.isArray(log?.affectedTransactionIds) ? log.affectedTransactionIds : [];
+      affected.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) set.add(value);
+      });
+    });
+    (auditChangeRequests || []).forEach((req: any) => {
+      if (String(req?.requestKind || "") !== "delete") return;
+      if (String(req?.status || "") !== "approved") return;
+      const targetType = String(req?.targetType || "").trim().toLowerCase();
+      const targetId = String(req?.targetId || req?.transactionId || "").trim();
+      if (!targetType || targetType === "transaction") {
+        if (targetId) set.add(targetId);
+      }
+      const related = Array.isArray(req?.relatedTransactionIds) ? req.relatedTransactionIds : [];
+      related.forEach((id: any) => {
+        const value = String(id || "").trim();
+        if (value) set.add(value);
+      });
+    });
+    return set;
+  }, [auditExecutionLogs, auditChangeRequests]);
+
+  const recentTxns: Transaction[] = useMemo(() => {
+    const source: Transaction[] = canViewOrgFinanceSummary
+      ? [...(transactions || [])]
+      : [...(transactions || [])].filter((txn: any) => {
+          const myMemberId = String(currentUser?.memberId || "").trim();
+          if (!myMemberId) return false;
+          return String(txn?.memberId || "").trim() === myMemberId;
+        });
+    return source
+      .filter((txn: any) => {
+        const id = String(txn?.id || "").trim();
+        if (id && deletedTxnIds.has(id)) return false;
+        if (txn?.deleted || txn?.deletedAt) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 5);
+  }, [transactions, canViewOrgFinanceSummary, currentUser?.memberId, deletedTxnIds]);
+  const publicEvents: OrgEvent[] = useMemo(
+    () =>
+      [...(events || [])].filter(
+        (item: any) => String(item?.location || "").trim().toLowerCase() !== "system"
+      ),
+    [events]
+  );
+
+  const recentEvents: OrgEvent[] = [...publicEvents]
     .sort((a, b) => getEventTime(b) - getEventTime(a))
     .slice(0, 5);
 
-  const totalLoanOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
+  const totalLoanOutstanding = useMemo(() => {
+    const disbursed = (transactions || [])
+      .filter((tx: any) => isLoanDisbursementCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    const repaid = (transactions || [])
+      .filter((tx: any) => isLoanRepaymentCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    const txBasedOutstanding = Math.max(0, disbursed - repaid);
+
+    // If structured loan rows exist, prefer their computed value.
+    const loanBasedOutstanding = (loans || []).reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
+    return loanBasedOutstanding > 0 ? loanBasedOutstanding : txBasedOutstanding;
+  }, [transactions, loans, getLoanOutstanding]);
+
   const personalLoanOutstanding = useMemo(() => {
     const myMemberId = String(currentUser?.memberId || "");
     if (!myMemberId) return 0;
-    return (loans || [])
+    const loanBasedOutstanding = (loans || [])
       .filter((loan: any) => String(loan.memberId || "") === myMemberId)
       .reduce((acc: number, loan: any) => acc + (getLoanOutstanding(loan.id) || 0), 0);
-  }, [loans, getLoanOutstanding, currentUser?.memberId]);
+    if (loanBasedOutstanding > 0) return loanBasedOutstanding;
+
+    const disbursed = (transactions || [])
+      .filter((tx: any) => String(tx?.memberId || "") === myMemberId)
+      .filter((tx: any) => isLoanDisbursementCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    const repaid = (transactions || [])
+      .filter((tx: any) => String(tx?.memberId || "") === myMemberId)
+      .filter((tx: any) => isLoanRepaymentCategory(tx?.category))
+      .reduce((sum: number, tx: any) => sum + Number(tx?.amount || 0), 0);
+    return Math.max(0, disbursed - repaid);
+  }, [loans, transactions, getLoanOutstanding, currentUser?.memberId]);
 
   const inferGenderFromName = (rawName: string): "male" | "female" | "other" => {
     const name = String(rawName || "").trim();
@@ -285,7 +472,7 @@ export default function DashboardScreen() {
     let male = 0;
     let female = 0;
     let other = 0;
-    (members || []).forEach((m: any) => {
+    safeMembers.forEach((m: any) => {
       const explicit = String(m?.gender || "").trim().toLowerCase();
       const resolved =
         explicit === "male" || explicit === "female" || explicit === "other"
@@ -300,7 +487,7 @@ export default function DashboardScreen() {
       }
     });
     return { male, female, other, total: members?.length || 0 };
-  }, [members]);
+  }, [safeMembers]);
 
   // Calculate Balances locally to include Transfer logic
   const balances = useMemo(() => {
@@ -328,7 +515,8 @@ export default function DashboardScreen() {
     return { cash, bank, total: cash + bank };
   }, [transactions, accountSettings]);
 
-  const eventCount = Array.isArray(events) ? events.length : 0;
+  const eventCount = Array.isArray(publicEvents) ? publicEvents.length : 0;
+  const formatSignedDifference = (value: number) => `${value >= 0 ? "+" : "-"} ${formatCurrency(Math.abs(value))}`;
   const personalFinanceStats = useMemo(() => {
     const myMemberId = String(currentUser?.memberId || "");
     if (!myMemberId) return { income: 0, expense: 0, net: 0 };
@@ -344,8 +532,92 @@ export default function DashboardScreen() {
 
   const unreadEventCount = useMemo(() => {
     if (!currentUser?.id) return 0;
-    return (events || []).filter((item: any) => !item?.readBy?.[currentUser.id]).length;
-  }, [events, currentUser?.id]);
+    return (publicEvents || []).filter((item: any) => !item?.readBy?.[currentUser.id]).length;
+  }, [publicEvents, currentUser?.id]);
+
+  const unreadRequestNotificationCount = useMemo(() => {
+    const me = String(currentUser?.id || "").trim();
+    if (!me) return 0;
+    return (notifications || []).filter((item: any) => {
+      const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+      if (!targets.includes(me)) return false;
+      const readBy = Array.isArray(item?.readByUserIds) ? item.readByUserIds.map((v: any) => String(v || "").trim()) : [];
+      return !readBy.includes(me);
+    }).length;
+  }, [notifications, currentUser?.id]);
+
+  const requestNotificationItems = useMemo(() => {
+    const me = String(currentUser?.id || "").trim();
+    if (!me) return [];
+    const rows = (notifications || [])
+      .filter((item: any) => {
+        const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+        if (!targets.includes(me)) return false;
+        const category = String(item?.category || "").trim().toLowerCase();
+        const relatedType = String(item?.relatedType || "").trim().toLowerCase();
+        return (
+          category === "payment_request" ||
+          category === "expense_claim" ||
+          category === "audit_change" ||
+          category === "delete_request" ||
+          relatedType === "member_payment_request" ||
+          relatedType === "expense_claim" ||
+          relatedType === "audit_change_request"
+        );
+      })
+      .sort((a: any, b: any) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime());
+    return rows.slice(0, 5);
+  }, [notifications, currentUser?.id]);
+
+  const latestRequestNotifications = useMemo(() => requestNotificationItems.slice(0, 3), [requestNotificationItems]);
+  const latestEventItems = useMemo(() => recentEvents.slice(0, 3), [recentEvents]);
+
+  const latestMessageItems = useMemo(() => {
+    const me = String(currentUser?.id || "").trim();
+    if (!me) return [];
+    const threadMap = new Map<string, any>();
+    (chatThreads || []).forEach((t: any) => {
+      threadMap.set(String(t?.id || ""), t);
+    });
+    const rows = (chatMessages || [])
+      .filter((m: any) => {
+        const thread = threadMap.get(String(m?.threadId || ""));
+        if (!thread) return false;
+        const participants = Array.isArray(thread?.participantUserIds) ? thread.participantUserIds : [];
+        return participants.includes(me);
+      })
+      .sort((a: any, b: any) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime())
+      .slice(0, 3)
+      .map((m: any) => {
+        const thread = threadMap.get(String(m?.threadId || ""));
+        const title = String(thread?.title || thread?.name || "").trim();
+        return {
+          id: String(m?.id || ""),
+          title: title || "Message",
+          description: String(m?.text || "").trim(),
+          createdAt: String(m?.createdAt || ""),
+          threadId: String(m?.threadId || ""),
+        };
+      });
+    return rows;
+  }, [chatMessages, chatThreads, currentUser?.id]);
+
+  const openRequestNotification = useCallback(async (item: any) => {
+    const me = String(currentUser?.id || "").trim();
+    if (me) {
+      await markNotificationRead(String(item?.id || ""), me);
+    }
+    const target = resolveNotificationRoute(item);
+    if (target.pathname === "/notifications") {
+      router.push("/notifications" as any);
+      return;
+    }
+    router.push(
+      target.params
+        ? ({ pathname: target.pathname, params: target.params } as any)
+        : (target.pathname as any)
+    );
+  }, [currentUser?.id, markNotificationRead]);
 
   const unreadMessageCount = useMemo(() => {
     if (!currentUser?.id) return 0;
@@ -391,16 +663,36 @@ export default function DashboardScreen() {
     return () => clearTimeout(timeout);
   }, [members, transactions, loans]);
 
-  const getAge = (dob: string) => {
-      const birthDate = parseGregorianDate(dob);
-      if (!birthDate) return 0;
-      const now = new Date();
-      let age = now.getFullYear() - birthDate.getFullYear();
-      const monthDiff = now.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      return age;
+  const getAgeYears = (dob: string): number | null => {
+    const birthDate = parseGregorianDate(dob);
+    if (!birthDate) return null;
+    const now = new Date();
+    let age = now.getFullYear() - birthDate.getFullYear();
+    const monthDiff = now.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age >= 0 ? age : null;
+  };
+
+  const getAgeBreakdown = (dob: string): { years: number; months: number; days: number } | null => {
+    const birthDate = parseGregorianDate(dob);
+    if (!birthDate) return null;
+    const now = new Date();
+    let years = now.getFullYear() - birthDate.getFullYear();
+    let months = now.getMonth() - birthDate.getMonth();
+    let days = now.getDate() - birthDate.getDate();
+    if (days < 0) {
+      const prevMonthDays = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+      days += prevMonthDays;
+      months -= 1;
+    }
+    if (months < 0) {
+      months += 12;
+      years -= 1;
+    }
+    if (years < 0) return null;
+    return { years, months, days };
   };
 
   const getOccurrenceDate = (dob: string) => {
@@ -443,9 +735,9 @@ export default function DashboardScreen() {
 
   // မွေးနေ့ရောက်တော့မည့်သူများကို တွက်ချက်ခြင်း (၁ လကြိုတင် / ၃ ရက်နောက်ကျ)
   const upcomingBirthdays = useMemo(() => {
-    if (!members) return [];
+    if (!safeMembers.length) return [];
     
-    const filtered = members.filter(
+    const filtered = safeMembers.filter(
       (m: any) => normalizeMemberStatus(m.status) === "active" && m.dob && getOccurrenceDate(m.dob) !== null
     );
 
@@ -460,35 +752,9 @@ export default function DashboardScreen() {
         const timeDiff = dateA.getTime() - dateB.getTime();
         if (timeDiff !== 0) return timeDiff;
 
-        return getAge(b.dob) - getAge(a.dob);
+        return (getAgeYears(b.dob) || 0) - (getAgeYears(a.dob) || 0);
     });
-  }, [members]);
-
-  const requestInbox = useMemo(() => {
-    const all = memberChangeRequests || [];
-    const visible = canApproveMemberChanges
-      ? all
-      : all.filter((item: any) => item.createdByUserId === currentUser?.id);
-    const pending = visible.filter((item: any) => item.status === "pending").length;
-    const approved = visible.filter((item: any) => item.status === "approved").length;
-    const rejected = visible.filter((item: any) => item.status === "rejected").length;
-    const cancelled = visible.filter((item: any) => item.status === "cancelled").length;
-    const newPending = visible.filter((item: any) => {
-      if (item.status !== "pending") return false;
-      if (!memberChangeLastSeenAt) return true;
-      const created = new Date(item.createdAt || 0).getTime();
-      const seen = new Date(memberChangeLastSeenAt || 0).getTime();
-      return created > seen;
-    }).length;
-    return {
-      visibleCount: visible.length,
-      pending,
-      approved,
-      rejected,
-      cancelled,
-      newPending,
-    };
-  }, [memberChangeRequests, canApproveMemberChanges, currentUser?.id, memberChangeLastSeenAt]);
+  }, [safeMembers]);
 
   // Schedule Birthday Notification
   useEffect(() => {
@@ -497,7 +763,7 @@ export default function DashboardScreen() {
       const isExpoGo = Constants.appOwnership === 'expo';
       if (upcomingBirthdays.length > 0 && Platform.OS !== 'web' && !(Platform.OS === 'android' && isExpoGo)) {
         try {
-          const Notifications = require('expo-notifications');
+          const Notifications = await import("expo-notifications");
           
           Notifications.setNotificationHandler({
             handleNotification: async () => ({
@@ -547,7 +813,7 @@ export default function DashboardScreen() {
       if (!currentUser?.id) return;
       if (!Array.isArray(events) || events.length === 0) return;
       try {
-        const Notifications = require('expo-notifications');
+        const Notifications = await import("expo-notifications");
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,
@@ -581,6 +847,11 @@ export default function DashboardScreen() {
         for (const item of sorted) {
           const eventId = String(item?.id || "");
           if (!eventId || existingIds.has(eventId)) continue;
+          if (item?.readBy?.[currentUser.id]) {
+            existingIds.add(eventId);
+            changed = true;
+            continue;
+          }
           if (item?.createdByUserId && item.createdByUserId === currentUser.id) {
             existingIds.add(eventId);
             changed = true;
@@ -607,13 +878,186 @@ export default function DashboardScreen() {
   }, [events, currentUser?.id]);
 
   useEffect(() => {
+    const scheduleRequestNotifications = async () => {
+      const isExpoGo = Constants.appOwnership === "expo";
+      if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
+      const me = String(currentUser?.id || "").trim();
+      if (!me) return;
+      if (!Array.isArray(notifications) || notifications.length === 0) return;
+      try {
+        const Notifications = await import("expo-notifications");
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        const key = `@request_notification_seen_ids_${me}`;
+        const existingRaw = await AsyncStorage.getItem(key);
+        const seen = await loadSeenMarkerSet(key);
+        const myNotificationIds = (notifications || [])
+          .filter((item: any) => {
+            const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+            return targets.includes(me);
+          })
+          .map((item: any) => String(item?.id || ""))
+          .filter(Boolean);
+
+        if (!existingRaw) {
+          await AsyncStorage.setItem(key, JSON.stringify(myNotificationIds));
+          return;
+        }
+
+        const { status } = await Notifications.getPermissionsAsync();
+        let finalStatus = status;
+        if (status !== "granted") {
+          const req = await Notifications.requestPermissionsAsync();
+          finalStatus = req.status;
+        }
+        if (finalStatus !== "granted") return;
+
+        let changed = false;
+        const ordered = [...(notifications as any[])].sort(
+          (a, b) => new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime()
+        );
+        for (const item of ordered) {
+          const id = String(item?.id || "");
+          if (!id || seen.has(id)) continue;
+          const targets = Array.isArray(item?.targetUserIds) ? item.targetUserIds.map((v: any) => String(v || "").trim()) : [];
+          if (!targets.includes(me)) continue;
+          const readBy = Array.isArray(item?.readByUserIds) ? item.readByUserIds.map((v: any) => String(v || "").trim()) : [];
+          if (readBy.includes(me)) {
+            seen.add(id);
+            changed = true;
+            continue;
+          }
+          if (String(item?.createdByUserId || "") === me) {
+            seen.add(id);
+            changed = true;
+            continue;
+          }
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: `🔔 ${String(item?.title || "အသိပေးချက်")}`,
+              body: String(item?.description || ""),
+            },
+            trigger: null,
+          });
+          seen.add(id);
+          changed = true;
+        }
+        if (changed) {
+          await saveSeenMarkerSet(key, seen);
+        }
+      } catch (error) {
+        console.log("Request notification scheduling failed:", error);
+      }
+    };
+    void scheduleRequestNotifications();
+  }, [notifications, currentUser?.id]);
+
+  useEffect(() => {
+    const scheduleChatNotifications = async () => {
+      const isExpoGo = Constants.appOwnership === "expo";
+      if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
+      const me = String(currentUser?.id || "").trim();
+      if (!me) return;
+      if (!Array.isArray(chatThreads) || !Array.isArray(chatMessages) || chatMessages.length === 0) return;
+      try {
+        const Notifications = await import("expo-notifications");
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        const key = `@chat_notification_seen_ids_${me}`;
+        const existingRaw = await AsyncStorage.getItem(key);
+        const seen = await loadSeenMarkerSet(key);
+        const myThreadIds = new Set(
+          (chatThreads || [])
+            .filter((thread: any) => Array.isArray(thread?.participantUserIds) && thread.participantUserIds.includes(me))
+            .map((thread: any) => String(thread?.id || ""))
+            .filter(Boolean)
+        );
+        const visibleMessageMarkers = (chatMessages || [])
+          .filter((item: any) => myThreadIds.has(String(item?.threadId || "")) && String(item?.senderUserId || "") !== me)
+          .map((item: any) => `${String(item?.threadId || "")}:${String(item?.id || "")}`)
+          .filter((item: string) => !item.startsWith(":") && !item.endsWith(":"));
+
+        if (!existingRaw) {
+          await AsyncStorage.setItem(key, JSON.stringify(visibleMessageMarkers));
+          return;
+        }
+
+        const { status } = await Notifications.getPermissionsAsync();
+        let finalStatus = status;
+        if (status !== "granted") {
+          const req = await Notifications.requestPermissionsAsync();
+          finalStatus = req.status;
+        }
+        if (finalStatus !== "granted") return;
+
+        let changed = false;
+        const ordered = [...(chatMessages as any[])].sort(
+          (a, b) => new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime()
+        );
+        for (const item of ordered) {
+          const threadId = String(item?.threadId || "");
+          const messageId = String(item?.id || "");
+          const marker = `${threadId}:${messageId}`;
+          if (!threadId || !messageId || seen.has(marker) || !myThreadIds.has(threadId)) continue;
+          if (String(item?.senderUserId || "") === me) {
+            seen.add(marker);
+            changed = true;
+            continue;
+          }
+          const thread = (chatThreads || []).find((row: any) => String(row?.id || "") === threadId);
+          const lastReadAt = String(thread?.lastReadAtBy?.[me] || "");
+          const messageCreatedAt = new Date(String(item?.createdAt || 0)).getTime();
+          if (lastReadAt && messageCreatedAt <= new Date(lastReadAt).getTime()) {
+            seen.add(marker);
+            changed = true;
+            continue;
+          }
+          const sender = String(item?.senderDisplayName || item?.senderMemberId || "တစ်ဦး");
+          const body = String(item?.text || "").trim() || (item?.image ? "ဓာတ်ပုံ ပေးပို့ထားသည်" : "Message အသစ်ဝင်လာသည်");
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: `💬 ${sender}`,
+              body,
+            },
+            trigger: null,
+          });
+          seen.add(marker);
+          changed = true;
+        }
+        if (changed) {
+          await saveSeenMarkerSet(key, seen);
+        }
+      } catch (error) {
+        console.log("Chat notification scheduling failed:", error);
+      }
+    };
+    void scheduleChatNotifications();
+  }, [chatThreads, chatMessages, currentUser?.id]);
+
+  useEffect(() => {
     const scheduleCommentMentionNotifications = async () => {
       const isExpoGo = Constants.appOwnership === 'expo';
       if (Platform.OS === "web" || (Platform.OS === "android" && isExpoGo)) return;
       if (!currentUser?.id) return;
       if (!Array.isArray(events) || events.length === 0) return;
       try {
-        const Notifications = require('expo-notifications');
+        const Notifications = await import("expo-notifications");
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,
@@ -714,8 +1158,39 @@ export default function DashboardScreen() {
     );
   }
 
+  if (isSystemAdmin) {
+    return (
+      <ScrollView
+        ref={scrollRef}
+        style={styles.container}
+        contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <Text style={styles.orgName}>System Admin Dashboard</Text>
+          <Text style={styles.headerIdentity} numberOfLines={1}>
+            {userIdentityLabel || "Admin"}
+          </Text>
+        </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>စနစ်ထိန်းချုပ်မှု</Text>
+          <Text style={styles.sectionSubtitle}>
+            Admin account သည် system setup, sync configuration နှင့် initial user account setup ကိုသာ စီမံနိုင်ပါသည်။
+          </Text>
+          <View style={styles.quickActionsGrid}>
+            <QuickAction icon="chatbubbles-outline" label="Messages" onPress={() => router.push("/messages" as any)} />
+            <QuickAction icon="folder-open-outline" label="Data & Backup" onPress={() => router.push("/data-management" as any)} />
+            <QuickAction icon="options-outline" label="Account Settings" onPress={() => router.push("/account-settings" as any)} />
+            <QuickAction icon="settings-outline" label="System" onPress={() => router.push("/system" as any)} />
+          </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView 
+      ref={scrollRef}
       style={styles.container} 
       contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 40 }}
       showsVerticalScrollIndicator={false}
@@ -729,10 +1204,10 @@ export default function DashboardScreen() {
       }
     >
       <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>မင်္ဂလာပါ{userDisplayName ? `၊ ${userDisplayName}` : ""}</Text>
-          <Text style={styles.orgName}>OrgHub Dashboard</Text>
-        </View>
+        <Text style={styles.orgName}>OrgHub Dashboard</Text>
+        <Text style={styles.headerIdentity} numberOfLines={1}>
+          {userIdentityLabel || "အသုံးပြုသူ"}
+        </Text>
       </View>
 
       <View style={styles.statsGrid}>
@@ -752,6 +1227,7 @@ export default function DashboardScreen() {
           color="#8B5CF6" 
           onPress={() => router.push("/members" as any)} 
         />
+        <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
         {canViewOrgFinanceSummary && (
           <StatCard
             icon="wallet"
@@ -772,14 +1248,14 @@ export default function DashboardScreen() {
         {(!canViewOrgFinanceSummary || hasPersonalFinanceProfile) && (
           <StatCard
             icon="wallet"
-            label="ကိုယ်ပိုင်ငွေစာရင်း"
+            label="ကိုယ်တိုင်ငွေစာရင်း"
             value={
               <View>
                 <View style={{ marginBottom: 4 }}>
                   <Text style={styles.subBalanceText}>အသင်းသို့ပေးသွင်းငွေများ: {formatCurrency(personalFinanceStats.income)}</Text>
                   <Text style={styles.subBalanceText}>အသင်းမှထုတ်ယူငွေ: {formatCurrency(personalFinanceStats.expense)}</Text>
                 </View>
-                <Text style={styles.statValue}>စုစုပေါင်းကွာဟချက်: {formatCurrency(personalFinanceStats.net)}</Text>
+                <Text style={styles.statValue}>ခြားနားချက်: {formatSignedDifference(personalFinanceStats.net)}</Text>
               </View>
             }
             color="#10B981"
@@ -798,13 +1274,12 @@ export default function DashboardScreen() {
         {(!canViewOrgFinanceSummary || hasPersonalFinanceProfile) && (
           <StatCard
             icon="cash"
-            label="ချေးငွေလက်ကျန် (ကိုယ်ပိုင်)"
+            label="ချေးငွေလက်ကျန် (ကိုယ်တိုင်)"
             value={formatCurrency(personalLoanOutstanding)}
             color="#F59E0B"
             onPress={() => router.push("/loans" as any)}
           />
         )}
-        <StatCard icon="calendar" label="သတင်းပို့ရန်" value={eventCount.toString()} color="#3B82F6" onPress={() => router.push("/events" as any)} />
       </View>
 
       <View style={styles.noticeRow}>
@@ -812,37 +1287,87 @@ export default function DashboardScreen() {
           <Text style={styles.noticeTitle}>📰 Event အသစ်</Text>
           <Text style={styles.noticeCount}>{unreadEventCount}</Text>
         </Pressable>
+        <Pressable style={styles.noticeCard} onPress={() => router.push("/notifications" as any)}>
+          <Text style={styles.noticeTitle}>🔔 Request အသိပေး</Text>
+          <Text style={styles.noticeCount}>{unreadRequestNotificationCount}</Text>
+        </Pressable>
         <Pressable style={styles.noticeCard} onPress={() => router.push("/messages" as any)}>
           <Text style={styles.noticeTitle}>💬 Message အသစ်</Text>
           <Text style={styles.noticeCount}>{unreadMessageCount}</Text>
         </Pressable>
       </View>
 
-      {(canApproveMemberChanges || canProposeMemberChanges) && (
-        <Pressable style={styles.requestInboxCard} onPress={() => router.push("/member-change-approvals" as any)}>
-          <View style={styles.requestInboxHeader}>
-            <View style={styles.requestInboxIconWrap}>
-              <Ionicons name="checkmark-done-outline" size={18} color={Colors.light.tint} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.requestInboxTitle}>
-                {canApproveMemberChanges ? "Member Change Approval Inbox" : "My Change Requests"}
-              </Text>
-              <Text style={styles.requestInboxSubtitle}>
-                Total: {requestInbox.visibleCount}
-                {requestInbox.newPending > 0 ? ` • New Pending: ${requestInbox.newPending}` : ""}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={Colors.light.textSecondary} />
+      <View style={styles.noticeTables}>
+        <View style={styles.noticeTable}>
+          <View style={styles.noticeTableHeader}>
+            <Text style={styles.noticeTableTitle}>📰 Event အသစ်</Text>
+            <Pressable onPress={() => router.push("/events" as any)}>
+              <Text style={styles.noticeTableLink}>အားလုံး</Text>
+            </Pressable>
           </View>
-          <View style={styles.requestInboxStats}>
-            <Text style={styles.requestStatText}>Pending: {requestInbox.pending}</Text>
-            <Text style={styles.requestStatText}>Approved: {requestInbox.approved}</Text>
-            <Text style={styles.requestStatText}>Rejected: {requestInbox.rejected}</Text>
-            <Text style={styles.requestStatText}>Cancelled: {requestInbox.cancelled}</Text>
+          {latestEventItems.length === 0 ? (
+            <Text style={styles.noticeEmpty}>မရှိသေးပါ။</Text>
+          ) : (
+            latestEventItems.map((event, idx) => (
+              <Pressable key={String(event?.id || `event-${idx}`)} style={styles.noticeRowItem} onPress={() => router.push("/events" as any)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeItemTitle} numberOfLines={1}>{String(event?.title || event?.name || "Event")}</Text>
+                  <Text style={styles.noticeItemMeta} numberOfLines={1}>{String(event?.eventDate || event?.date || "")}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            ))
+          )}
+        </View>
+
+        <View style={styles.noticeTable}>
+          <View style={styles.noticeTableHeader}>
+            <Text style={styles.noticeTableTitle}>🔔 Request အသိပေး</Text>
+            <Pressable onPress={() => router.push("/notifications" as any)}>
+              <Text style={styles.noticeTableLink}>အားလုံး</Text>
+            </Pressable>
           </View>
-        </Pressable>
-      )}
+          {latestRequestNotifications.length === 0 ? (
+            <Text style={styles.noticeEmpty}>မရှိသေးပါ။</Text>
+          ) : (
+            latestRequestNotifications.map((item: any, index: number) => (
+              <Pressable
+                key={String(item?.id || `notice-${index}`)}
+                style={styles.noticeRowItem}
+                onPress={() => void openRequestNotification(item)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeItemTitle} numberOfLines={1}>{String(item?.title || "အသိပေးချက်")}</Text>
+                  <Text style={styles.noticeItemMeta} numberOfLines={1}>{String(item?.description || "-")}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            ))
+          )}
+        </View>
+
+        <View style={styles.noticeTable}>
+          <View style={styles.noticeTableHeader}>
+            <Text style={styles.noticeTableTitle}>💬 Message အသစ်</Text>
+            <Pressable onPress={() => router.push("/messages" as any)}>
+              <Text style={styles.noticeTableLink}>အားလုံး</Text>
+            </Pressable>
+          </View>
+          {latestMessageItems.length === 0 ? (
+            <Text style={styles.noticeEmpty}>မရှိသေးပါ။</Text>
+          ) : (
+            latestMessageItems.map((item: any, idx: number) => (
+              <Pressable key={String(item?.id || `msg-${idx}`)} style={styles.noticeRowItem} onPress={() => router.push("/messages" as any)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeItemTitle} numberOfLines={1}>{String(item?.title || "Message")}</Text>
+                  <Text style={styles.noticeItemMeta} numberOfLines={1}>{String(item?.description || "-")}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.textSecondary} />
+              </Pressable>
+            ))
+          )}
+        </View>
+      </View>
 
       {/* Birthday Alert Section */}
       {upcomingBirthdays.length > 0 && (
@@ -860,7 +1385,11 @@ export default function DashboardScreen() {
                 <View>
                   <Text style={[styles.birthdayName, { color: Colors.light.text }]}>{m.name}</Text>
                   <Text style={[styles.birthdayDate, { color: getBirthdayColor(m.dob) }]}>
-                    {m.dob} • {getAge(m.dob)} နှစ်ပြည့်
+                    {m.dob} • {(() => {
+                      const age = getAgeBreakdown(m.dob);
+                      if (!age) return "အသက်မသိပါ။";
+                      return `${age.years} နှစ် ${age.months} လ ${age.days} ရက်`;
+                    })()}
                   </Text>
                 </View>
               </Pressable>
@@ -878,17 +1407,25 @@ export default function DashboardScreen() {
 
       <Text style={styles.sectionTitle}>အမြန်လုပ်ဆောင်ချက်များ</Text>
       <View style={styles.quickActions}>
-        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} />
+        <QuickAction icon="sync-outline" label={syncingNow ? "Syncing..." : "Sync Now"} onPress={() => void handleSyncNow()} spinning={syncingNow} />
         <QuickAction icon="chatbubbles-outline" label="Messages" onPress={() => router.push("/messages" as any)} />
         {canCreateMember && <QuickAction icon="person-add" label="အသင်းဝင်သစ်" onPress={() => router.push("/add-member" as any)} />}
         {canCreateFinance && <QuickAction icon="add-circle" label="ငွေစာရင်းသစ်" onPress={() => router.push("/add-transaction" as any)} />}
         {canCreateFinance && <QuickAction icon="business" label="ချေးငွေအသစ်" onPress={() => router.push("/add-loan" as any)} />}
-        <QuickAction icon="megaphone-outline" label="သတင်းပို့ရန်" onPress={() => router.push("/events" as any)} />
+        <QuickAction
+          icon="megaphone-outline"
+          label="သတင်းပို့ရန်"
+          onPress={() => router.push({ pathname: "/events", params: { source: "quick_action", openCreate: "1" } } as any)}
+        />
         <QuickAction icon="card-outline" label="လစဉ်ကြေးပေးသွင်းရန်" onPress={() => openPaymentRequest("member_fees")} />
         <QuickAction icon="gift-outline" label="လှူဒါန်းရန်" onPress={() => openPaymentRequest("donations")} />
         <QuickAction icon="cash-outline" label="ချေးငွေဆပ်ရန်" onPress={() => openPaymentRequest("loan_repayment")} />
         <QuickAction icon="trending-up-outline" label="အတိုးဆပ်ရန်" onPress={() => openPaymentRequest("interest_income")} />
-        <QuickAction icon="document-text-outline" label="ငွေတောင်းခံရန်" onPress={() => router.push("/expense-claims" as any)} />
+        <QuickAction
+          icon="document-text-outline"
+          label="ငွေတောင်းခံရန်"
+          onPress={() => router.push({ pathname: "/expense-claims", params: { openCreate: "1" } } as any)}
+        />
       </View>
 
       {recentEvents.length > 0 && (
@@ -927,7 +1464,7 @@ export default function DashboardScreen() {
                 </View>
                 <View style={styles.recentTxnInfo}>
                   <Text style={styles.recentTxnCat} numberOfLines={1}>
-                    {txn.categoryLabel || CATEGORY_LABELS[txn.category] || txn.category}
+                    {getRecentTxnCategoryLabel(txn)}
                   </Text>
                   <Text style={styles.recentTxnMeta} numberOfLines={1}>
                     {getMemberName(txn.memberId) || txn.payerPayee || txn.receiptNumber} • {new Date(txn.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
@@ -944,7 +1481,6 @@ export default function DashboardScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>Project Owner & Developer: MR. SOE MYINT SWE</Text>
-        <Text style={styles.footerSubText}>Developed with Gemini AI Assistance</Text>
       </View>
     </ScrollView>
   );
@@ -954,21 +1490,64 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingVertical: 20 },
-  greeting: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   orgName: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  headerIdentity: { flex: 1, marginLeft: 12, fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, textAlign: "right" },
+  section: {
+    marginHorizontal: 20,
+    backgroundColor: "white",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 16,
+    marginBottom: 20,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: Colors.light.textSecondary,
+    fontFamily: "Inter_500Medium",
+    marginBottom: 14,
+  },
   profileBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "white", justifyContent: "center", alignItems: "center", elevation: 2 },
-  statsGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 15, gap: 10, marginBottom: 25 },
+  statsGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", paddingHorizontal: 15, marginBottom: 25 },
   noticeRow: { flexDirection: "row", paddingHorizontal: 20, gap: 10, marginBottom: 18 },
   noticeCard: { flex: 1, backgroundColor: "white", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 12 },
   noticeTitle: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_600SemiBold" },
   noticeCount: { fontSize: 20, color: Colors.light.text, fontFamily: "Inter_700Bold", marginTop: 4 },
-  statCard: { flex: 1, minWidth: "45%", backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
+  noticeTables: { paddingHorizontal: 20, gap: 14, marginBottom: 10 },
+  noticeTable: {
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 14,
+    padding: 12,
+    gap: 8,
+  },
+  noticeTableHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  noticeTableTitle: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_700Bold" },
+  noticeTableLink: { fontSize: 12, color: Colors.light.tint, fontFamily: "Inter_600SemiBold" },
+  noticeRowItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: "#F8FAFC",
+  },
+  noticeItemTitle: { fontSize: 12.5, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  noticeItemMeta: { marginTop: 2, fontSize: 11.5, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
+  noticeEmpty: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium", paddingVertical: 4 },
+  statCard: { width: "48%", marginBottom: 10, backgroundColor: "white", borderRadius: 16, padding: 16, borderLeftWidth: 4, elevation: 1 },
   statIconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 10 },
   statValue: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
   statLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary, marginTop: 2 },
   subBalanceText: { fontSize: 10, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, paddingHorizontal: 20, marginBottom: 15 },
   quickActions: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 20, gap: 12, marginBottom: 25 },
+  quickActionsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   quickAction: { width: "31%", minWidth: 95, backgroundColor: "white", padding: 12, borderRadius: 16, alignItems: "center", elevation: 1 },
   actionIcon: { width: 45, height: 45, borderRadius: 12, backgroundColor: Colors.light.tint + "15", justifyContent: "center", alignItems: "center", marginBottom: 8 },
   actionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
@@ -1012,51 +1591,4 @@ const styles = StyleSheet.create({
   birthdayDate: { fontSize: 12, color: "#991B1B", marginTop: 2, fontFamily: "Inter_500Medium" },
   wishBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#FECACA", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 4 },
   wishBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#B91C1C" },
-  requestInboxCard: {
-    backgroundColor: "white",
-    marginHorizontal: 20,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    padding: 14,
-    marginBottom: 20,
-  },
-  requestInboxHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  requestInboxIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: Colors.light.tint + "15",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  requestInboxTitle: {
-    color: Colors.light.text,
-    fontFamily: "Inter_600SemiBold",
-    fontSize: 14,
-  },
-  requestInboxSubtitle: {
-    color: Colors.light.textSecondary,
-    fontFamily: "Inter_500Medium",
-    fontSize: 12,
-  },
-  requestInboxStats: {
-    marginTop: 10,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  requestStatText: {
-    color: Colors.light.textSecondary,
-    fontFamily: "Inter_500Medium",
-    fontSize: 12,
-    backgroundColor: Colors.light.background,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
 });

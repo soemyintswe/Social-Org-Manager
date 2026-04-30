@@ -1,20 +1,33 @@
 import { fetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getServerApiUrl } from "./remote-config";
 
 /**
  * Gets the base URL for the Express API server (e.g., "http://localhost:3000")
  * @returns {string} The API base URL
  */
 export function getApiUrl(): string {
+  // 1. Try Firebase Remote Config first
+  const remoteUrl = getServerApiUrl();
+  if (remoteUrl) {
+    // Basic validation: ensure it starts with http/https
+    if (remoteUrl.startsWith("http")) {
+       return remoteUrl.replace(/\/+$/, ""); // Trim trailing slashes
+    }
+  }
+
+  // 2. Fallback to EXPO_PUBLIC_DOMAIN
   let host = process.env.EXPO_PUBLIC_DOMAIN;
 
   if (!host) {
-    throw new Error("EXPO_PUBLIC_DOMAIN is not set");
+    // During build time or local dev without env, this might happen.
+    // For now, let's return a safe default or empty string if critical.
+    // throw new Error("EXPO_PUBLIC_DOMAIN is not set");
+    return ""; 
   }
 
   let url = new URL(`https://${host}`);
-
-  return url.href;
+  return url.href.replace(/\/+$/, "");
 }
 
 async function throwIfResNotOk(res: Response) {

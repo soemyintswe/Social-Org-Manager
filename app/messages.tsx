@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -19,9 +20,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const { currentUser, currentMember } = useAuth();
   const {
     users,
@@ -31,6 +34,8 @@ export default function MessagesScreen() {
     createDirectChatThread,
     createGroupChatThread,
     sendChatMessage,
+    updateChatMessage,
+    deleteChatMessage,
     markChatThreadRead,
   } = useData() as any;
 
@@ -39,6 +44,8 @@ export default function MessagesScreen() {
   const [messageText, setMessageText] = useState("");
   const [messageImage, setMessageImage] = useState("");
   const [replyTarget, setReplyTarget] = useState<any>(null);
+  const [isSending, setIsSending] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState("");
   const [newModal, setNewModal] = useState(false);
   const [newMode, setNewMode] = useState<"direct" | "group">("direct");
   const [targetUserId, setTargetUserId] = useState("");
@@ -115,24 +122,86 @@ export default function MessagesScreen() {
 
   const handleSend = async () => {
     if (!selectedThreadId || !meUserId) return;
+    if (isSending) return;
     const text = messageText.trim();
-    if (!text && !messageImage) return;
-    await sendChatMessage({
-      threadId: selectedThreadId,
-      senderUserId: meUserId,
-      senderMemberId: currentUser?.memberId || currentMember?.id,
-      senderDisplayName: currentUser?.displayName || currentMember?.name,
-      text,
-      image: messageImage || undefined,
-      replyToMessageId: replyTarget?.id,
-      replyToUserId: replyTarget?.senderUserId,
-      replyToDisplayName: replyTarget?.senderDisplayName || replyTarget?.senderMemberId || replyTarget?.senderUserId,
-      mentionUserIds: replyTarget?.senderUserId ? [replyTarget.senderUserId] : [],
-    });
+    if (!text && !messageImage) {
+      Alert.alert("လိုအပ်ချက်", "စာသား သို့မဟုတ် ဓာတ်ပုံ တစ်ခုခုထည့်ပါ။");
+      return;
+    }
+    const draftText = messageText;
+    const draftImage = messageImage;
+    const draftReply = replyTarget;
+    const draftEditingId = editingMessageId;
+
+    setIsSending(true);
     setMessageText("");
     setMessageImage("");
     setReplyTarget(null);
-    await markChatThreadRead(selectedThreadId, meUserId);
+    setEditingMessageId("");
+
+    try {
+      if (draftEditingId) {
+        await updateChatMessage({
+          messageId: draftEditingId,
+          editorUserId: meUserId,
+          text,
+          image: draftImage || undefined,
+        });
+      } else {
+        await sendChatMessage({
+          threadId: selectedThreadId,
+          senderUserId: meUserId,
+          senderMemberId: currentUser?.memberId || currentMember?.id,
+          senderDisplayName: currentUser?.displayName || currentMember?.name,
+          text,
+          image: draftImage || undefined,
+          replyToMessageId: draftReply?.id,
+          replyToUserId: draftReply?.senderUserId,
+          replyToDisplayName: draftReply?.senderDisplayName || draftReply?.senderMemberId || draftReply?.senderUserId,
+          mentionUserIds: draftReply?.senderUserId ? [draftReply.senderUserId] : [],
+        });
+      }
+      await markChatThreadRead(selectedThreadId, meUserId);
+    } catch {
+      setMessageText(draftText);
+      setMessageImage(draftImage);
+      setReplyTarget(draftReply);
+      setEditingMessageId(draftEditingId);
+      Alert.alert("Error", "Message ပို့မရပါ။ Network ကိုစစ်ပြီး ထပ်မံကြိုးစားပါ။");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const startEditMessage = (msg: any) => {
+    setEditingMessageId(String(msg?.id || ""));
+    setMessageText(String(msg?.text || ""));
+    setMessageImage(String(msg?.image || ""));
+    setReplyTarget(null);
+  };
+
+  const cancelEditMessage = () => {
+    setEditingMessageId("");
+    setMessageText("");
+    setMessageImage("");
+  };
+
+  const handleDeleteMessage = async (msg: any) => {
+    const messageId = String(msg?.id || "");
+    if (!messageId || !meUserId) return;
+    Alert.alert("ဖျက်မည်", "ဤ message ကိုဖျက်မည်လား?", [
+      { text: "မဖျက်တော့ပါ", style: "cancel" },
+      {
+        text: "ဖျက်မည်",
+        style: "destructive",
+        onPress: () => {
+          void deleteChatMessage({ messageId, deleterUserId: meUserId });
+          if (editingMessageId === messageId) {
+            cancelEditMessage();
+          }
+        },
+      },
+    ]);
   };
 
   const handleCreateThread = async () => {
@@ -168,8 +237,8 @@ export default function MessagesScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: insets.top }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
     >
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.iconBtn}>
@@ -212,24 +281,48 @@ export default function MessagesScreen() {
               <View style={styles.chatHeader}>
                 <Text style={styles.chatTitle}>{threadTitle(selectedThread)}</Text>
               </View>
-              <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                contentContainerStyle={{ padding: 12, gap: 10 }}
+              >
                 {selectedMessages.map((msg: any) => {
                   const mine = String(msg.senderUserId) === meUserId;
+                  const deleted = Boolean(msg?.isDeleted);
                   return (
                     <View key={msg.id} style={[styles.msgBox, mine ? styles.msgMine : styles.msgOther]}>
                       <Text style={styles.msgSender}>{msg.senderDisplayName || getMemberNameByUserId(msg.senderUserId)}</Text>
                       {msg.replyToDisplayName ? (
                         <Text style={styles.replyTo}>Reply to: {msg.replyToDisplayName}</Text>
                       ) : null}
-                      {msg.text ? <Text style={styles.msgText}>{msg.text}</Text> : null}
-                      {msg.image ? <Image source={{ uri: msg.image }} style={styles.msgImage} resizeMode="cover" /> : null}
+                      {deleted ? (
+                        <Text style={styles.deletedText}>ဤ message ကို ဖျက်ပြီးပါပြီ။</Text>
+                      ) : (
+                        <>
+                          {msg.text ? <Text style={styles.msgText}>{msg.text}</Text> : null}
+                          {msg.image ? <Image source={{ uri: msg.image }} style={styles.msgImage} resizeMode="cover" /> : null}
+                        </>
+                      )}
                       <View style={styles.msgFooter}>
                         <Text style={styles.msgDate}>{new Date(msg.createdAt).toLocaleString()}</Text>
-                        {!mine && (
-                          <Pressable onPress={() => setReplyTarget(msg)}>
-                            <Text style={styles.replyAction}>Reply</Text>
-                          </Pressable>
-                        )}
+                        {!deleted ? (
+                          <View style={styles.msgActionRow}>
+                            {!mine ? (
+                              <Pressable onPress={() => setReplyTarget(msg)}>
+                                <Text style={styles.replyAction}>Reply</Text>
+                              </Pressable>
+                            ) : (
+                              <>
+                                <Pressable onPress={() => startEditMessage(msg)}>
+                                  <Text style={styles.replyAction}>Edit</Text>
+                                </Pressable>
+                                <Pressable onPress={() => void handleDeleteMessage(msg)}>
+                                  <Text style={styles.deleteAction}>Delete</Text>
+                                </Pressable>
+                              </>
+                            )}
+                          </View>
+                        ) : null}
                       </View>
                     </View>
                   );
@@ -245,6 +338,15 @@ export default function MessagesScreen() {
                 </View>
               )}
 
+              {editingMessageId ? (
+                <View style={styles.editComposer}>
+                  <Text style={styles.replyComposerText}>Editing message...</Text>
+                  <Pressable onPress={cancelEditMessage}>
+                    <Text style={styles.replyCancel}>Cancel Edit</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
               {messageImage ? (
                 <View style={styles.previewRow}>
                   <Image source={{ uri: messageImage }} style={styles.previewImage} />
@@ -254,7 +356,15 @@ export default function MessagesScreen() {
                 </View>
               ) : null}
 
-              <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 10), marginBottom: 6 }]}>
+              <View
+                style={[
+                  styles.composer,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 10) + (Platform.OS === "android" ? keyboardInset : 0),
+                    marginBottom: 6,
+                  },
+                ]}
+              >
                 <Pressable style={styles.pickBtn} onPress={() => void pickImage()}>
                   <Ionicons name="image-outline" size={18} color={Colors.light.tint} />
                 </Pressable>
@@ -262,10 +372,26 @@ export default function MessagesScreen() {
                   style={styles.input}
                   value={messageText}
                   onChangeText={setMessageText}
-                  placeholder={replyTarget ? "Reply..." : "Type a message..."}
+                  placeholder={
+                    editingMessageId
+                      ? "Edit message / Caption"
+                      : messageImage
+                        ? "Caption (optional)"
+                        : replyTarget
+                          ? "Reply..."
+                          : "Type a message..."
+                  }
                 />
-                <Pressable style={styles.sendBtn} onPress={() => void handleSend()}>
-                  <Ionicons name="send" size={16} color="#fff" />
+                <Pressable
+                  style={[styles.sendBtn, isSending && styles.sendBtnDisabled]}
+                  onPress={() => void handleSend()}
+                  disabled={isSending}
+                >
+                  {isSending ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name={editingMessageId ? "checkmark" : "send"} size={16} color="#fff" />
+                  )}
                 </Pressable>
               </View>
             </>
@@ -353,8 +479,12 @@ const styles = StyleSheet.create({
   msgImage: { width: 160, height: 120, borderRadius: 8, marginTop: 6 },
   msgFooter: { marginTop: 6, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   msgDate: { fontSize: 10, color: Colors.light.textSecondary },
+  msgActionRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   replyAction: { fontSize: 11, color: Colors.light.tint, fontFamily: "Inter_600SemiBold" },
+  deleteAction: { fontSize: 11, color: "#DC2626", fontFamily: "Inter_600SemiBold" },
+  deletedText: { fontSize: 13, color: Colors.light.textSecondary, fontStyle: "italic", marginTop: 4 },
   replyComposer: { paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#EFF6FF", borderTopWidth: 1, borderTopColor: "#BFDBFE" },
+  editComposer: { paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#FEF3C7", borderTopWidth: 1, borderTopColor: "#F59E0B" },
   replyComposerText: { fontSize: 12, color: "#1D4ED8" },
   replyCancel: { fontSize: 12, color: "#DC2626", fontFamily: "Inter_600SemiBold" },
   previewRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 8 },
@@ -363,6 +493,7 @@ const styles = StyleSheet.create({
   pickBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: Colors.light.border, alignItems: "center", justifyContent: "center" },
   input: { flex: 1, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#fff" },
   sendBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.light.tint, alignItems: "center", justifyContent: "center" },
+  sendBtnDisabled: { opacity: 0.7 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 },
   modalCard: { backgroundColor: "#fff", borderRadius: 12, padding: 12 },
   modalTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 8 },

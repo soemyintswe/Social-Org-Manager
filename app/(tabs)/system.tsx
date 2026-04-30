@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, Text, View, Pressable, Alert, Platform, ScrollView } from "react-native";
+import { StyleSheet, Text, View, Pressable, Alert, Platform, ScrollView, TextInput } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -7,28 +7,101 @@ import * as Linking from "expo-linking";
 import Colors from "@/constants/colors";
 import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
-import { clearAllData } from "@/lib/storage";
+import { clearAllLocalDataKeepSystemConfig } from "@/lib/storage";
 import { checkForAppUpdate, getCurrentAppVersion, getCurrentBuildNumber } from "@/lib/app-update";
+import { ORG_POSITION_LABELS, type OrgPosition } from "@/lib/types";
 
 export default function SystemScreen() {
   const insets = useSafeAreaInsets();
-  const { refreshData } = useData() as any;
+  const { refreshData, users, createInitialOrgUserAccount } = useData() as any;
   const { can } = useAuth();
   const canManageSystem = can("system.manage");
   const currentVersion = getCurrentAppVersion();
   const currentBuild = getCurrentBuildNumber();
+  const [initialUsername, setInitialUsername] = React.useState("");
+  const [initialDisplayName, setInitialDisplayName] = React.useState("");
+  const [initialPassword, setInitialPassword] = React.useState("");
+  const [initialConfirmPassword, setInitialConfirmPassword] = React.useState("");
+  const [initialOrgPosition, setInitialOrgPosition] = React.useState<OrgPosition>("chairperson");
+  const [creatingInitialUser, setCreatingInitialUser] = React.useState(false);
   const systemInfo = {
     releaseDate: "2026-02-21",
     developer: "MR. SOE MYINT SWE",
     packageId: "com.soemyintswe.orghub",
     copyright: "Copyright (c) 2026 Social Org Manager. All rights reserved.",
   };
+  const initialOrgUser = React.useMemo(
+    () => (users || []).find((user: any) => user?.systemRole === "org_user" && !String(user?.memberId || "").trim()),
+    [users]
+  );
+  const initialOrgRoleOptions: OrgPosition[] = [
+    "chairperson",
+    "vice_chairperson",
+    "secretary",
+    "joint_secretary",
+    "treasurer",
+    "auditor",
+    "committee_member",
+    "patron",
+    "member",
+  ];
+
+  const mapInitialUserError = (error: unknown): string => {
+    const code = String((error as any)?.message || error || "").trim().toLowerCase();
+    const messages: Record<string, string> = {
+      username_required: "Username ထည့်ပါ။",
+      display_name_required: "အမည်ထည့်ပါ။",
+      password_required: "Password ထည့်ပါ။",
+      username_exists: "Username တူနေပါသည်။ အခြား username သုံးပါ။",
+      initial_org_user_exists: "ကနဦး User Account တစ်ခု ရှိပြီးသားဖြစ်ပါသည်။",
+    };
+    return messages[code] || "ကနဦး User Account ဖန်တီးရာတွင် အမှားဖြစ်နေပါသည်။";
+  };
+
+  const handleCreateInitialUser = async () => {
+    if (!canManageSystem || creatingInitialUser) return;
+    const username = initialUsername.trim();
+    const displayName = initialDisplayName.trim();
+    const password = initialPassword.trim();
+    const confirmPassword = initialConfirmPassword.trim();
+
+    if (!username || !displayName || !password) {
+      Alert.alert("လိုအပ်ချက်", "Username၊ အမည် နှင့် Password ကိုဖြည့်ပါ။");
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert("လိုအပ်ချက်", "Password နှင့် Confirm Password မကိုက်ညီပါ။");
+      return;
+    }
+
+    try {
+      setCreatingInitialUser(true);
+      const created = await createInitialOrgUserAccount({
+        username,
+        displayName,
+        password,
+        orgPosition: initialOrgPosition,
+      });
+      setInitialUsername("");
+      setInitialDisplayName("");
+      setInitialPassword("");
+      setInitialConfirmPassword("");
+      Alert.alert(
+        "အောင်မြင်ပါသည်",
+        `ကနဦး User Account ဖန်တီးပြီးပါပြီ။\n\nUsername: ${created.id}\nRole: ${ORG_POSITION_LABELS[created.orgPosition || "member"]}\n\nဤ account ဖြင့် login ဝင်ပြီး အသင်းကိစ္စအဝဝကို ဆက်လက်စီမံနိုင်ပါသည်။`
+      );
+    } catch (error) {
+      Alert.alert("အမှား", mapInitialUserError(error));
+    } finally {
+      setCreatingInitialUser(false);
+    }
+  };
 
   const handleSystemReset = () => {
     if (Platform.OS === "web") {
       if (window.confirm("System Reset သတိပေးချက်\n\nဤလုပ်ဆောင်ချက်သည် အသင်းဝင်များ၊ ငွေစာရင်းများ၊ မှတ်တမ်းများ အားလုံးကို အပြီးတိုင် ဖျက်ဆီးပါမည်။ ပြန်ယူ၍ မရနိုင်ပါ။ ဆက်လုပ်မည်လား။")) {
         if (window.confirm("နောက်ဆုံးအဆင့် အတည်ပြုခြင်း\n\nတကယ်ဖျက်မည်မှာ သေချာပါသလား။")) {
-          clearAllData().then(async () => {
+          clearAllLocalDataKeepSystemConfig().then(async () => {
             window.alert("အောင်မြင်ပါသည်\nSystem Reset ပြုလုပ်ပြီးပါပြီ။");
             window.location.href = "/";
           });
@@ -52,7 +125,7 @@ export default function SystemScreen() {
                 text: "ဖျက်မည်",
                 style: "destructive",
                 onPress: async () => {
-                  await clearAllData();
+                  await clearAllLocalDataKeepSystemConfig();
                   if (refreshData) await refreshData();
                   setTimeout(() => {
                     Alert.alert("အောင်မြင်ပါသည်", "System Reset ပြုလုပ်ပြီးပါပြီ။");
@@ -72,13 +145,17 @@ export default function SystemScreen() {
       Alert.alert("Update Check", `Update စစ်ဆေးရာတွင် မအောင်မြင်ပါ။\nReason: ${info.reason || "unknown"}`);
       return;
     }
+    const latestBuild = String(info.latestBuildNumber || "-");
     if (!info.hasUpdate) {
-      Alert.alert("Update Check", `အသစ်မရှိသေးပါ။\nCurrent Version: ${currentVersion}`);
+      Alert.alert(
+        "Update Check",
+        `အသစ်မရှိသေးပါ။\nCurrent Version: ${currentVersion} (${currentBuild || "-"})\nLatest: ${info.latestVersion || "-"} (${latestBuild})`
+      );
       return;
     }
     Alert.alert(
       "Update Available",
-      `Current: ${currentVersion}\nLatest: ${info.latestVersion}\n\n${info.notes || ""}`,
+      `Current: ${currentVersion} (${currentBuild || "-"})\nLatest: ${info.latestVersion} (${latestBuild})\n\n${info.notes || ""}`,
       [
         { text: "Later", style: "cancel" },
         {
@@ -103,6 +180,80 @@ export default function SystemScreen() {
 
       {canManageSystem ? (
         <View style={styles.menuContainer}>
+          <View style={styles.bootstrapCard}>
+            <Text style={styles.bootstrapTitle}>ကနဦး User Account</Text>
+            <Text style={styles.bootstrapDesc}>
+              System Admin သည် system setup ပြီးနောက် အသင်းကိစ္စအဝဝကို စီမံမည့် ပထမဆုံး org user account တစ်ခုကိုသာ တည်ဆောက်နိုင်ပါသည်။
+            </Text>
+            {initialOrgUser ? (
+              <View style={styles.bootstrapSummary}>
+                <Text style={styles.bootstrapSummaryLine}>Username: {initialOrgUser.id}</Text>
+                <Text style={styles.bootstrapSummaryLine}>အမည်: {initialOrgUser.displayName}</Text>
+                <Text style={styles.bootstrapSummaryLine}>Role: {ORG_POSITION_LABELS[initialOrgUser.orgPosition || "member"]}</Text>
+                <Text style={styles.bootstrapHint}>ပြန်လည် password reset လုပ်လိုပါက Account Settings မှ Admin Password Reset ကိုသုံးပါ။</Text>
+              </View>
+            ) : (
+              <View style={styles.bootstrapForm}>
+                <Text style={styles.fieldLabel}>Username</Text>
+                <TextInput
+                  style={styles.input}
+                  value={initialUsername}
+                  onChangeText={setInitialUsername}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="ဥပမာ - chair001"
+                />
+                <Text style={styles.fieldLabel}>အမည်</Text>
+                <TextInput
+                  style={styles.input}
+                  value={initialDisplayName}
+                  onChangeText={setInitialDisplayName}
+                  placeholder="ဥပမာ - ဦးစိုးမြင့်ဆွေ"
+                />
+                <Text style={styles.fieldLabel}>Role</Text>
+                <View style={styles.roleGrid}>
+                  {initialOrgRoleOptions.map((position) => {
+                    const active = initialOrgPosition === position;
+                    return (
+                      <Pressable
+                        key={position}
+                        style={[styles.roleChip, active && styles.roleChipActive]}
+                        onPress={() => setInitialOrgPosition(position)}
+                      >
+                        <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                          {ORG_POSITION_LABELS[position]}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.fieldLabel}>Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={initialPassword}
+                  onChangeText={setInitialPassword}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="Password"
+                />
+                <Text style={styles.fieldLabel}>Confirm Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={initialConfirmPassword}
+                  onChangeText={setInitialConfirmPassword}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="Confirm Password"
+                />
+                <Pressable style={styles.bootstrapButton} onPress={() => void handleCreateInitialUser()} disabled={creatingInitialUser}>
+                  <Text style={styles.bootstrapButtonText}>{creatingInitialUser ? "လုပ်ဆောင်နေသည်..." : "ကနဦး User Account ဖန်တီးမည်"}</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+
           <Pressable
             style={[styles.menuItem, { backgroundColor: Colors.light.tint }]}
             onPress={() => router.push("/data-management")}
@@ -220,6 +371,48 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 4 },
   subtitle: { fontSize: 15, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, marginBottom: 30 },
   menuContainer: { gap: 16 },
+  bootstrapCard: { backgroundColor: Colors.light.surface, borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, padding: 18 },
+  bootstrapTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 },
+  bootstrapDesc: { fontSize: 13, lineHeight: 20, color: Colors.light.textSecondary, marginBottom: 14 },
+  bootstrapForm: { gap: 8 },
+  bootstrapSummary: { backgroundColor: Colors.light.tintLight, borderRadius: 12, padding: 14, gap: 6 },
+  bootstrapSummaryLine: { fontSize: 14, color: Colors.light.text, fontFamily: "Inter_600SemiBold" },
+  bootstrapHint: { marginTop: 6, fontSize: 12, lineHeight: 18, color: Colors.light.textSecondary },
+  fieldLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.textSecondary, marginTop: 2 },
+  input: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  roleGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
+  roleChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  roleChipActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  roleChipText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  roleChipTextActive: { color: "#fff" },
+  bootstrapButton: {
+    marginTop: 8,
+    backgroundColor: Colors.light.tint,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+  },
+  bootstrapButtonText: { fontSize: 14, fontFamily: "Inter_700Bold", color: "#fff" },
   menuItem: { flexDirection: "row", alignItems: "center", padding: 20, borderRadius: 16, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
   iconBox: { width: 48, height: 48, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.2)", justifyContent: "center", alignItems: "center", marginRight: 16 },
   menuTextContainer: { flex: 1 },

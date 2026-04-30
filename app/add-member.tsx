@@ -25,6 +25,7 @@ import { useData } from "@/lib/DataContext";
 import { useAuth } from "@/lib/AuthContext";
 import { isCommitteePosition } from "@/lib/access-control";
 import { CUSTOM_RELATION_STORAGE_KEY, mergeRelationOptions } from "@/lib/relation-options";
+import { secureRandomInt, secureRandomToken } from "@/lib/secure-random";
 import {
   ORG_POSITION_LABELS,
   OrgPosition,
@@ -110,7 +111,7 @@ function toFamilyFormRows(input: unknown): FamilyFormMember[] {
       const name = String(item.name || "").trim();
       if (!name) return null;
       return {
-        _localId: String(item.id || `fm-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`),
+        _localId: String(item.id || `fm-${Date.now()}-${index}-${secureRandomToken(6)}`),
         id: item.id ? String(item.id) : undefined,
         name,
         gender: item.gender === "male" || item.gender === "female" || item.gender === "other" ? item.gender : "other",
@@ -176,7 +177,6 @@ export default function AddMemberScreen() {
   const [saving, setSaving] = useState(false);
   const actorPosition = normalizeOrgPosition(profile?.orgPosition || currentUser?.orgPosition || "member");
   const isChairOrVice =
-    currentUser?.systemRole === "admin" ||
     actorPosition === "chairperson" ||
     actorPosition === "vice_chairperson";
   const isEditingOwnRecord =
@@ -190,16 +190,17 @@ export default function AddMemberScreen() {
     profile?.memberStatus !== "applicant" &&
     (!isEditMode || isEditingOwnRecord)
   );
-  const canEditGeneralFields = !isEditMode || canEditGeneralOwnInfo;
+  const canEditGeneralCommitteeInfo = Boolean(isEditMode && can("members.edit") && isCommitteePosition(actorPosition));
+  const canEditGeneralFields = !isEditMode || canEditGeneralOwnInfo || canEditGeneralCommitteeInfo;
   const canEditRestrictedFields = !isEditMode || canEditRestrictedDirectly || canProposeRestricted;
-  const canOpenEditForm = !isEditMode || canEditGeneralOwnInfo || canEditRestrictedDirectly || canProposeRestricted;
+  const canOpenEditForm = !isEditMode || canEditGeneralFields || canEditRestrictedDirectly || canProposeRestricted;
   const relationOptions = useMemo(() => mergeRelationOptions(customRelations, false), [customRelations]);
 
   const addFamilyMember = () => {
     setFamilyMembers((prev) => [
       ...prev,
       {
-        _localId: `fm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        _localId: `fm-${Date.now()}-${secureRandomToken(6)}`,
         name: "",
         gender: "other",
         relation: "",
@@ -348,7 +349,7 @@ export default function AddMemberScreen() {
     try {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      const randomColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+      const randomColor = AVATAR_COLORS[secureRandomInt(AVATAR_COLORS.length)];
 
       const memberData: any = {
         id: memberId,
@@ -438,8 +439,8 @@ export default function AddMemberScreen() {
           });
           Alert.alert("အောင်မြင်ပါသည်", "အသင်းဝင်အချက်အလက် ပြင်ဆင်ပြီးပါပြီ။");
         } else {
-          if (hasUnrestrictedChanges && !canEditGeneralOwnInfo) {
-            Alert.alert("ခွင့်မပြုပါ", "မိမိနှင့်မသက်ဆိုင်သည့် ကိုယ်ရေးအချက်အလက်များကို ပြင်ဆင်ခွင့်မရှိပါ။");
+          if (hasUnrestrictedChanges && !canEditGeneralFields) {
+            Alert.alert("ခွင့်မပြုပါ", "ကော်မတီအဖွဲ့ဝင်များသာ ဤအချက်အလက်များကို ပြင်ဆင်ခွင့်ရှိပါသည်။");
             setSaving(false);
             return;
           }

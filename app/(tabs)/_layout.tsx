@@ -1,7 +1,6 @@
 import { Redirect, Tabs } from "expo-router";
 import React from "react";
 import { ActivityIndicator, View } from "react-native";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import { useAuth } from "@/lib/AuthContext";
 
 export default function TabLayout() {
@@ -27,7 +26,7 @@ export default function TabLayout() {
         <Tabs.Screen name="reports" />
         <Tabs.Screen name="system" />
       </Tabs>
-      <FloatingTabMenu />
     </View>
   );
 }
+

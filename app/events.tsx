@@ -2,11 +2,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -21,11 +22,11 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AccessDenied from "@/components/AccessDenied";
-import FloatingTabMenu from "@/components/FloatingTabMenu";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { CUSTOM_RELATION_STORAGE_KEY, DEFAULT_RELATION_OPTIONS_WITH_SELF, mergeRelationOptions } from "@/lib/relation-options";
+import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 
 type EventType = "activity" | "news" | "announcement";
 
@@ -41,6 +42,7 @@ interface OrgEventNotice {
   createdByMemberId?: string;
   senderName?: string;
   senderMemberId?: string;
+  senderPhone?: string;
   senderDate?: string;
   senderTime?: string;
   summary?: string;
@@ -84,14 +86,14 @@ interface OrgEventNotice {
   funeralMemorialTime?: string;
   readBy?: Record<string, { userId: string; memberId?: string; displayName?: string; readAt: string }>;
   reactions?: Record<string, "like" | "love" | "sad">;
-  comments?: Array<{
+  comments?: {
     id: string;
     userId: string;
     memberId?: string;
     displayName?: string;
     message: string;
     createdAt: string;
-  }>;
+  }[];
 }
 
 const CUSTOM_TOPIC_KEY = "@org_notice_custom_topics";
@@ -193,9 +195,12 @@ function mapClaimCategoryToTopic(categoryId?: string): string {
 }
 
 export default function EventsScreen() {
-  const params = useLocalSearchParams<{ source?: string; claimCategory?: string }>();
+  const params = useLocalSearchParams<{ source?: string; claimCategory?: string; openCreate?: string }>();
   const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
   const { events, addEvent, editEvent, removeEvent, members } = useData() as any;
+  const safeEvents = Array.isArray(events) ? events : [];
+  const safeMembers = Array.isArray(members) ? members : [];
   const { can, currentUser } = useAuth();
   const canViewEvents = can("events.view_public");
   const canCreateOwnEvent = can("events.create_own");
@@ -208,6 +213,7 @@ export default function EventsScreen() {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [claimPrefillApplied, setClaimPrefillApplied] = useState(false);
+  const [quickCreateApplied, setQuickCreateApplied] = useState(false);
   const [topicPickerVisible, setTopicPickerVisible] = useState(false);
   const [relationPickerVisible, setRelationPickerVisible] = useState(false);
   const [conditionPickerVisible, setConditionPickerVisible] = useState(false);
@@ -275,13 +281,14 @@ export default function EventsScreen() {
   const [selectedSenderMemberId, setSelectedSenderMemberId] = useState<string>("");
   const [senderNameInput, setSenderNameInput] = useState(currentUser?.displayName || "");
   const [senderMemberIdInput, setSenderMemberIdInput] = useState(currentUser?.memberId || "");
+  const [senderPhoneInput, setSenderPhoneInput] = useState("");
 
   const allTopics = useMemo(() => [...PRESET_TOPICS, ...customTopics], [customTopics]);
   const allRelations = useMemo(() => mergeRelationOptions(customRelations, true), [customRelations]);
   const allHealthConditions = useMemo(() => [...PRESET_HEALTH_CONDITIONS, ...customConditions], [customConditions]);
   const senderMembers = useMemo(
-    () => [...(members || [])].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
-    [members]
+    () => [...safeMembers].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""))),
+    [safeMembers]
   );
   const currentMemberRecord = useMemo(
     () => senderMembers.find((m: any) => String(m?.id) === String(currentUser?.memberId || "")),
@@ -294,7 +301,69 @@ export default function EventsScreen() {
   const isHealthNotice = topic.includes("ကျန်းမာရေး");
   const isFuneralNotice = topic.includes("နာရေး");
   const launchedFromClaim = String(params?.source || "") === "expense_claim";
+  const launchedFromQuickAction =
+    !launchedFromClaim &&
+    (String(params?.source || "") === "quick_action" ||
+      ["1", "true", "yes", "open"].includes(String(params?.openCreate || "").trim().toLowerCase()));
   const claimPrefillTopic = mapClaimCategoryToTopic(String(params?.claimCategory || ""));
+
+  const resetForm = useCallback(() => {
+    setEditingId(null);
+    setTopic(PRESET_TOPICS[0]);
+    setSummary("");
+    setDetail("");
+    setEventDate(formatYmd(new Date()));
+    setEventTime(formatHm(new Date()));
+    setEventLocation("");
+    setEventLocationMapUrl("");
+    setImages([]);
+    setNewCustomTopic("");
+    setNewCustomRelation("");
+    setNewCustomCondition("");
+    setSelectedSubjectMemberId(currentUser?.memberId || "");
+    setSubjectMemberNameInput(String(currentMemberRecord?.name || currentUser?.displayName || ""));
+    setSubjectMemberIdInput(String(currentMemberRecord?.id || currentUser?.memberId || ""));
+    setHealthPatientName("");
+    setHealthPatientMemberId("");
+    setHealthPatientAge("");
+    setHealthRelation(PRESET_RELATIONS[0]);
+    setHealthIllnessSummary("");
+    setHealthCondition(PRESET_HEALTH_CONDITIONS[0]);
+    setHealthTreatmentType("hospital");
+    setHealthFacilityName("");
+    setHealthFacilityLocation("");
+    setHealthFacilityMapUrl("");
+    setHealthStartDate(formatYmd(new Date()));
+    setHealthEndDate("");
+    setHealthProgressStatus("ကုသနေဆဲ");
+    setFuneralDeceasedName("");
+    setFuneralAge("");
+    setFuneralDeceasedDate(formatYmd(new Date()));
+    setFuneralRelation(PRESET_RELATIONS[0]);
+    setFuneralIllnessSummary("");
+    setFuneralBurialDate(formatYmd(new Date()));
+    setFuneralBurialTime(formatHm(new Date()));
+    setFuneralCemetery("");
+    setFuneralCemeteryMapUrl("");
+    setFuneralTransportLocation("");
+    setFuneralTransportMapUrl("");
+    setFuneralTransportDate(formatYmd(new Date()));
+    setFuneralTransportTime(formatHm(new Date()));
+    setFuneralMemorialLocation("");
+    setFuneralMemorialMapUrl("");
+    setFuneralMemorialDate(formatYmd(new Date()));
+    setFuneralMemorialTime(formatHm(new Date()));
+    setSelectedSenderMemberId(currentUser?.memberId || "");
+    setSenderNameInput(currentUser?.displayName || "");
+    setSenderMemberIdInput(currentUser?.memberId || "");
+    setSenderPhoneInput(String(currentMemberRecord?.phone || ""));
+  }, [
+    currentUser?.memberId,
+    currentUser?.displayName,
+    currentMemberRecord?.name,
+    currentMemberRecord?.id,
+    currentMemberRecord?.phone,
+  ]);
 
   useEffect(() => {
     if (!launchedFromClaim || claimPrefillApplied) return;
@@ -307,7 +376,19 @@ export default function EventsScreen() {
     if (claimPrefillTopic) setTopic(claimPrefillTopic);
     setModalVisible(true);
     setClaimPrefillApplied(true);
-  }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic]);
+  }, [launchedFromClaim, claimPrefillApplied, canCreateEvent, claimPrefillTopic, resetForm]);
+
+  useEffect(() => {
+    if (!launchedFromQuickAction || quickCreateApplied) return;
+    if (!canCreateEvent) {
+      Alert.alert("ခွင့်မပြုပါ", "သတင်းအသစ်တင်ခွင့် မရှိပါ။");
+      setQuickCreateApplied(true);
+      return;
+    }
+    resetForm();
+    setModalVisible(true);
+    setQuickCreateApplied(true);
+  }, [launchedFromQuickAction, quickCreateApplied, canCreateEvent, resetForm]);
 
   useEffect(() => {
     let mounted = true;
@@ -392,57 +473,13 @@ export default function EventsScreen() {
 
   const canEditItem = (item: OrgEventNotice) => canEditAllEvent || (canEditOwnEvent && isOwnNotice(item));
   const canDeleteItem = (item: OrgEventNotice) => canDeleteAllEvent || (canDeleteOwnEvent && isOwnNotice(item));
-
-  const resetForm = () => {
-    setEditingId(null);
-    setTopic(PRESET_TOPICS[0]);
-    setSummary("");
-    setDetail("");
-    setEventDate(formatYmd(new Date()));
-    setEventTime(formatHm(new Date()));
-    setEventLocation("");
-    setEventLocationMapUrl("");
-    setImages([]);
-    setNewCustomTopic("");
-    setNewCustomRelation("");
-    setNewCustomCondition("");
-    setSelectedSubjectMemberId(currentUser?.memberId || "");
-    setSubjectMemberNameInput(String(currentMemberRecord?.name || currentUser?.displayName || ""));
-    setSubjectMemberIdInput(String(currentMemberRecord?.id || currentUser?.memberId || ""));
-    setHealthPatientName("");
-    setHealthPatientMemberId("");
-    setHealthPatientAge("");
-    setHealthRelation(PRESET_RELATIONS[0]);
-    setHealthIllnessSummary("");
-    setHealthCondition(PRESET_HEALTH_CONDITIONS[0]);
-    setHealthTreatmentType("hospital");
-    setHealthFacilityName("");
-    setHealthFacilityLocation("");
-    setHealthFacilityMapUrl("");
-    setHealthStartDate(formatYmd(new Date()));
-    setHealthEndDate("");
-    setHealthProgressStatus("ကုသနေဆဲ");
-    setFuneralDeceasedName("");
-    setFuneralAge("");
-    setFuneralDeceasedDate(formatYmd(new Date()));
-    setFuneralRelation(PRESET_RELATIONS[0]);
-    setFuneralIllnessSummary("");
-    setFuneralBurialDate(formatYmd(new Date()));
-    setFuneralBurialTime(formatHm(new Date()));
-    setFuneralCemetery("");
-    setFuneralCemeteryMapUrl("");
-    setFuneralTransportLocation("");
-    setFuneralTransportMapUrl("");
-    setFuneralTransportDate(formatYmd(new Date()));
-    setFuneralTransportTime(formatHm(new Date()));
-    setFuneralMemorialLocation("");
-    setFuneralMemorialMapUrl("");
-    setFuneralMemorialDate(formatYmd(new Date()));
-    setFuneralMemorialTime(formatHm(new Date()));
-    setSelectedSenderMemberId(currentUser?.memberId || "");
-    setSenderNameInput(currentUser?.displayName || "");
-    setSenderMemberIdInput(currentUser?.memberId || "");
-  };
+  const visibleEvents = useMemo(
+    () =>
+      [...safeEvents].filter(
+        (item: any) => String(item?.location || "").trim().toLowerCase() !== "system"
+      ),
+    [safeEvents]
+  );
 
   const pickImages = async () => {
     try {
@@ -549,6 +586,7 @@ export default function EventsScreen() {
     setSelectedSenderMemberId(String(selected.id));
     setSenderNameInput(String(selected.name || ""));
     setSenderMemberIdInput(String(selected.id || ""));
+    setSenderPhoneInput(String(selected.phone || ""));
   };
 
   const onChangeSenderName = (value: string) => {
@@ -637,6 +675,7 @@ export default function EventsScreen() {
     setSelectedSenderMemberId(matchedSenderMember ? String(matchedSenderMember.id) : "");
     setSenderNameInput(item.senderName || "");
     setSenderMemberIdInput(item.senderMemberId || "");
+    setSenderPhoneInput(item.senderPhone || String(matchedSenderMember?.phone || ""));
     setImages(item.images && item.images.length ? item.images : item.image ? [item.image] : []);
     setModalVisible(true);
   };
@@ -774,6 +813,7 @@ export default function EventsScreen() {
       funeralMemorialTime: funeralMemorialTime.trim(),
       senderName: senderNameInput.trim(),
       senderMemberId: senderMemberIdInput.trim(),
+      senderPhone: senderPhoneInput.trim(),
       senderDate: formatYmd(now),
       senderTime: formatHm(now),
       createdByUserId: currentUser?.id,
@@ -795,7 +835,7 @@ export default function EventsScreen() {
     };
 
     if (editingId) {
-      const existing = events.find((e: any) => e.id === editingId) as OrgEventNotice | undefined;
+      const existing = safeEvents.find((e: any) => e.id === editingId) as OrgEventNotice | undefined;
       if (!existing) {
         Alert.alert("အမှား", "သတင်းမတွေ့ပါ။");
         return;
@@ -827,7 +867,7 @@ export default function EventsScreen() {
   };
 
   const handleDelete = async (id: string) => {
-    const existing = events.find((e: any) => e.id === id) as OrgEventNotice | undefined;
+    const existing = safeEvents.find((e: any) => e.id === id) as OrgEventNotice | undefined;
     if (!existing || !canDeleteItem(existing)) {
       Alert.alert("ခွင့်မပြုပါ", "ဖျက်ခွင့် မရှိပါ။");
       return;
@@ -844,7 +884,7 @@ export default function EventsScreen() {
         title: item.topic || item.title,
         message: `${item.topic || item.title}\n\n${item.summary || ""}\n\n${item.detail || item.description || ""}\n\nပေးပို့သူ: ${
           item.senderName || "-"
-        } (${item.senderMemberId || "-"})`,
+        } (${item.senderMemberId || "-"})\nဖုန်း: ${item.senderPhone || "-"}`,
       });
     } catch {
       Alert.alert("အမှား", "မျှဝေမရပါ။");
@@ -858,14 +898,11 @@ export default function EventsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={[styles.header, { paddingVertical: 10 }]}>
-        <Pressable onPress={() => router.replace("/")} style={{ marginRight: 5, padding: 4 }}>
-          <Ionicons name="home" size={22} color={Colors.light.text} />
-        </Pressable>
         <Text style={styles.headerTitle}>အသင်းသို့သတင်းပို့</Text>
         {canCreateEvent ? (
-          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={[styles.headerActionBtn, { marginRight: 40 }]}>
+          <Pressable onPress={() => { resetForm(); setModalVisible(true); }} style={styles.headerActionBtn}>
             <Ionicons name="add-circle" size={20} color={Colors.light.tint} />
-            <Text style={styles.headerActionText}>အသစ်</Text>
+            <Text style={styles.headerActionText}>အသစ်ထည့်ရန်</Text>
           </Pressable>
         ) : (
           <View style={{ width: 24 }} />
@@ -873,7 +910,7 @@ export default function EventsScreen() {
       </View>
 
       <FlatList
-        data={events}
+        data={visibleEvents}
         keyExtractor={(item: any) => String(item.id)}
         contentContainerStyle={styles.list}
         renderItem={({ item }: { item: OrgEventNotice }) => {
@@ -900,6 +937,9 @@ export default function EventsScreen() {
                 <Text style={styles.desc} numberOfLines={3}>{item.detail || item.description}</Text>
                 <Text style={styles.metaLine}>
                   ပေးပို့သူ: {item.senderName || "-"} ({item.senderMemberId || "-"})
+                </Text>
+                <Text style={styles.metaLine}>
+                  ဆက်သွယ်ရန်: {item.senderPhone || "-"}
                 </Text>
                 <Text style={styles.metaLine}>
                   ဖတ်ရှု့ပြီး: {readCount} | 💬 {commentCount} | 👍 {reactionCounts.like} ❤️ {reactionCounts.love} 😢 {reactionCounts.sad}
@@ -932,8 +972,19 @@ export default function EventsScreen() {
       />
 
       <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <ScrollView style={styles.modalContent} contentContainerStyle={{ paddingBottom: 20 }}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        >
+          <ScrollView
+            style={[styles.modalContent, Platform.OS === "android" ? { marginBottom: keyboardInset } : null]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{
+              paddingBottom: 20 + insets.bottom + (Platform.OS === "android" ? keyboardInset : 0),
+            }}
+          >
             <Text style={styles.modalTitle}>{editingId ? "သတင်းပြင်ဆင်ရန်" : "သတင်းအသစ်ပို့ရန်"}</Text>
 
             <Text style={styles.label}>သတင်းခေါင်းစဉ် (Dropdown)</Text>
@@ -1513,8 +1564,12 @@ export default function EventsScreen() {
             <Text style={styles.label}>အဖွဲ့ဝင် ID (Textbox - optional)</Text>
             <TextInput style={styles.input} value={senderMemberIdInput} onChangeText={onChangeSenderMemberId} placeholder="ဥပမာ - ရဆသ-001" />
 
+            <Text style={styles.label}>ဆက်သွယ်ရန်ဖုန်း (member phone auto / manual edit)</Text>
+            <TextInput style={styles.input} value={senderPhoneInput} onChangeText={setSenderPhoneInput} placeholder="09xxxxxxxxx" keyboardType="phone-pad" />
+
             <View style={styles.senderBox}>
               <Text style={styles.senderText}>ပေးပို့သူ: {senderNameInput || "-"} ({senderMemberIdInput || "-"})</Text>
+              <Text style={styles.senderText}>ဖုန်း: {senderPhoneInput || "-"}</Text>
               <Text style={styles.senderText}>နေ့/အချိန်: {formatYmd(new Date())} {formatHm(new Date())}</Text>
             </View>
 
@@ -1527,7 +1582,7 @@ export default function EventsScreen() {
               </Pressable>
             </View>
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal animationType="slide" transparent visible={topicPickerVisible} onRequestClose={() => setTopicPickerVisible(false)}>
@@ -1707,8 +1762,6 @@ export default function EventsScreen() {
           </View>
         </View>
       </Modal>
-
-      <FloatingTabMenu />
     </View>
   );
 }
@@ -1819,3 +1872,4 @@ const styles = StyleSheet.create({
   typeText: { color: Colors.light.textSecondary, fontSize: 13, fontFamily: "Inter_500Medium" },
   typeTextActive: { color: Colors.light.tint, fontFamily: "Inter_700Bold" },
 });
+
